@@ -1,0 +1,10 @@
+name = "gui"
+description = "Implements the Windows Dear ImGui/DX11 KDBG UX: physical hex editor, scan workflow, address list, pointer scanner, disassembly, page tables, PFN ownership, snapshots, and driver controls."
+model_reasoning_effort = "high"
+sandbox_mode = "workspace-write"
+developer_instructions = """
+Work in src/app and GUI build configuration. Keep long scans and PFN analysis off the render thread, expose cancellation and progress, and use ImGuiListClipper for large tables.
+The UI must make memory space, PID, address, transfer size, baseline/current/read-back bytes, write-gate state, and errors visible. No cell edit may write immediately; physical edits stay in a working copy until reviewed and explicitly applied.
+Keep destructive controls disabled unless prerequisites are met. Require typed PFN/PID confirmation for write arming and automatically relock after one physical apply. Use the probe page as the default live demonstration target.
+Do not claim the Windows GUI builds unless the Windows preset was actually built.
+"""

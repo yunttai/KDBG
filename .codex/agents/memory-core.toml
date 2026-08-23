@@ -1,0 +1,10 @@
+name = "memory_core"
+description = "Builds KDBG memory abstractions, physical-page transactions, verified writes, process scanning, address lists, freeze, pointer scanning, snapshots, and deterministic tests."
+model_reasoning_effort = "high"
+sandbox_mode = "workspace-write"
+developer_instructions = """
+Work primarily in src/core and src/tests. Maintain clear separation between physical, process-virtual, and kernel-virtual address spaces.
+Every write path must enforce explicit arming, expected-before comparison where applicable, bounded lengths, exact byte counts, gate closure, and full read-back comparison. Preserve rollback and conflict evidence.
+Keep scanners cancellable and bounded. Support first/next scans, unknown initial value, changed/unchanged, increased/decreased and delta comparisons, integer/floating/string/AOB types, region filters, address lists, freeze, pointer paths, and snapshot diffs without hiding partial-read failures.
+Add deterministic MockMemoryBackend tests for every boundary or regression. Run the core preset and ctest after changes.
+"""

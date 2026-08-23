@@ -1,0 +1,90 @@
+{
+  "generated_at": "2026-08-20T00:00:00+09:00",
+  "policy": {
+    "permissive_source": "pin revision and retain notice",
+    "copyleft": "out-of-process or reference-only",
+    "binary_or_unclear": "reference-only; consume no source"
+  },
+  "dependencies": [
+    {
+      "name": "kernullist/kn-live-dbg",
+      "url": "https://github.com/kernullist/kn-live-dbg",
+      "revision": "8f792132f303a835975e0afcc3dbdbe168b7a040",
+      "license": "MIT",
+      "use": "narrow physical/process memory and page-walk design patterns",
+      "integration": "attributed selective reimplementation"
+    },
+    {
+      "name": "VollRagm/PTView",
+      "url": "https://github.com/VollRagm/PTView",
+      "revision": "4a7d09cf65c755c3a7cd1a2d24ce60c6cc4cc367",
+      "license": "MIT",
+      "use": "page-table navigation and entry-field UX reference",
+      "integration": "independent reimplementation"
+    },
+    {
+      "name": "ufrisk/MemProcFS",
+      "url": "https://github.com/ufrisk/MemProcFS",
+      "revision": "029d845408f5f89d7f401b35c5961696316ad356",
+      "license": "AGPL-3.0",
+      "use": "optional PFN metadata API",
+      "integration": "native out-of-process bridge"
+    },
+    {
+      "name": "AxtMueller/Windows-Kernel-Explorer",
+      "url": "https://github.com/AxtMueller/Windows-Kernel-Explorer",
+      "revision": "99e3d9ecbbd1ac088ce21ae5a42a470fa698c44c",
+      "license": "reference-only; no source consumed",
+      "use": "information architecture and inspector UX reference",
+      "integration": "reference-only"
+    },
+    {
+      "name": "ocornut/imgui",
+      "url": "https://github.com/ocornut/imgui",
+      "revision": "fd13a1e8923a0a7077b404fc36fd063b25a0c0b5",
+      "license": "MIT",
+      "use": "Win32/DirectX 11 immediate-mode GUI",
+      "integration": "CMake FetchContent"
+    },
+    {
+      "name": "ocornut/imgui_club/imgui_memory_editor",
+      "url": "https://github.com/ocornut/imgui_club",
+      "revision": "a436e793fe44a2c8e827bfcbf138fcbe11940476",
+      "license": "MIT",
+      "use": "hex and ASCII grid widget",
+      "integration": "CMake FetchContent single header"
+    },
+    {
+      "name": "zyantific/zydis",
+      "url": "https://github.com/zyantific/zydis",
+      "revision": "a2278f1d254e492f6a6b39f6cb5d1f5d515659dc",
+      "license": "MIT",
+      "use": "x86/x64 instruction decoding and Intel formatting",
+      "integration": "CMake FetchContent"
+    },
+    {
+      "name": "zyantific/zycore-c",
+      "url": "https://github.com/zyantific/zycore-c",
+      "revision": "0b2432ced0884fd152b471d97ecf0258ff4d859f",
+      "license": "MIT",
+      "use": "transitive utility dependency bundled by Zydis",
+      "integration": "Zydis git submodule; statically linked into KDBG"
+    },
+    {
+      "name": "HoShiMin/Kernel-Bridge",
+      "url": "https://github.com/HoShiMin/Kernel-Bridge",
+      "revision": "44b130690c5af5c0eb93d54c435087ffad4c79ab",
+      "license": "GPL-3.0",
+      "use": "kernel API and IOCTL research reference",
+      "integration": "reference-only"
+    },
+    {
+      "name": "cheat-engine/cheat-engine",
+      "url": "https://github.com/cheat-engine/cheat-engine",
+      "revision": "ec45d5f47f92a239ba0bf51ec5d04a7509c3fd37",
+      "license": "reference-only; no source consumed",
+      "use": "scan/address-list/pointer/disassembly workflow reference",
+      "integration": "independent implementation"
+    }
+  ]
+}

@@ -1,0 +1,24 @@
+KDBG 1.0.0 third-party notices
+
+Statically included in KDBG.exe:
+- Dear ImGui docking branch, commit fd13a1e8923a0a7077b404fc36fd063b25a0c0b5, MIT.
+- imgui_memory_editor, commit a436e793fe44a2c8e827bfcbf138fcbe11940476, MIT.
+- Zydis, commit a2278f1d254e492f6a6b39f6cb5d1f5d515659dc, MIT.
+- Zycore, commit 0b2432ced0884fd152b471d97ecf0258ff4d859f, MIT.
+
+Attributed design references:
+- kernullist/kn-live-dbg, commit 8f792132f303a835975e0afcc3dbdbe168b7a040, MIT.
+- VollRagm/PTView, commit 4a7d09cf65c755c3a7cd1a2d24ce60c6cc4cc367, MIT.
+
+Optional runtime not distributed by the KDBG package:
+- MemProcFS/vmm.dll, commit 029d845408f5f89d7f401b35c5961696316ad356,
+  version 5.18.4.243, AGPL-3.0. The KDBG bridge loads this runtime in a separate
+  process. Anyone adding or redistributing MemProcFS files must satisfy the
+  applicable MemProcFS license and corresponding-source obligations.
+
+Reference-only projects whose source or binaries are not distributed:
+- Windows-Kernel-Explorer
+- Kernel-Bridge
+- Cheat Engine
+
+See the adjacent license texts and THIRD_PARTY.lock.json for exact revisions.

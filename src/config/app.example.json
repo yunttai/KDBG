@@ -1,0 +1,22 @@
+{
+  "schema": "kdbg.app.v1",
+  "memory": {
+    "physical_page_size": 4096,
+    "default_process_read_size": 4096,
+    "max_ui_snapshot_bytes": 536870912
+  },
+  "scanner": {
+    "default_chunk_bytes": 1048576,
+    "default_result_limit": 1000000,
+    "default_alignment": 1,
+    "include_executable_regions": true,
+    "writable_only": false
+  },
+  "plugins": {
+    "memprocfs_bridge_relative_path": "plugins/memprocfs_bridge/kdbg_memprocfs_bridge.exe",
+    "memprocfs_device_from_environment": "KDBG_MEMPROCFS_DEVICE",
+    "memprocfs_default_device": "pmem",
+    "timeout_ms": 15000,
+    "max_output_bytes": 8388608
+  }
+}

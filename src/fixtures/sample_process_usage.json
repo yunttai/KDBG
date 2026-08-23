@@ -1,0 +1,18 @@
+{
+  "schema": "kdbg.pfn-query-result.v1",
+  "request_id": "fixture-request",
+  "ok": true,
+  "pfn": 256,
+  "mappings": [
+    {
+      "pid": 4321,
+      "process_name": "kdbg_probe_fixture.exe",
+      "va": "0x000001A000001000",
+      "pte": "0xFFFFF680000D0008",
+      "type": "Active",
+      "source": "fixture",
+      "confidence": "high",
+      "shared": false
+    }
+  ]
+}

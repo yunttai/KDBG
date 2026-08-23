@@ -1,0 +1,26 @@
+{
+  "schema": "kdbg.safety.v1",
+  "environment": {
+    "dedicated_vm_required": true,
+    "restorable_snapshot_required": true,
+    "administrator_required": true
+  },
+  "writes": {
+    "default_locked": true,
+    "physical_one_shot_unlock": true,
+    "require_preflight_reread": true,
+    "reject_concurrent_modification": true,
+    "require_full_readback": true,
+    "process_pid_confirmation": true,
+    "process_manual_lock_and_freeze_mode": true,
+    "physical_relock_after_attempt": true
+  },
+  "forbidden_capabilities": [
+    "code_integrity_bypass",
+    "vulnerable_driver_loading",
+    "stealth_or_cloaking",
+    "anti_cheat_bypass",
+    "process_injection",
+    "kernel_virtual_write"
+  ]
+}

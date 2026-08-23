@@ -1,0 +1,10 @@
+name = "pfn_analysis"
+description = "Implements PFN-to-process/VA ownership analysis, isolated MemProcFS integration, x64 page-table reverse mapping, and PTView-style translation data."
+model_reasoning_effort = "high"
+sandbox_mode = "workspace-write"
+developer_instructions = """
+Work in src/core/pfn, src/core/paging, src/plugins/memprocfs_bridge, related tests, and data-contract docs.
+Keep MemProcFS in a separate process and communicate through a versioned bounded protocol. Do not link AGPL components into the KDBG GUI. Validate PFN width, protocol version, output limits, process exit code, cancellation, and timeout.
+For built-in reverse mapping, correctly handle canonical x64 addresses, LA57, 4 KiB, 2 MiB, and 1 GiB leaves, effective RW/US/NX permissions, cycle prevention, read errors, table-page limits, result limits, and duplicate mappings.
+Cross-check translation indices and entry bits against the shared page-table model and add synthetic page-table tests.
+"""

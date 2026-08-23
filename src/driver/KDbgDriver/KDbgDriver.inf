@@ -1,0 +1,38 @@
+[Version]
+Signature="$WINDOWS NT$"
+Class=System
+ClassGuid={4D36E97D-E325-11CE-BFC1-08002BE10318}
+Provider=%ProviderName%
+DriverVer=08/15/2026,1.0.0.0
+CatalogFile=KDbgDriver.cat
+PnpLockdown=1
+
+[DestinationDirs]
+DefaultDestDir = 12
+
+[DefaultInstall.NTamd64]
+CopyFiles = DriverCopyFiles
+
+[DefaultInstall.NTamd64.Services]
+AddService = KDBG,0x00000002,KDBG_Service
+
+[KDBG_Service]
+DisplayName    = %ServiceDisplayName%
+ServiceType    = 1
+StartType      = 3
+ErrorControl   = 1
+ServiceBinary  = %12%\KDbgDriver.sys
+
+[DriverCopyFiles]
+KDbgDriver.sys
+
+[SourceDisksFiles]
+KDbgDriver.sys = 1
+
+[SourceDisksNames]
+1 = %DiskName%,,,
+
+[Strings]
+ProviderName="KDBG Project"
+ServiceDisplayName="KDBG Physical Memory Driver"
+DiskName="KDBG Driver Installation Media"

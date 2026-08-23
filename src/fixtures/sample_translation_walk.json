@@ -1,0 +1,34 @@
+{
+  "schema": "kdbg.translation-walk.v1",
+  "directory_table_base": "0x0000000012345000",
+  "virtual_address": "0x000001A000001000",
+  "physical_address": "0x0000000000100000",
+  "page_size": 4096,
+  "steps": [
+    {
+      "level": "PML4",
+      "index": 3,
+      "entry_physical_address": "0x0000000012345018",
+      "entry_value": "0x0000000020000067"
+    },
+    {
+      "level": "PDPT",
+      "index": 128,
+      "entry_physical_address": "0x0000000020000400",
+      "entry_value": "0x0000000021000067"
+    },
+    {
+      "level": "PD",
+      "index": 0,
+      "entry_physical_address": "0x0000000021000000",
+      "entry_value": "0x0000000022000067"
+    },
+    {
+      "level": "PT",
+      "index": 1,
+      "entry_physical_address": "0x0000000022000008",
+      "entry_value": "0x0000000000100067"
+    }
+  ],
+  "note": "Synthetic UI fixture; not a real Windows capture."
+}

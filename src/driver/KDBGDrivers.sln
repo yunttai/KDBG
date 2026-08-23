@@ -1,0 +1,27 @@
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{BC8A1FFA-BEE3-4634-8014-F334798102B3}") = "KDbgDriver", "KDbgDriver\KDbgDriver.vcxproj", "{B7A3A1B4-CC2B-4A80-95B7-26666F93F167}"
+EndProject
+Project("{BC8A1FFA-BEE3-4634-8014-F334798102B3}") = "KDbgProbe", "KDbgProbe\KDbgProbe.vcxproj", "{E5A87B12-6C42-489A-9D4E-2D0A8740CB20}"
+EndProject
+Global
+    GlobalSection(SolutionConfigurationPlatforms) = preSolution
+        Debug|x64 = Debug|x64
+        Release|x64 = Release|x64
+    EndGlobalSection
+    GlobalSection(ProjectConfigurationPlatforms) = postSolution
+        {B7A3A1B4-CC2B-4A80-95B7-26666F93F167}.Debug|x64.ActiveCfg = Debug|x64
+        {B7A3A1B4-CC2B-4A80-95B7-26666F93F167}.Debug|x64.Build.0 = Debug|x64
+        {B7A3A1B4-CC2B-4A80-95B7-26666F93F167}.Release|x64.ActiveCfg = Release|x64
+        {B7A3A1B4-CC2B-4A80-95B7-26666F93F167}.Release|x64.Build.0 = Release|x64
+        {E5A87B12-6C42-489A-9D4E-2D0A8740CB20}.Debug|x64.ActiveCfg = Debug|x64
+        {E5A87B12-6C42-489A-9D4E-2D0A8740CB20}.Debug|x64.Build.0 = Debug|x64
+        {E5A87B12-6C42-489A-9D4E-2D0A8740CB20}.Release|x64.ActiveCfg = Release|x64
+        {E5A87B12-6C42-489A-9D4E-2D0A8740CB20}.Release|x64.Build.0 = Release|x64
+    EndGlobalSection
+    GlobalSection(SolutionProperties) = preSolution
+        HideSolutionNode = FALSE
+    EndGlobalSection
+EndGlobal

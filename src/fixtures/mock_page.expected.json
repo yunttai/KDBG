@@ -1,0 +1,15 @@
+{
+  "schema": "kdbg.fixture.v1",
+  "name": "mock-page",
+  "pfn": "0x100",
+  "physical_address": "0x0000000000100000",
+  "size": 4096,
+  "pattern": "byte[i] = (i * 17 + 0x3D) & 0xFF",
+  "sha256": "56a1842848d8865693981d07e50f91e39fac9a371579f12a20234fd389db53f1",
+  "samples": {
+    "0x000": "3D",
+    "0x001": "4E",
+    "0x100": "3D",
+    "0xFFF": "2C"
+  }
+}

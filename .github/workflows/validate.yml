@@ -1,0 +1,66 @@
+name: validate
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  portable-core:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate Codex repository layout
+        run: python src/tools/verify_layout.py
+
+      - name: Configure portable core
+        working-directory: src
+        run: cmake --preset core-debug
+
+      - name: Build portable core
+        working-directory: src
+        run: cmake --build --preset core-debug --parallel 2
+
+      - name: Run deterministic core tests
+        working-directory: src
+        run: ctest --preset core-debug --output-on-failure
+
+      - name: Validate source-complete gate
+        run: python src/tools/validate_release.py --source-complete
+
+  windows-user-mode:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Activate MSVC developer environment
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Validate Codex repository layout
+        run: python src/tools/verify_layout.py
+
+      - name: Configure Windows GUI and native bridge
+        working-directory: src
+        run: cmake --preset windows-release
+
+      - name: Build Windows GUI, native bridge, and tests
+        working-directory: src
+        run: cmake --build --preset windows-release --parallel 2
+
+      - name: Run deterministic tests on Windows
+        working-directory: src
+        run: ctest --preset windows-release --output-on-failure
+
+      - name: Upload unsigned user-mode artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: KDBG-windows-user-mode
+          if-no-files-found: error
+          path: |
+            out/build/windows-release/**/KDBG.exe
+            out/build/windows-release/**/kdbg_memprocfs_bridge.exe
+
+# WDK driver build/sign/load and live physical-memory write verification are
+# intentionally separate release gates executed in a disposable Windows VM.

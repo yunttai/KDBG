@@ -1,0 +1,144 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": { "major": 3, "minor": 25, "patch": 0 },
+  "configurePresets": [
+    {
+      "name": "core-debug",
+      "displayName": "KDBG core tests (Debug)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/../out/build/core-debug",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "KDBG_BUILD_TESTS": "ON",
+        "KDBG_BUILD_GUI": "OFF"
+      }
+    },
+    {
+      "name": "core-release",
+      "displayName": "KDBG core tests (Release)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/../out/build/core-release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "KDBG_BUILD_TESTS": "ON",
+        "KDBG_BUILD_GUI": "OFF",
+        "KDBG_BUILD_BENCHMARKS": "ON"
+      }
+    },
+    {
+      "name": "core-sanitized",
+      "displayName": "KDBG core tests (ASan + UBSan)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/../out/build/core-sanitized",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "KDBG_BUILD_TESTS": "ON",
+        "KDBG_BUILD_GUI": "OFF",
+        "KDBG_BUILD_MEMPROCFS_BRIDGE": "OFF",
+        "KDBG_BUILD_BENCHMARKS": "ON",
+        "KDBG_ENABLE_SANITIZERS": "ON"
+      }
+    },
+    {
+      "name": "core-clang-tidy",
+      "displayName": "KDBG core clang static analysis",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/../out/build/core-clang-tidy",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "CMAKE_CXX_CLANG_TIDY": "clang-tidy;-checks=-*,clang-analyzer-*,-clang-analyzer-optin.core.EnumCastOutOfRange;-warnings-as-errors=*",
+        "KDBG_BUILD_TESTS": "ON",
+        "KDBG_BUILD_GUI": "OFF",
+        "KDBG_BUILD_MEMPROCFS_BRIDGE": "OFF",
+        "KDBG_BUILD_BENCHMARKS": "ON"
+      }
+    },
+    {
+      "name": "windows-debug",
+      "displayName": "KDBG Windows GUI (Debug)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/../out/build/windows-debug",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "KDBG_BUILD_TESTS": "ON",
+        "KDBG_BUILD_GUI": "ON"
+      }
+    },
+    {
+      "name": "windows-release",
+      "displayName": "KDBG Windows GUI (Release)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/../out/build/windows-release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "KDBG_BUILD_TESTS": "ON",
+        "KDBG_BUILD_GUI": "ON",
+        "KDBG_BUILD_BENCHMARKS": "ON"
+      }
+    },
+    {
+      "name": "windows-analyze",
+      "displayName": "KDBG Windows GUI (MSVC /analyze)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/../out/build/windows-analyze",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "KDBG_BUILD_TESTS": "ON",
+        "KDBG_BUILD_GUI": "ON",
+        "KDBG_BUILD_BENCHMARKS": "ON",
+        "KDBG_ENABLE_MSVC_ANALYZE": "ON"
+      }
+    }
+  ],
+  "buildPresets": [
+    { "name": "core-debug", "configurePreset": "core-debug" },
+    { "name": "core-release", "configurePreset": "core-release" },
+    { "name": "core-sanitized", "configurePreset": "core-sanitized" },
+    { "name": "core-clang-tidy", "configurePreset": "core-clang-tidy" },
+    { "name": "windows-debug", "configurePreset": "windows-debug" },
+    { "name": "windows-release", "configurePreset": "windows-release" },
+    { "name": "windows-analyze", "configurePreset": "windows-analyze" }
+  ],
+  "testPresets": [
+    {
+      "name": "core-debug",
+      "configurePreset": "core-debug",
+      "output": { "outputOnFailure": true }
+    },
+    {
+      "name": "core-release",
+      "configurePreset": "core-release",
+      "output": { "outputOnFailure": true }
+    },
+    {
+      "name": "core-sanitized",
+      "configurePreset": "core-sanitized",
+      "output": { "outputOnFailure": true },
+      "environment": {
+        "ASAN_OPTIONS": "detect_leaks=0:halt_on_error=1",
+        "UBSAN_OPTIONS": "halt_on_error=1:print_stacktrace=1"
+      }
+    },
+    {
+      "name": "core-clang-tidy",
+      "configurePreset": "core-clang-tidy",
+      "output": { "outputOnFailure": true }
+    },
+    {
+      "name": "windows-debug",
+      "configurePreset": "windows-debug",
+      "output": { "outputOnFailure": true }
+    },
+    {
+      "name": "windows-release",
+      "configurePreset": "windows-release",
+      "output": { "outputOnFailure": true }
+    },
+    {
+      "name": "windows-analyze",
+      "configurePreset": "windows-analyze",
+      "output": { "outputOnFailure": true }
+    }
+  ]
+}

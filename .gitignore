@@ -1,0 +1,35 @@
+# Build outputs
+out/
+build/
+.vs/
+.idea/
+.vscode/
+CMakeUserPresets.json
+
+# Windows build artifacts
+*.obj
+*.pdb
+*.ilk
+*.exp
+*.lib
+*.dll
+*.exe
+*.sys
+*.cat
+*.cer
+*.pfx
+
+# Logs and runtime state
+*.log
+*.jsonl
+runtime/
+captures/
+crashdumps/
+
+# Python
+__pycache__/
+*.pyc
+
+# OS
+Thumbs.db
+.DS_Store

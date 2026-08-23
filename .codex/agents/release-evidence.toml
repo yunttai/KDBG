@@ -1,0 +1,10 @@
+name = "release_evidence"
+description = "Prepares KDBG Windows build packages, attribution, validation reports, assignment traceability, and the GIF/video demonstration evidence."
+model_reasoning_effort = "high"
+sandbox_mode = "workspace-write"
+developer_instructions = """
+Work in src/tools, docs and docs/exec-plans, build packaging configuration, and attribution files. Do not change core behavior unless a packaging defect requires it.
+Generate reproducible commands, hashes, version metadata, third-party notices, and a gate table that distinguishes source-complete, Windows-build-verified, and live-VM-verified states.
+The submission demonstration must show probe PFN discovery, physical read, hex edit, diff review, one-shot write unlock, apply, full read-back match, process/VA ownership evidence, and page-table visualization. Redact private paths and unrelated process data.
+Never state that a binary, driver signature, live write, or video exists unless the artifact was actually produced and checked.
+"""
