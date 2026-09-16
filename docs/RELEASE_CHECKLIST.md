@@ -1,6 +1,6 @@
 # KDBG 1.0.0 release checklist
 
-기준: 2026-08-23 KST
+기준: 2026-09-16 KST
 
 | Gate | Required evidence | Current claim |
 |---|---|---|
@@ -11,7 +11,9 @@
 | Candidate advanced read-only | `D3390AD4...` GUI/process/PFN/PTView workflow | PASS — no physical/process writes |
 | Final-package-verified | source scope, version/arch/config, symbols split, SHA, SPDX, reproducibility, negatives | PASS |
 | Final-package read-only/lifecycle | exact deploy/hash binding, device/main ABI6, fresh Probe/4 KiB read, invalid IOCTL rejection, stop/remove | PASS — physical writes 0 |
-| Final write-sensitive/v2 | physical/process write, Freeze, Driver Verifier, hash-bound v2 | BLOCKED |
+| Final write-sensitive/v2 | physical/process write, Freeze, Driver Verifier, hash-bound v2 | PASS |
+| Exact-package DPI matrix | 100/125/150/200% existing VM profile captures | PASS |
+| Optional MemProcFS backend | v5.18.11 out-of-process runtime | BLOCKED — fallback PASS |
 
 - [x] Record toolchain versions and clean commands.
 - [x] Record deterministic source-snapshot SHA-256 when Git metadata is unavailable.
@@ -37,14 +39,14 @@
 - [x] Run final-package fresh Probe query, exact 4 KiB read-only access, and invalid IOCTL rejection with physical writes 0.
 - [x] Complete interim Probe read/edit/write/full read-back/independent reload/rollback/gate-lock.
 - [x] Complete candidate read-only process, built-in PFN reverse map, and PTView evidence.
-- [ ] Complete dedicated process write/Freeze fixture evidence.
-- [ ] Exercise optional MemProcFS runtime (currently BLOCKED: `vmm.dll`, error 126).
+- [x] Complete dedicated process write/Freeze fixture evidence.
+- [x] Exercise optional MemProcFS v5.18.11 runtime; record `pmem` initialization exit 2 and fallback PASS.
 - [x] Stop/remove the exact Release drivers and record lifecycle evidence.
-- [ ] Run Driver Verifier (`NOT_RUN`).
+- [x] Run targeted volatile Driver Verifier flags `0x132` and remove settings.
 - [x] Record and review the scoped redacted demonstration GIF.
-- [ ] Validate the hash-bound `kdbg.live-evidence.v2` bundle.
+- [x] Capture exact-package DPI 100/125/150/200% and hash every image.
+- [x] Validate the hash-bound `kdbg.live-evidence.v2` bundle and reviewed 17-scene GIF.
 
-Unchecked live items must not be inferred from completed source, build, package,
-VM-prerequisite, read-only/lifecycle, or older-package items. Exact package identity
-is externalized in `out/evidence/final-live-manifest.json` and
-`out/evidence/RELEASE-HASHES.txt`; final physical/process write and v2 remain separate.
+Exact package identity is externalized in `out/evidence/final-live-manifest.json` and
+`out/evidence/RELEASE-HASHES.txt`. Optional MemProcFS remains unavailable at
+`VMMDLL_Initialize(device=pmem)`; the required built-in ownership/PTView fallback passed.

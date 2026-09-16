@@ -1,5 +1,9 @@
 # 데모·제출 체크리스트
 
+최종 evidence 상태: `out/evidence/final-91042aab-live-evidence-v2.gif`는 1600x900,
+17장면이며 `out/evidence/final-91042aab-live-evidence-v2.json`에 SHA-256으로
+결합되어 strict validator를 통과했다. 실제 외부 제출/수신자 확인은 사용자 절차다.
+
 ## 1. 권장 시연 대상
 
 테스트 fixture process/driver가 할당한 page-sized buffer를 사용한다.
@@ -65,15 +69,14 @@
 
 ## 3. 촬영 전
 
-- [ ] VM snapshot
-- [ ] 해상도 1920x1080 또는 1600x900
-- [ ] font scale
-- [ ] 알림/개인정보 숨김
-- [ ] fixture PFN 고정
-- [ ] driver 재설치부터 한 번 rehearsal
-- [ ] Release build
-- [ ] 영상에 마우스 포인터 표시
-- [ ] 음성 없이도 이해 가능한 상태 문구
+- [x] VM snapshot
+- [x] 해상도 1600x900
+- [x] DPI 100/125/150/200% 확인
+- [x] 알림/개인정보 숨김
+- [x] fixture PFN 및 exact package hash 기록
+- [x] driver install/stop/remove lifecycle
+- [x] Release build/package
+- [x] 음성 없이도 이해 가능한 상태 문구
 
 ## 4. 영상 판독성
 
@@ -98,9 +101,9 @@ KDBG-1.0.0-demo.gif
 
 ## 6. 최종 확인
 
-- [ ] 첨부 파일 열림
-- [ ] 재생 시간 정상
-- [ ] 소리 없이 흐름 이해 가능
+- [x] 첨부 파일 열림
+- [x] 17 frames/1600x900 재생 구조 확인
+- [x] 소리 없이 흐름 이해 가능
 - [ ] 파일 용량 제한 확인
 - [ ] 제목 정확
 - [ ] 실제 제출 기한과 수신자를 별도 확인

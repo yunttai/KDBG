@@ -37,8 +37,16 @@
   `out/evidence/final-live-manifest.json` and `out/evidence/RELEASE-HASHES.txt`
   so documentation does not embed a changing ZIP digest.
 
-The optional MemProcFS runtime remains BLOCKED because `vmm.dll` returned Win32
-error 126. Final physical write (`NOT_RUN`), process write/Freeze, Driver
-Verifier, and hash-bound v2 evidence remain BLOCKED. The DADF physical-write and
-D339 advanced read-only results keep their interim/candidate scope, and no
-production Authenticode trust is claimed.
+- Completed the exact `91042aab...` package final write-sensitive run: Probe PFN
+  `0xBC1E6`, 8-byte dirty write, full read-back, independent reload, rollback,
+  baseline restore, process fixture write/three Freeze ticks, and volatile
+  targeted Driver Verifier all passed with final cleanup.
+- Captured the exact package at DPI 100/125/150/200% in the existing disposable
+  VM profile and generated a reviewed 17-scene, 1600x900 hash-bound
+  `kdbg.live-evidence.v2` bundle that passed the strict package/live validator.
+- Fixed `new_live_evidence.ps1` hexadecimal `DirtyRun` parsing by preserving the
+  regex captures before subsequent comparisons overwrite PowerShell `$Matches`.
+- Updated optional MemProcFS status: official v5.18.11 resolves the earlier DLL
+  load error 126, but `VMMDLL_Initialize(device=pmem)` still exits 2. The required
+  built-in selected-process reverse mapper/PTView fallback passed, and no
+  production Authenticode trust is claimed.

@@ -10,15 +10,16 @@
 
 어느 한 Gate의 PASS를 다른 Gate의 PASS로 표현하지 않는다.
 
-2026-08-23 상태: Source-complete 및 Windows-build-verified는 PASS이며 portable
+2026-09-16 최종 상태: Source-complete 및 Windows-build-verified는 PASS이며 portable
 직접 실행은 707 checks, 0 failures다. 기존 `Windows-VM`의 checkpoint,
 Administrator, test-signing 전제도 PASS다. Interim `DADF43AA...`는 ABI 6 Probe
 transaction을 완료했고 candidate `D3390AD4...`는 advanced read-only workflow를
 완료했다. `kdbg.source-snapshot.v1` package candidate의 strict validators, 동일
 입력 ZIP 재현성, 5/5 negative fixtures도 PASS다. 동일 VM에서 exact Release의
 deploy/hash binding/device/main ABI6/fresh Probe query/exact 4 KiB read-only/invalid
-IOCTL rejection/stop+remove도 physical writes 0으로 PASS했다. Final physical write,
-process write/Freeze, Driver Verifier와 hash-bound v2는 BLOCKED다.
+IOCTL rejection/stop+remove를 PASS했다. 이후 exact final PFN physical write/read-back/
+reload/rollback, process write/3회 Freeze restoration, Driver Verifier, DPI 4종과
+hash-bound v2도 PASS했다. Optional MemProcFS `pmem` backend만 BLOCKED이며 fallback은 PASS다.
 
 ## 2. Portable 자동 테스트
 
@@ -147,8 +148,8 @@ SHA를 갱신한다. Package PASS alone은 physical/process write, Verifier 또�
 - service repeated start/stop/unload
 - 선택적 Driver Verifier는 disposable VM에서만 수행
 
-Final Release 관측: device/main ABI 6, invalid IOCTL rejection, stop/remove는 PASS,
-Driver Verifier는 `NOT_RUN`으로 BLOCKED다. Exact identity는
+Final Release 관측: device/main ABI 6, invalid IOCTL rejection, stop/remove와 volatile
+targeted Driver Verifier `0x132` 및 cleanup은 PASS다. Exact identity는
 `out/evidence/final-live-manifest.json`과 `out/evidence/RELEASE-HASHES.txt`를 따른다.
 
 ## 6. Probe Live E2E
@@ -165,10 +166,9 @@ Driver Verifier는 `NOT_RUN`으로 BLOCKED다. Exact identity는
 10. rollback 후 원본 CRC를 확인한다.
 11. 종료 시 write gate가 LOCKED인지 확인한다.
 
-Final Release에서는 steps 1–5의 deploy/hash/ABI/fresh Probe/exact 4096-byte
-read-only와 stop/remove를 physical writes 0으로 PASS했다. Steps 6–10의 final
-physical write/read-back/reload/rollback은 `NOT_RUN`으로 BLOCKED이며, 성공 증거는
-interim DADF transaction에만 한정된다.
+Final Release에서 steps 1–11을 모두 수행했다. PFN `0xBC1E6`의 exact 4096-byte
+baseline/preflight/read-back/independent reload/rollback이 hash-match했고 8-byte dirty
+run 뒤 baseline CRC를 복원했으며 write gate는 다시 LOCKED였다.
 
 ## 7. GUI 고도화 E2E
 
@@ -186,8 +186,9 @@ interim DADF transaction에만 한정된다.
 Candidate `D3390AD4...`에서 write gate를 잠근 채 process attach, memory map,
 First/Next Scan, Freeze OFF address entry, pointer scan, disassembly, snapshot,
 selected-process PFN reverse map과 Page Tables exact PFN/PA match까지 PASS했다.
-Dedicated process write/Freeze와 optional MemProcFS runtime은 각각 fixture 부재와
-`vmm.dll` error 126으로 BLOCKED다.
+Dedicated final process fixture의 16-byte write와 3회 Freeze restoration/rollback은
+PASS다. Optional MemProcFS v5.18.11은 error 126을 해소했지만 `pmem` initialization
+exit 2로 backend만 BLOCKED이며 built-in reverse-mapper/PTView fallback은 PASS다.
 
 ## 8. 안정성 반복 목표
 

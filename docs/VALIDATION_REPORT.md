@@ -1,6 +1,7 @@
 # KDBG 1.0.0 검증 보고서
 
 검증 일자: 2026-08-23 KST
+최종 live addendum: 2026-09-16 KST — 아래 15절이 11~14절의 당시 BLOCKED 판정을 대체한다.
 
 ## 1. 환경과 안전 판정
 
@@ -233,8 +234,8 @@ Evidence:
 | Snapshot comparison | PASS | 4096 bytes, changed runs 0 |
 | Pointer scan | PASS | 10,385 paths |
 | About/counters/final safe state | PASS | process detached; process/physical gates LOCKED; physical page CLEAN |
-| Optional MemProcFS | BLOCKED | actual launch failed: Win32 error 126 loading `vmm.dll` |
-| Process live write/freeze | BLOCKED | read-only run; write/freeze not performed |
+| Optional MemProcFS | HISTORICAL BLOCKED | 이 당시 error 126; 15절 final attempt가 대체 |
+| Process live write/freeze | HISTORICAL BLOCKED | 이 당시 read-only; 15절 final PASS가 대체 |
 | Candidate physical write | BLOCKED | `NOT_RUN`; successful physical write evidence remains DADF interim only |
 
 Evidence manifest: `out/evidence/candidate-d3390ad4-advanced-live.json`.
@@ -244,7 +245,7 @@ Evidence manifest: `out/evidence/candidate-d3390ad4-advanced-live.json`.
 `out/evidence/KDBG-1.0.0-demonstration.gif` is PASS for its declared scope: 17
 frames at 1280×720, with frames 1–5 showing the interim ABI6 physical transaction
 and frames 6–17 showing D339 candidate read-only validation. It is not final-package
-`kdbg.live-evidence.v2`, so final v2 evidence remains BLOCKED.
+`kdbg.live-evidence.v2`가 아니었다. 이 당시 판정은 15절 final v2 PASS가 대체한다.
 
 ## 13. Exact Release read-only/lifecycle gate
 
@@ -258,7 +259,7 @@ and frames 6–17 showing D339 candidate read-only validation. It is not final-p
 | Physical read-only | PASS | exact 4096-byte read; physical writes 0 |
 | Invalid IOCTL rejection | PASS | fail-closed rejection |
 | Stop/remove | PASS | both drivers stopped and removed |
-| Final physical write | BLOCKED | `NOT_RUN`; successful write remains interim DADF only |
+| Final physical write | HISTORICAL BLOCKED | 이 당시 `NOT_RUN`; 15절 final PASS가 대체 |
 
 Authoritative identity/evidence binding:
 
@@ -294,3 +295,33 @@ D339 advanced read-only workflow와 scoped GIF는 PASS다. 현재 차단 원인�
 write, Driver Verifier, process write/freeze, optional MemProcFS와 final v2 evidence다.
 문서 repack 후 같은 read-only/lifecycle 검증을 재실행해 external manifest/hash를
 갱신한다. Production Authenticode trust는 주장하지 않는다.
+
+## 15. 2026-09-16 exact-package 최종 live addendum (authoritative)
+
+이 절은 11~14절의 역사적 candidate/당시 BLOCKED 상태를 대체한다. Runtime ZIP은
+`91042aab214e4c56daca29159b46c81574afb2aac700257d46baa7a8bf99e54f`로 고정했다.
+
+| Gate | 최종 상태 | 실제 증거 |
+|---|---|---|
+| Driver Verifier | PASS | volatile `0x132`, `KDbgDriver.sys`/`KDbgProbe.sys`, cleanup PASS |
+| Exact physical transaction | PASS | PFN `0xBC1E6`, 4096-byte preflight/read-back/reload/rollback, baseline 복원, gate lock |
+| Process write/Freeze | PASS | dedicated 4096-byte buffer, verified 16-byte write, 3 restore ticks, rollback |
+| PFN owner/PTView | PASS | PID `10072`, VA `0xFFFFBA8098262000`, PTE PA `0x3A991310`, PML4/PDPT/PD/PT, final PA exact match |
+| DPI 100/125/150/200% | PASS | exact package, 기존 VM 사용자 프로필, 네 PNG의 SHA-256 기록 |
+| Hash-bound evidence v2 | PASS | 17-frame 1600x900 GIF, redacted log, six raw page files, four final artifacts, validator exit 0 |
+| Stop/remove/safety | PASS | services absent, physical baseline restored, process fixture freed, all gates locked, VM Running |
+| Optional MemProcFS v5.18.11 | BLOCKED (optional) | error 126 해소 후 `VMMDLL_Initialize(device=pmem)` exit 2; built-in fallback PASS |
+
+Authoritative evidence:
+
+- `out/evidence/final-91042aab-unblock-result.json`
+- `out/evidence/final-91042aab-v2-raw/`
+- `out/evidence/dpi-final-91042aab/`
+- `out/evidence/final-91042aab-live-evidence-v2.json`
+- `out/evidence/final-91042aab-live-evidence-v2.gif`
+- `out/evidence/final-91042aab-live-command-log.txt`
+
+v2 media는 exact final runtime 값/raw hashes와 exact-package DPI 캡처를 결합한다.
+이전 ABI6 GUI workflow 이미지는 영상에서 supporting UI로 명시하며 exact-package
+runtime capture로 승격하지 않는다. 필수 제품 gate는 PASS이고, production signing과
+optional MemProcFS device backend만 외부/optional 제한으로 남는다.

@@ -1,11 +1,11 @@
 # KDBG 구현 상태
 
-기준: 2026-08-23 KST  
+기준: 2026-09-16 KST
 제품 버전: 1.0.0
 
 ## 판정 요약
 
-KDBG 1.0.0의 소스, fresh core/Windows builds, WDK clean builds와 package gates가 검증됐다. 같은 `Windows-VM`에서 exact Release package의 deploy/hash binding/device/main ABI6/fresh Probe query/exact 4 KiB read-only/invalid IOCTL rejection/stop-remove가 physical writes 0으로 PASS했다. Interim DADF physical transaction, D339 advanced read-only와 scoped GIF도 각자 명시한 범위에서 PASS다. Final physical write는 `NOT_RUN`이며 process write/freeze, optional MemProcFS, Driver Verifier와 final v2 evidence는 `BLOCKED`다.
+KDBG 1.0.0의 소스, fresh core/Windows builds, WDK clean builds, package gates와 exact Release package live gate를 검증했다. 같은 `Windows-VM`에서 deploy/hash binding, ABI6, exact 4096-byte Probe read, invalid IOCTL rejection, physical write/read-back/independent reload/rollback, process write/Freeze, targeted volatile Driver Verifier, same-PFN ownership/PTView, stop/remove가 PASS했다. 기존 VM 사용자 프로필에서 exact-package DPI 100/125/150/200%를 실제 캡처했고, 17장면 hash-bound `kdbg.live-evidence.v2`도 validator PASS다. Optional MemProcFS v5.18.11은 DLL load까지 성공했으나 `pmem` device 초기화가 exit 2로 BLOCKED이며, 필수 built-in reverse-mapper/PTView fallback은 PASS다.
 
 | 영역 | 상태 | 근거 |
 |---|---|---|
@@ -17,7 +17,7 @@ KDBG 1.0.0의 소스, fresh core/Windows builds, WDK clean builds와 package gat
 | MSVC `/analyze /WX` | PASS | GUI, bridge, core, tests, benchmarks |
 | WDK Debug/Release | PASS | clean builds; 두 드라이버 SYS/INF/CAT/PDB; signability errors 0/warnings 0 |
 | Current candidate GUI visual workflow | PASS | D339 full-window captures across advanced read-only features |
-| Clean-profile DPI-specific smoke | BLOCKED | historical 120 DPI capture only; current DPI matrix not rerun |
+| Exact-package DPI matrix | PASS | 기존 VM 프로필에서 100/125/150/200% 실캡처 및 SHA-256 기록 |
 | VM prerequisites | PASS | 기존 `Windows-VM` checkpoint, Administrator, test-signing 확인 |
 | 이전 패키지 VM install/start | PASS | 이전 패키지 설치, KDBG/KDBGProbe 서비스 시작 기록 |
 | 최종 Release/symbols package | PASS | `kdbg.source-snapshot.v1`, strict validators, 동일 입력 ZIP, 5/5 negative fixtures |
@@ -25,12 +25,13 @@ KDBG 1.0.0의 소스, fresh core/Windows builds, WDK clean builds와 package gat
 | Probe physical transaction | PASS | preflight/read-back/reload/rollback full-page match; baseline restored; gate locked |
 | D339 advanced read-only live | PASS | built-in PFN/PTView + process map/scan/address-list/disassembly/snapshot/pointer; gates locked |
 | Scoped demonstration GIF | PASS | interim physical frames + D339 read-only frames |
-| Optional MemProcFS runtime | BLOCKED | error 126 loading `vmm.dll` |
-| Process live write/freeze | BLOCKED | read-only observation only; Freeze OFF |
+| Optional MemProcFS runtime | BLOCKED (optional) | v5.18.11 `vmm.dll` load 성공; `VMMDLL_Initialize(device=pmem)` exit 2 |
+| Process live write/freeze | PASS | 16-byte fixture write, 3회 mutation/Freeze 복원, rollback, gate lock |
 | D339 physical write | BLOCKED | `NOT_RUN` |
 | Final Release read-only/lifecycle | PASS | exact deploy/hash binding, ABI6, fresh Probe/4 KiB read, invalid IOCTL rejection, stop/remove; writes 0 |
-| Final Release physical write | BLOCKED | `NOT_RUN`; interim DADF evidence only |
-| Driver Verifier | BLOCKED | `NOT_RUN` |
+| Final Release physical write | PASS | PFN `0xBC1E6`, 8-byte dirty run, 4 KiB read-back/reload/rollback, baseline 복원 |
+| Driver Verifier | PASS | volatile `0x132`, 두 driver 대상 관측 및 cleanup PASS |
+| Final hash-bound v2 evidence | PASS | 17장면 GIF + command log + raw pages + final artifact hashes, strict validator PASS |
 
 ## 구현된 제품 범위
 
@@ -103,25 +104,23 @@ KDBG 1.0.0의 소스, fresh core/Windows builds, WDK clean builds와 package gat
 - `out/build/windows-release/kdbg_memprocfs_bridge.exe`
 - `out/drivers/{Debug,Release}/KDbgDriver.*`
 - `out/drivers/{Debug,Release}/KDbgProbe.*`
-- exact Release `out/package/KDBG-1.0.0-win-x64/` 및 symbols/ZIP은 package/live read-only gate 검증 완료; 문서 반영 후 external SHA 갱신 예정
-- `out/evidence/kdbg-1.0.0-release-ui-dpi-correct.png` (historical clean-profile DPI smoke)
+- exact Release `out/package/KDBG-1.0.0-win-x64/` 및 symbols/ZIP; final ZIP SHA-256 `91042aab214e4c56daca29159b46c81574afb2aac700257d46baa7a8bf99e54f`
+- `out/evidence/dpi-final-91042aab/dpi-{100,125,150,200}.png` (exact-package DPI matrix)
 - `out/evidence/candidate-*.png` (current D339 live visual workflow)
 - `out/evidence/benchmark-windows-release.json` (current final Windows Release benchmark)
 - `out/evidence/live-20260823-110826-359/`
 - `out/evidence/live-20260823-110826-359.zip` — SHA-256 `b8e88cb7cc78ab42f5edf0b4409b99ab4e6e60ab2761ed08f98233ee11bd0769`
 - `out/evidence/candidate-d3390ad4-advanced-live.json`
 - `out/evidence/KDBG-1.0.0-demonstration.gif` (scoped interim+D339 candidate evidence)
+- `out/evidence/final-91042aab-unblock-result.json` (latest exact-package integrated live result)
+- `out/evidence/final-91042aab-live-evidence-v2.json` 및 `.gif` (validated final hash-bound evidence)
 - `out/evidence/final-live-manifest.json` (authoritative exact Release live binding)
 - `out/evidence/RELEASE-HASHES.txt` (authoritative release digests)
 
-## 의도적으로 남은 외부 gate
+## 남은 optional/외부 제한
 
 - production certificate signing은 하지 않았다. user-mode EXE는 unsigned이고 WDK 출력의 production Authenticode trust는 주장하지 않는다.
-- optional MemProcFS actual launch는 Win32 error 126으로 `vmm.dll`을 load하지 못해 BLOCKED다.
-- final Release read-only/lifecycle, invalid IOCTL rejection과 stop/remove는 PASS지만 final physical write는 `NOT_RUN`이다.
-- Driver Verifier는 `NOT_RUN`으로 BLOCKED다.
-- built-in PFN ownership/PTView와 advanced read-only workflow는 PASS지만 process live write/freeze는 BLOCKED다.
-- scoped GIF는 PASS지만 final-package hash-bound v2 evidence는 BLOCKED다.
-
-문서 반영 repack 후 `docs/exec-plans/active/windows-live-validation.md`에 따라 같은
-read-only/lifecycle 검증을 재실행하고 external manifest/hash binding을 갱신한다.
+- optional MemProcFS v5.18.11은 error 126을 해소했지만 `VMMDLL_Initialize`가 `pmem` device에서 exit 2라 runtime backend만 BLOCKED다. 내장 selected-process reverse mapper와 PTView fallback은 PASS다.
+- production certificate signing은 별도 외부 release 절차다. 현재 user-mode EXE의 production Authenticode trust는 주장하지 않는다.
+- v2 영상은 exact final runtime 값/raw hash와 exact-package DPI 캡처를 결합하고, 이전 ABI6 GUI workflow 캡처는 영상 안에서 supporting UI로 명시했다. 해당 과거 캡처를 exact-package runtime 화면으로 승격하지 않는다.
+- 증거 생성기 `new_live_evidence.ps1`의 `DirtyRun` `$Matches` 덮어쓰기 버그를 수정했으며, 수정 뒤 공식 package/live validator가 PASS했다. 이 evidence-only tooling 수정 때문에 runtime ZIP은 다시 만들지 않았다.

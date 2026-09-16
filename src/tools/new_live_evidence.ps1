@@ -99,10 +99,12 @@ foreach ($Run in $DirtyRun) {
     if ($Run -notmatch '^(0x[0-9A-Fa-f]+|[0-9]+):(0x[0-9A-Fa-f]+|[0-9]+)$') {
         throw "DirtyRun must use offset:length, for example 0x100:4."
     }
-    $OffsetBase = if ($Matches[1] -match '^0x') { 16 } else { 10 }
-    $LengthBase = if ($Matches[2] -match '^0x') { 16 } else { 10 }
-    $Offset = [Convert]::ToUInt32(($Matches[1] -replace '^0x', ''), $OffsetBase)
-    $Length = [Convert]::ToUInt32(($Matches[2] -replace '^0x', ''), $LengthBase)
+    $OffsetText = $Matches[1]
+    $LengthText = $Matches[2]
+    $OffsetBase = if ($OffsetText.StartsWith('0x', [StringComparison]::OrdinalIgnoreCase)) { 16 } else { 10 }
+    $LengthBase = if ($LengthText.StartsWith('0x', [StringComparison]::OrdinalIgnoreCase)) { 16 } else { 10 }
+    $Offset = [Convert]::ToUInt32(($OffsetText -replace '^0x', ''), $OffsetBase)
+    $Length = [Convert]::ToUInt32(($LengthText -replace '^0x', ''), $LengthBase)
     if ($Length -eq 0 -or $Offset + $Length -gt 4096) { throw "DirtyRun is outside the page." }
     $DirtyRuns += [ordered]@{ offset = [int]$Offset; length = [int]$Length }
 }

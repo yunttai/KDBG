@@ -1,5 +1,17 @@
 # Active plan — disposable-VM live Probe validation
 
+## 2026-09-16 completion update (authoritative)
+
+Exact Release ZIP `91042aab214e4c56daca29159b46c81574afb2aac700257d46baa7a8bf99e54f`
+기준으로 physical write/read-back/reload/rollback, process write/3회 Freeze restoration,
+volatile targeted Driver Verifier, same-PFN ownership/PTView, DPI 100/125/150/200%와
+hash-bound 17-scene `kdbg.live-evidence.v2`가 모두 PASS했다. Latest result는
+`out/evidence/final-91042aab-unblock-result.json`, v2는
+`out/evidence/final-91042aab-live-evidence-v2.json`이다. Optional MemProcFS v5.18.11은
+error 126을 해소했지만 `VMMDLL_Initialize(device=pmem)` exit 2라 backend만 BLOCKED이고
+필수 built-in fallback은 PASS다. 아래 candidate/NOT_RUN 설명은 실행 당시의 역사적
+경계이며 현재 final gate 판정을 대체하지 않는다.
+
 Host-side Windows/MSVC/WDK builds are PASS as recorded in
 `docs/VALIDATION_REPORT.md`. The `kdbg.source-snapshot.v1` main/symbol candidate
 also passed strict validators, same-input ZIP reproducibility, and 5/5 negative
@@ -70,8 +82,8 @@ Interim package에서 다음 exact transaction은 PASS했다.
 - final counters: reads 11, writes 2, rejected 0, stage 4, status 0, transferred 4096
 - evidence ZIP SHA-256: `b8e88cb7cc78ab42f5edf0b4409b99ab4e6e60ab2761ed08f98233ee11bd0769`
 
-Exact Release에서는 fresh Probe query와 exact 4096-byte read-only가 PASS했고
-physical writes는 0이었다. Final physical write는 `NOT_RUN`으로 BLOCKED다.
+Exact Release의 초기 read-only run 뒤 2026-09-16 final run에서 PFN `0xBC1E6`의
+8-byte write, full read-back, independent reload, rollback과 baseline 복원을 PASS했다.
 
 아래 절차는 final package hash에 바인딩해 다시 확인할 checklist다.
 
@@ -98,8 +110,8 @@ D3390AD4 candidate의 read-only 결과:
 - Zydis disassembly PASS: 456 instructions
 - snapshot PASS: 4096 bytes, changed runs 0
 - About/counters/final state PASS: process detached, both gates LOCKED, page CLEAN
-- optional MemProcFS BLOCKED: actual launch error 126 loading `vmm.dll`
-- process live write/freeze BLOCKED
+- optional MemProcFS historical attempt: error 126; final attempt은 DLL load 성공 뒤 `pmem` init exit 2
+- process live write/freeze final exact-package fixture PASS
 - D339 physical write BLOCKED (`NOT_RUN`)
 
 근거: `out/evidence/candidate-d3390ad4-advanced-live.json`.
@@ -109,14 +121,14 @@ D3390AD4 candidate의 read-only 결과:
 Physical transaction archive와 extracted directory는 각각
 `out/evidence/live-20260823-110826-359.zip`과
 `out/evidence/live-20260823-110826-359/`에 있다. 이것은 verified physical
-transaction evidence지만 submission video 또는 hash-bound v2 bundle PASS는 아니다.
+transaction evidence이며 historical scoped bundle이다.
 `out/evidence/KDBG-1.0.0-demonstration.gif`는 declared scope에서 PASS다. frames
 1–5는 DADF interim physical transaction, frames 6–17은 D339 read-only validation이며
-final-package live-evidence.v2는 아니다.
+final-package v2는 별도 `final-91042aab-live-evidence-v2.json`으로 생성/검증했다.
 Exact Release read-only/lifecycle binding은
 `out/evidence/final-live-manifest.json`과 `out/evidence/RELEASE-HASHES.txt`에 있다.
-`new_live_evidence.ps1`로 v2 template을 생성하고 실제 command log/video/final
-package artifact hash를 채운 뒤 package와 함께 검증한다.
+`new_live_evidence.ps1`로 actual command log/video/final package artifact/raw-page
+hash를 결합했고 strict validator가 exit 0으로 PASS했다.
 
 ```powershell
 python .\src\tools\validate_release.py `
@@ -126,6 +138,6 @@ python .\src\tools\validate_release.py `
 
 실패, short I/O, mismatch, verifier finding 또는 BSOD가 있으면 PASS로 표시하지
 않고 dump/log를 보존하고 snapshot을 복원한다. Stop/remove는 exact Release에서
-PASS했지만 Driver Verifier는 `NOT_RUN`으로 BLOCKED다. write gate가 잠긴 상태를
-증거에 포함한다. production Authenticode trust는 별도
+PASS했고 volatile targeted Driver Verifier cleanup도 exact Release에서 PASS했다.
+write gate가 잠긴 상태를 증거에 포함했다. production Authenticode trust는 별도
 인증서 검증 증거가 없으면 PASS로 기록하지 않는다.

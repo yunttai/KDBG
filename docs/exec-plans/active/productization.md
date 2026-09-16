@@ -3,7 +3,7 @@
 - 시작: 2026-08-20 KST
 - 책임: `kdbg_supervisor`
 - 제품 버전: 1.0.0
-- 현재 단계: exact Release read-only/lifecycle PASS, write-sensitive/v2 gates 대기
+- 현재 단계: 필수 end-to-end productization PASS; optional MemProcFS backend만 BLOCKED
 - 판정 원칙: 실제 명령·산출물·로그가 있을 때만 PASS
 
 ## 안전 경계
@@ -11,7 +11,7 @@
 - 기존 `Windows-VM`의 복원 가능한 checkpoint, Administrator, test-signing은 확인됐다.
 - interim `DADF43AA...` package의 ABI6/Probe PASS를 final package PASS로 사용하지 않는다.
 - D3390AD4 candidate는 read-only PASS이며 physical write는 `NOT_RUN`이다.
-- exact Release는 deploy/hash/device/main ABI6/Probe read-only/invalid IOCTL/stop-remove PASS이며 physical writes 0이다.
+- exact Release는 deploy/hash/device/main ABI6/Probe read/write/read-back/reload/rollback, process Freeze, Verifier, DPI와 v2가 PASS다.
 - 최초 live write 대상은 확인된 `KDbgProbe` 4 KiB fixture PFN뿐이다.
 - signing bypass, vulnerable-driver loader, stealth, injection, anti-cheat/evasion, arbitrary kernel-virtual write는 구현하거나 실행하지 않는다.
 
@@ -50,15 +50,15 @@
 | Previous-package install/start | PASS | older package only; both services Running |
 | Same-VM interim device/ABI6 | PASS | continuously running VM, KDBG PID 1140 |
 | Final invalid IOCTL rejection | PASS | exact Release fail-closed rejection evidence |
-| Driver Verifier | BLOCKED | `NOT_RUN` |
+| Driver Verifier | PASS | volatile `0x132`, exact two-driver target, cleanup PASS |
 | Scanner/address/freeze/pointer/snapshot fixtures | PASS | deterministic suite and benchmark |
 | PFN/PTView synthetic fixtures | PASS | protocol/reverse map/LA57/large page tests |
 | Built-in PFN ownership/PTView live | PASS | D339 selected-process reverse map 1 mapping at 2M cap; exact Probe PA |
-| Optional MemProcFS runtime | BLOCKED | actual launch error 126 loading `vmm.dll` |
+| Optional MemProcFS runtime | BLOCKED (optional) | error 126 resolved; `VMMDLL_Initialize(device=pmem)` exit 2; fallback PASS |
 | Advanced process read-only live | PASS | map/modules, First/Next Scan, address-list Freeze OFF, disassembly, snapshot, pointer |
-| Process live write/freeze | BLOCKED | write-sensitive process actions not run |
+| Process live write/freeze | PASS | 16-byte fixture write, 3 Freeze restore ticks, rollback/gate lock |
 | Current candidate GUI visual workflow | PASS | D339 full-window Probe/process/PFN/PTView/About captures |
-| Clean-profile DPI-specific smoke | BLOCKED | current candidate DPI matrix not rerun |
+| Exact-package DPI matrix | PASS | existing VM profile 100/125/150/200% captures |
 | Local diagnostics | PASS | 1 MiB rotation/redaction/minidump smoke |
 | Current performance | PASS | final Windows Release rerun; all six mock-only metrics PASS |
 | Final Release ZIP/symbols/SBOM/licenses | PASS | new scope, strict validators, same-input ZIP reproducibility |
@@ -66,10 +66,10 @@
 | Interim Probe physical transaction | PASS | PFN `0xDA9FE`; full-page preflight/read-back/reload/rollback; gate locked |
 | D339 candidate physical write | BLOCKED | `NOT_RUN` |
 | Final Release deploy/hash/device/ABI/read-only | PASS | external identity binding; fresh Probe/4 KiB read; physical writes 0 |
-| Final Release physical write | BLOCKED | `NOT_RUN`; DADF write evidence is interim only |
+| Final Release physical write | PASS | PFN `0xBC1E6`, 8-byte dirty run, read-back/reload/rollback |
 | Final Release stop/remove | PASS | both drivers stopped and removed |
 | Scoped demonstration GIF | PASS | interim physical + D339 read-only, 17 frames |
-| Final v2 live evidence | BLOCKED | final package is bound; v2 bundle absent |
+| Final v2 live evidence | PASS | 17-frame GIF/log/raw pages/artifact hashes; validator exit 0 |
 
 ## 발견 후 수정·재실행 기록
 
@@ -106,23 +106,17 @@
 - `out/evidence/final-live-manifest.json` (authoritative exact Release live binding)
 - `out/evidence/RELEASE-HASHES.txt` (authoritative digests)
 
-## 남은 최소 작업
+## 최종 완료와 남은 optional 작업
 
-VM prerequisite, package gate, DADF physical transaction, D339 advanced read-only,
-scoped GIF와 exact Release read-only/lifecycle gate는 완료됐다. 문서 repack 뒤 external
-identity를 갱신할 재실행과 write-sensitive live evidence가 남는다.
+VM prerequisite, package, exact-package physical/process write, Freeze, Verifier,
+same-PFN PTView, DPI 4종, stop/remove와 final v2 evidence까지 완료됐다. Optional
+MemProcFS v5.18.11은 DLL load를 복구했으나 `pmem` initialization exit 2이며,
+built-in fallback은 PASS다. Runtime ZIP은 live-bound `91042aab...` 그대로 유지한다.
 
-1. 문서 반영 final repack과 새 SHA 기록
-2. 같은 `Windows-VM`에서 final read-only/lifecycle gate 재실행 후 external manifest/hash 갱신
-3. final physical write (`NOT_RUN`) 여부 결정
-4. process live write/freeze
-5. optional MemProcFS dependency 복구 후 actual launch 재검증
-6. Driver Verifier 및 final v2 evidence
-
-재개 후 첫 명령:
+최종 재검증 명령:
 
 ```powershell
-.\src\tools\package_windows.ps1 -Configuration Release -Zip
+python .\src\tools\validate_release.py --windows-package .\out\package\KDBG-1.0.0-win-x64 --live-evidence .\out\evidence\final-91042aab-live-evidence-v2.json
 ```
 
 production Authenticode trust는 별도 증거가 없으므로 주장하지 않는다.
