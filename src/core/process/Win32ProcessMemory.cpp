@@ -7,11 +7,21 @@
 #include <TlHelp32.h>
 
 #include <algorithm>
+#include <bit>
 #include <limits>
+#include <mutex>
 #include <string>
 
 namespace kdbg {
 namespace {
+
+template <typename Function>
+Function LoadFunction(HMODULE module, const char* name) noexcept {
+    if (module == nullptr) return nullptr;
+    const FARPROC procedure = GetProcAddress(module, name);
+    static_assert(sizeof(Function) == sizeof(procedure));
+    return procedure == nullptr ? nullptr : std::bit_cast<Function>(procedure);
+}
 
 std::string WideToUtf8(std::wstring_view value) {
     if (value.empty()) return {};
@@ -89,6 +99,7 @@ Result<void> ValidateDriverIdentity(
 }  // namespace
 
 struct Win32ProcessMemory::Impl {
+    mutable std::mutex access_mutex;
     HANDLE process{nullptr};
     std::uint32_t pid{0};
     std::size_t pointer_size{8};
@@ -103,6 +114,7 @@ struct Win32ProcessMemory::Impl {
 Win32ProcessMemory::Win32ProcessMemory() : impl_(std::make_unique<Impl>()) {}
 
 Win32ProcessMemory::~Win32ProcessMemory() {
+    const std::scoped_lock lock(impl_->access_mutex);
     if (impl_->backend != nullptr && impl_->writes_armed) {
         static_cast<void>(impl_->backend->SetWriteEnabled(false));
     }
@@ -125,6 +137,7 @@ Result<std::unique_ptr<Win32ProcessMemory>> Win32ProcessMemory::Attach(
 Result<void> Win32ProcessMemory::Open(
     std::uint32_t pid,
     KDbgBackend* backend) {
+    const std::scoped_lock lock(impl_->access_mutex);
     if (pid == 0) {
         return Result<void>::Failure(MakeError(
             ErrorCode::InvalidArgument,
@@ -162,10 +175,8 @@ Result<void> Win32ProcessMemory::Open(
         }
         using IsWow64Process2Fn = BOOL(WINAPI*)(HANDLE, USHORT*, USHORT*);
         const HMODULE kernel32 = GetModuleHandleW(L"kernel32.dll");
-        const auto function = kernel32 != nullptr
-            ? reinterpret_cast<IsWow64Process2Fn>(
-                  GetProcAddress(kernel32, "IsWow64Process2"))
-            : nullptr;
+        const auto function = LoadFunction<IsWow64Process2Fn>(
+            kernel32, "IsWow64Process2");
         if (function != nullptr) {
             USHORT process_machine = IMAGE_FILE_MACHINE_UNKNOWN;
             USHORT native_machine = IMAGE_FILE_MACHINE_UNKNOWN;
@@ -193,12 +204,20 @@ Result<void> Win32ProcessMemory::Open(
     return Result<void>::Success();
 }
 
-std::uint32_t Win32ProcessMemory::ProcessId() const noexcept { return impl_->pid; }
+std::uint32_t Win32ProcessMemory::ProcessId() const noexcept {
+    const std::scoped_lock lock(impl_->access_mutex);
+    return impl_->pid;
+}
 std::uint64_t Win32ProcessMemory::ProcessIdentityToken() const noexcept {
+    const std::scoped_lock lock(impl_->access_mutex);
     return impl_->creation_time;
 }
-std::size_t Win32ProcessMemory::PointerSize() const noexcept { return impl_->pointer_size; }
+std::size_t Win32ProcessMemory::PointerSize() const noexcept {
+    const std::scoped_lock lock(impl_->access_mutex);
+    return impl_->pointer_size;
+}
 bool Win32ProcessMemory::IsOpen() const noexcept {
+    const std::scoped_lock lock(impl_->access_mutex);
     if (impl_->pid == 0) return false;
     if (impl_->process != nullptr) {
         DWORD code = 0;
@@ -210,9 +229,12 @@ bool Win32ProcessMemory::IsOpen() const noexcept {
     }
     return impl_->backend != nullptr && impl_->backend->Info().connected;
 }
-bool Win32ProcessMemory::WritesArmed() const noexcept { return impl_->writes_armed; }
+bool Win32ProcessMemory::WritesArmed() const noexcept {
+    const std::scoped_lock lock(impl_->access_mutex);
+    return impl_->writes_armed;
+}
 
-Result<void> Win32ProcessMemory::ReopenForWrite() {
+Result<void> Win32ProcessMemory::ReopenForWriteLocked() {
     HANDLE write_process = OpenProcess(
         PROCESS_QUERY_INFORMATION | PROCESS_VM_READ |
             PROCESS_VM_WRITE | PROCESS_VM_OPERATION,
@@ -243,6 +265,7 @@ Result<void> Win32ProcessMemory::ReopenForWrite() {
 }
 
 Result<void> Win32ProcessMemory::SetWritesArmed(bool armed) {
+    const std::scoped_lock lock(impl_->access_mutex);
     if (!armed) {
         if (impl_->backend != nullptr && impl_->backend->Info().connected) {
             const auto disabled = impl_->backend->SetWriteEnabled(false);
@@ -253,7 +276,7 @@ Result<void> Win32ProcessMemory::SetWritesArmed(bool armed) {
     }
 
     if (impl_->process != nullptr && !impl_->direct_write_access) {
-        const auto direct = ReopenForWrite();
+        const auto direct = ReopenForWriteLocked();
         if (!direct && (impl_->backend == nullptr || !impl_->backend->Info().connected)) {
             return direct;
         }
@@ -269,6 +292,7 @@ Result<void> Win32ProcessMemory::SetWritesArmed(bool armed) {
 Result<std::vector<std::uint8_t>> Win32ProcessMemory::Read(
     std::uint64_t address,
     std::uint32_t length) {
+    const std::scoped_lock lock(impl_->access_mutex);
     if (address == 0 || length == 0) {
         return Result<std::vector<std::uint8_t>>::Failure(MakeError(
             ErrorCode::InvalidArgument,
@@ -312,18 +336,52 @@ Result<std::vector<std::uint8_t>> Win32ProcessMemory::Read(
 Result<std::uint32_t> Win32ProcessMemory::Write(
     std::uint64_t address,
     std::span<const std::uint8_t> data) {
+    const std::scoped_lock lock(impl_->access_mutex);
     if (!impl_->writes_armed) {
         return Result<std::uint32_t>::Failure(MakeError(
             ErrorCode::WriteLocked,
             "Process writes are locked",
             "Win32ProcessMemory::Write"));
     }
+    // Consume the user-mode arm before validating or touching the target. The
+    // direct Win32 path and the driver fallback must expose identical one-shot
+    // behavior, and a malformed request must not leave either gate armed.
+    impl_->writes_armed = false;
+    const auto close_backend_gate = [&]() -> Result<void> {
+        if (impl_->backend == nullptr || !impl_->backend->Info().connected) {
+            return Result<void>::Success();
+        }
+        const auto closed = impl_->backend->SetWriteEnabled(false);
+        if (closed) return closed;
+        const auto retry = impl_->backend->SetWriteEnabled(false);
+        auto error = closed.GetError();
+        if (retry) {
+            error.message +=
+                "; a cleanup retry locked the backend gate, but the write "
+                "transaction is failed";
+        } else {
+            error.message += "; cleanup retry also failed: " +
+                retry.GetError().message;
+        }
+        return Result<void>::Failure(std::move(error));
+    };
+    const auto finish = [&](Result<std::uint32_t> outcome)
+        -> Result<std::uint32_t> {
+        const auto closed = close_backend_gate();
+        if (closed) return outcome;
+        auto error = closed.GetError();
+        if (!outcome) {
+            error.message += "; write path also failed: " +
+                outcome.GetError().message;
+        }
+        return Result<std::uint32_t>::Failure(std::move(error));
+    };
     if (address == 0 || data.empty() ||
         data.size() > std::numeric_limits<std::uint32_t>::max()) {
-        return Result<std::uint32_t>::Failure(MakeError(
+        return finish(Result<std::uint32_t>::Failure(MakeError(
             ErrorCode::InvalidArgument,
             "Invalid process write request",
-            "Win32ProcessMemory::Write"));
+            "Win32ProcessMemory::Write")));
     }
     if (impl_->process != nullptr && impl_->direct_write_access) {
         SIZE_T completed = 0;
@@ -337,7 +395,8 @@ Result<std::uint32_t> Win32ProcessMemory::Write(
                 impl_->process,
                 reinterpret_cast<LPCVOID>(static_cast<std::uintptr_t>(address)),
                 data.size());
-            return Result<std::uint32_t>::Success(static_cast<std::uint32_t>(completed));
+            return finish(Result<std::uint32_t>::Success(
+                static_cast<std::uint32_t>(completed)));
         }
     }
     if (impl_->backend != nullptr && impl_->backend->Info().connected) {
@@ -348,20 +407,22 @@ Result<std::uint32_t> Win32ProcessMemory::Write(
             impl_->driver_dtb,
             "Win32ProcessMemory::Write");
         if (!identity) {
-            return Result<std::uint32_t>::Failure(identity.GetError());
+            return finish(Result<std::uint32_t>::Failure(identity.GetError()));
         }
-        return impl_->backend->WriteProcessVirtual(impl_->pid, address, data);
+        return finish(
+            impl_->backend->WriteProcessVirtual(impl_->pid, address, data));
     }
-    return Result<std::uint32_t>::Failure(MakeError(
+    return finish(Result<std::uint32_t>::Failure(MakeError(
         GetLastError() == ERROR_ACCESS_DENIED ? ErrorCode::AccessDenied : ErrorCode::ShortWrite,
         "Process memory write failed",
         "Win32ProcessMemory::Write",
         GetLastError(),
         data.size(),
-        0));
+        0)));
 }
 
 Result<std::vector<MemoryRegion>> Win32ProcessMemory::Regions() {
+    const std::scoped_lock lock(impl_->access_mutex);
     if (impl_->process == nullptr) {
         return Result<std::vector<MemoryRegion>>::Failure(MakeError(
             ErrorCode::Unsupported,
@@ -414,6 +475,7 @@ Result<std::vector<MemoryRegion>> Win32ProcessMemory::Regions() {
 }
 
 Result<std::vector<ProcessModule>> Win32ProcessMemory::Modules() {
+    const std::scoped_lock lock(impl_->access_mutex);
     HANDLE snapshot = CreateToolhelp32Snapshot(
         TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32,
         impl_->pid);
@@ -466,7 +528,7 @@ Result<std::uint32_t> Win32ProcessMemory::Write(std::uint64_t, std::span<const s
 Result<std::vector<MemoryRegion>> Win32ProcessMemory::Regions() { return Result<std::vector<MemoryRegion>>::Failure(MakeError(ErrorCode::Unsupported, "Windows-only", "Win32ProcessMemory::Regions")); }
 Result<std::vector<ProcessModule>> Win32ProcessMemory::Modules() { return Result<std::vector<ProcessModule>>::Failure(MakeError(ErrorCode::Unsupported, "Windows-only", "Win32ProcessMemory::Modules")); }
 Result<void> Win32ProcessMemory::Open(std::uint32_t, KDbgBackend*) { return Result<void>::Failure(MakeError(ErrorCode::Unsupported, "Windows-only", "Win32ProcessMemory::Open")); }
-Result<void> Win32ProcessMemory::ReopenForWrite() { return Result<void>::Failure(MakeError(ErrorCode::Unsupported, "Windows-only", "Win32ProcessMemory::ReopenForWrite")); }
+Result<void> Win32ProcessMemory::ReopenForWriteLocked() { return Result<void>::Failure(MakeError(ErrorCode::Unsupported, "Windows-only", "Win32ProcessMemory::ReopenForWriteLocked")); }
 }  // namespace kdbg
 
 #endif

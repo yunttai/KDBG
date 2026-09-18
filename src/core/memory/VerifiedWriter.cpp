@@ -5,7 +5,44 @@
 
 namespace kdbg {
 
+VerifiedWriteArmToken::VerifiedWriteArmToken(
+    VerifiedWriteArmToken&& other) noexcept
+    : pid_(other.pid_), valid_(other.valid_) {
+    other.pid_ = 0;
+    other.valid_ = false;
+}
+
+VerifiedWriteArmToken& VerifiedWriteArmToken::operator=(
+    VerifiedWriteArmToken&& other) noexcept {
+    if (this == &other) return *this;
+    pid_ = other.pid_;
+    valid_ = other.valid_;
+    other.pid_ = 0;
+    other.valid_ = false;
+    return *this;
+}
+
+bool VerifiedWriteArmToken::Consume(std::uint32_t pid) noexcept {
+    const bool matches = valid_ && pid != 0 && pid_ == pid;
+    pid_ = 0;
+    valid_ = false;
+    return matches;
+}
+
+Result<VerifiedWriteArmToken> VerifiedWriter::ArmProcessWrite(
+    std::uint32_t confirmed_pid) const {
+    if (confirmed_pid == 0) {
+        return Result<VerifiedWriteArmToken>::Failure(MakeError(
+            ErrorCode::InvalidArgument,
+            "Process-write confirmation requires a non-zero PID",
+            "VerifiedWriter::ArmProcessWrite"));
+    }
+    return Result<VerifiedWriteArmToken>::Success(
+        VerifiedWriteArmToken(confirmed_pid));
+}
+
 Result<VerifiedWriteResult> VerifiedWriter::Write(
+    VerifiedWriteArmToken arm_token,
     const MemorySpace& space,
     std::uint64_t address,
     std::span<const std::uint8_t> data,
@@ -21,6 +58,12 @@ Result<VerifiedWriteResult> VerifiedWriter::Write(
         return Result<VerifiedWriteResult>::Failure(MakeError(
             ErrorCode::InvalidArgument,
             "Process-virtual writes require a non-zero PID",
+            "VerifiedWriter::Write"));
+    }
+    if (!arm_token.Consume(space.pid)) {
+        return Result<VerifiedWriteResult>::Failure(MakeError(
+            ErrorCode::WriteLocked,
+            "Verified process write requires a fresh matching PID arm token",
             "VerifiedWriter::Write"));
     }
     if (data.empty() || data.size() > kMaxWriteLength ||

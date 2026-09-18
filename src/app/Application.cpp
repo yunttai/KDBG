@@ -1,6 +1,7 @@
 #include "app/Application.h"
 
 #include "app/LocalDiagnostics.h"
+#include "app/PerformanceTelemetry.h"
 #include "app/ui/MainWindow.h"
 
 #ifdef _WIN32
@@ -32,6 +33,8 @@ IDXGISwapChain* g_swap_chain = nullptr;
 ID3D11RenderTargetView* g_render_target = nullptr;
 float g_current_dpi_scale = 1.0F;
 float g_pending_dpi_scale = 0.0F;
+ImGuiStyle g_unscaled_style{};
+bool g_unscaled_style_ready = false;
 
 std::string WideToUtf8(std::wstring_view value) {
     if (value.empty()) return {};
@@ -79,7 +82,12 @@ void ApplyDpiScale(float scale, bool recreate_device_objects) {
     ImFontConfig font_config{};
     font_config.SizePixels = 13.0F * scale;
     io.Fonts->AddFontDefault(&font_config);
-    ImGui::StyleColorsDark();
+    if (!g_unscaled_style_ready) {
+        ImGui::StyleColorsDark();
+        g_unscaled_style = ImGui::GetStyle();
+        g_unscaled_style_ready = true;
+    }
+    ImGui::GetStyle() = g_unscaled_style;
     ImGui::GetStyle().ScaleAllSizes(scale);
     g_current_dpi_scale = scale;
     if (recreate_device_objects) {
@@ -297,7 +305,12 @@ int Application::Run(HINSTANCE instance, int show_command) {
     ImGui_ImplDX11_Init(g_device, g_context);
 
     auto main_window = std::make_unique<MainWindow>();
-    LogDiagnostic(DiagnosticEvent::ApplicationStarted);
+    auto& telemetry = RuntimePerformanceTelemetry();
+    static_cast<void>(telemetry.StartFromEnvironment());
+    LogDiagnostic(
+        DiagnosticEvent::ApplicationStarted,
+        static_cast<std::uint64_t>(telemetry.LastStartStatus()),
+        telemetry.LastStartNativeCode());
     bool done = false;
     while (!done) {
         MSG message{};
@@ -321,6 +334,7 @@ int Application::Run(HINSTANCE instance, int show_command) {
         ImGui_ImplDX11_NewFrame();
         ImGui_ImplWin32_NewFrame();
         ImGui::NewFrame();
+        telemetry.RecordFrame();
 
         main_window->Draw();
 
@@ -345,6 +359,8 @@ int Application::Run(HINSTANCE instance, int show_command) {
     }
 
     LogDiagnostic(DiagnosticEvent::ApplicationStopping);
+    main_window.reset();
+    telemetry.Stop();
     ImGui_ImplDX11_Shutdown();
     ImGui_ImplWin32_Shutdown();
     ImGui::DestroyContext();

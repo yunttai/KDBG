@@ -181,6 +181,7 @@ Result<std::uint32_t> MockMemoryBackend::WritePhysical(
             "MockMemoryBackend::WritePhysical"));
     }
     if (data.empty() || !Contains(physical_address, data.size())) {
+        write_enabled_ = false;
         return Result<std::uint32_t>::Failure(MakeError(
             ErrorCode::OutsidePhysicalRam,
             "Mock write is outside the physical RAM range",
@@ -189,6 +190,10 @@ Result<std::uint32_t> MockMemoryBackend::WritePhysical(
             data.size(),
             0));
     }
+
+    // Match KDBG ABI 6 WRITE_GATE_ONE_SHOT semantics: every structurally
+    // valid write attempt consumes the token before memory can be changed.
+    write_enabled_ = false;
 
     std::size_t completed = data.size();
     if (faults_.short_write && completed > 0U) {
@@ -260,6 +265,8 @@ Result<std::uint32_t> MockMemoryBackend::WriteProcessVirtual(
     std::span<const std::uint8_t> data) {
     if (pid != kMockPid || virtual_address < kVirtualBase ||
         virtual_address - kVirtualBase >= kMemorySize) {
+        const std::scoped_lock lock(mutex_);
+        write_enabled_ = false;
         return Result<std::uint32_t>::Failure(MakeError(
             ErrorCode::OutsidePhysicalRam,
             "Mock process write is outside the fixture address space",

@@ -31,11 +31,26 @@ struct PointerPath {
     std::uint64_t resolved_address{0};
 };
 
+struct PointerScanReport {
+    std::uint64_t reads_attempted{0};
+    std::uint64_t reads_completed{0};
+    std::uint64_t reads_skipped{0};
+    std::uint64_t requested_bytes{0};
+    std::uint64_t completed_bytes{0};
+    std::uint64_t failed_reads{0};
+    std::uint64_t short_reads{0};
+    bool partial{false};
+    bool truncated{false};
+    bool cancelled{false};
+    Error first_error{};
+};
+
 class PointerScanner {
 public:
     static constexpr std::uint32_t kMaxDepth = 8;
     static constexpr std::uint64_t kMaxOffset = 16ULL * 1024ULL * 1024ULL;
     static constexpr std::size_t kMaxResults = 1'000'000;
+    static constexpr std::size_t kMaxFrontierNodes = 1'000'000;
     static constexpr std::size_t kMaxChunkSize = 16ULL * 1024ULL * 1024ULL;
 
     explicit PointerScanner(IProcessMemory& memory);
@@ -45,6 +60,10 @@ public:
         const PointerScanOptions& options,
         ScanProgressCallback progress = {},
         std::stop_token stop_token = {});
+
+    [[nodiscard]] const PointerScanReport& LastReport() const noexcept {
+        return last_report_;
+    }
 
 private:
     struct FrontierNode {
@@ -61,6 +80,7 @@ private:
         bool& truncated);
 
     IProcessMemory& memory_;
+    PointerScanReport last_report_{};
 };
 
 }  // namespace kdbg

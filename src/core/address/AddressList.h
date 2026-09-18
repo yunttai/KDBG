@@ -37,6 +37,13 @@ struct FreezeSummary {
     std::size_t failed{0};
 };
 
+// Deterministic persistence fault injection used by the core regression suite.
+// Production callers should keep the default value.
+enum class AddressListSaveFault {
+    None,
+    AfterFlushBeforeReplace,
+};
+
 class AddressList {
 public:
     static constexpr std::size_t kMaxEntries = 100'000;
@@ -58,16 +65,21 @@ public:
     }
 
     Result<AddressRefreshSummary> Refresh();
+    [[nodiscard]] Result<VerifiedWriteArmToken> ArmProcessWrites(
+        std::uint32_t confirmed_pid) const;
     Result<VerifiedWriteResult> Write(
+        VerifiedWriteArmToken arm_token,
         std::uint64_t id,
         std::span<const std::uint8_t> value);
     Result<void> SetFrozen(
         std::uint64_t id,
         bool frozen,
         std::optional<std::vector<std::uint8_t>> value = std::nullopt);
-    Result<FreezeSummary> TickFreeze();
+    Result<FreezeSummary> TickFreeze(VerifiedWriteArmToken arm_token);
 
-    Result<void> Save(const std::filesystem::path& path) const;
+    Result<void> Save(
+        const std::filesystem::path& path,
+        AddressListSaveFault fault = AddressListSaveFault::None) const;
     Result<void> Load(const std::filesystem::path& path);
 
 private:

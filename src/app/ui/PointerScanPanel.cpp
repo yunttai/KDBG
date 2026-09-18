@@ -50,22 +50,40 @@ void PointerScanPanel::Attach(IProcessMemory* memory) {
 }
 
 void PointerScanPanel::Reset() {
-    Cancel();
-    if (worker_.joinable()) worker_.join();
+    generation_.fetch_add(1, std::memory_order_acq_rel);
+    CancelAndWait();
     scanner_.reset();
     memory_ = nullptr;
     std::scoped_lock lock(mutex_);
-    results_.clear();
-    error_.reset();
+    published_.reset();
     progress_ = {};
 }
 
-void PointerScanPanel::Cancel() {
+void PointerScanPanel::RequestCancel() noexcept {
     if (worker_.joinable()) worker_.request_stop();
 }
 
+void PointerScanPanel::CancelAndWait() noexcept {
+    RequestCancel();
+    if (worker_.joinable()) worker_.join();
+    running_.store(false, std::memory_order_release);
+}
+
+bool PointerScanPanel::Busy() const noexcept {
+    return running_.load(std::memory_order_acquire);
+}
+
+std::shared_ptr<const PointerScanPanel::PublishedResult>
+PointerScanPanel::PublishedSnapshot() const {
+    std::scoped_lock lock(mutex_);
+    return published_;
+}
+
 void PointerScanPanel::Start() {
-    if (scanner_ == nullptr || running_.load()) return;
+    if (scanner_ == nullptr || memory_ == nullptr ||
+        running_.load(std::memory_order_acquire)) {
+        return;
+    }
     if (worker_.joinable()) worker_.join();
     std::uint64_t target = 0;
     std::uint64_t max_offset = 0;
@@ -81,30 +99,50 @@ void PointerScanPanel::Start() {
     options.aligned_only = aligned_only_;
     options.writable_only = writable_only_;
     options.static_roots_only = static_only_;
+    const auto generation =
+        generation_.fetch_add(1, std::memory_order_acq_rel) + 1U;
+    const auto pid = memory_->ProcessId();
     {
         std::scoped_lock lock(mutex_);
-        results_.clear();
-        error_.reset();
+        published_.reset();
         progress_ = {};
     }
-    running_.store(true);
+    running_.store(true, std::memory_order_release);
     status_ = "Pointer scan started.";
     worker_ = std::jthread(
-        [this, target, options](std::stop_token token) {
+        [this, generation, pid, target, options](std::stop_token token) {
             const auto result = scanner_->Scan(
                 target,
                 options,
-                [this](const ScanProgress& value) {
+                [this, generation](const ScanProgress& value) {
+                    if (generation_.load(std::memory_order_acquire) !=
+                        generation) {
+                        return;
+                    }
                     std::scoped_lock lock(mutex_);
                     progress_ = value;
                 },
                 token);
+            auto published = std::make_shared<PublishedResult>();
+            published->generation = generation;
+            published->pid = pid;
+            published->target = target;
+            published->options = options;
+            if (result) {
+                published->paths = result.Value();
+            } else {
+                published->error = result.GetError();
+            }
             {
                 std::scoped_lock lock(mutex_);
-                if (result) results_ = result.Value();
-                else error_ = result.GetError();
+                if (generation_.load(std::memory_order_acquire) ==
+                    generation) {
+                    published_ = std::move(published);
+                }
             }
-            running_.store(false);
+            if (generation_.load(std::memory_order_acquire) == generation) {
+                running_.store(false, std::memory_order_release);
+            }
         });
 }
 
@@ -136,7 +174,7 @@ void PointerScanPanel::Draw() {
     if (!running_.load()) {
         if (ImGui::Button("Start Pointer Scan")) Start();
     } else {
-        if (ImGui::Button("Cancel Pointer Scan")) Cancel();
+        if (ImGui::Button("Cancel Pointer Scan")) RequestCancel();
         ScanProgress current{};
         {
             std::scoped_lock lock(mutex_);
@@ -153,18 +191,33 @@ void PointerScanPanel::Draw() {
             static_cast<unsigned long long>(current.candidates));
     }
 
-    std::optional<Error> error;
-    if (!running_.load()) {
-        std::scoped_lock lock(mutex_);
-        error = error_;
+    const auto published = PublishedSnapshot();
+    if (!running_.load(std::memory_order_acquire) && published != nullptr &&
+        published->error.has_value()) {
+        status_ = published->error->message;
     }
-    if (error.has_value()) status_ = error->message;
-    if (!running_.load() && !results_.empty()) {
-        status_ = "Pointer scan complete: " + std::to_string(results_.size()) + " path(s).";
+    if (!running_.load(std::memory_order_acquire) && published != nullptr &&
+        !published->error.has_value()) {
+        status_ = "Pointer scan complete: " +
+            std::to_string(published->paths.size()) + " path(s).";
     }
     if (!status_.empty()) ImGui::TextWrapped("%s", status_.c_str());
 
-    if (results_.empty()) return;
+    if (published == nullptr || published->paths.empty()) return;
+    ImGui::Text(
+        "Published result: generation %llu | PID %u | target 0x%016llX | depth <= %u | paths %llu",
+        static_cast<unsigned long long>(published->generation),
+        published->pid,
+        static_cast<unsigned long long>(published->target),
+        published->options.max_depth,
+        static_cast<unsigned long long>(published->paths.size()));
+    std::uint64_t current_target = 0;
+    if (!ParseAddress(target_.data(), current_target) ||
+        current_target != published->target) {
+        ImGui::TextColored(
+            ImVec4(1.0F, 0.75F, 0.25F, 1.0F),
+            "The input target changed; the table remains bound to the published target above.");
+    }
     if (ImGui::BeginTable(
             "pointer-results", 4,
             ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
@@ -176,10 +229,12 @@ void PointerScanPanel::Draw() {
         ImGui::TableSetupColumn("Target");
         ImGui::TableHeadersRow();
         ImGuiListClipper clipper;
-        clipper.Begin(static_cast<int>(std::min<std::size_t>(results_.size(), 2'000'000)));
+        clipper.Begin(static_cast<int>(std::min<std::size_t>(
+            published->paths.size(), 2'000'000)));
         while (clipper.Step()) {
             for (int i = clipper.DisplayStart; i < clipper.DisplayEnd; ++i) {
-                const auto& path = results_[static_cast<std::size_t>(i)];
+                const auto& path =
+                    published->paths[static_cast<std::size_t>(i)];
                 const auto formatted = FormatPath(path);
                 ImGui::TableNextRow();
                 ImGui::TableNextColumn();

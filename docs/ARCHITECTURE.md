@@ -53,6 +53,7 @@ src/
 │   ├── snapshot/           # capture, CRC32, persistence, diff
 │   └── windows/            # SCM service adapter
 ├── driver/                 # 두 WDM 프로젝트
+├── fixtures/process_fixture/ # deterministic packaged user-mode target
 ├── plugins/memprocfs_bridge/
 ├── shared/                 # user/kernel ABI 단일 원본
 ├── tests/
@@ -263,6 +264,12 @@ GUI는 level-aware decoder로 Present, RW, US, Accessed, Dirty/PS, Global, NX, P
 
 임의 커널 코드·페이지 테이블·파일 캐시 페이지 대신 Probe PFN을 사용해 end-to-end write 검증을 수행한다.
 
+별도 `kdbg_process_fixture.exe`는 page-aligned/`VirtualLock`된 4096-byte
+user page, run nonce, process-start identity, generation/CRC와 local named-pipe
+control을 제공한다. Process write/Freeze, ownership, page-table과
+process-vs-physical read 증거는 이 전용 user mapping을 사용하며 Probe PFN/VA와
+같을 수 없다. 자세한 protocol은 `PROCESS_FIXTURE.md`에 있다.
+
 ## 12. 오류 모델
 
 `Result<T>`는 다음 정보를 유지한다.
@@ -284,7 +291,50 @@ GUI는 level-aware decoder로 Present, RW, US, Accessed, Dirty/PS, Global, NX, P
 - verification mismatch/rollback failure
 - cancelled/limit reached/bridge unavailable
 
-## 13. 검증 Gate
+## 13. 위협·실패 모델
+
+KDBG가 방어하는 대상은 외부 공격자만이 아니라, 오래된 화면 상태, 잘못된
+대상 선택, 동시 변경, 짧은 I/O, package 바꿔치기처럼 커널 도구에서 실제로
+잘못된 결론을 만드는 운영 실패까지 포함한다.
+
+```text
+  operator input          package / symbols          target state
+  PFN · PID · VA          EXE · SYS · CAT · PDB      RAM · process · page tables
+       │                        │                          │
+       │ wrong/stale target     │ substitution/mismatch   │ concurrent mutation
+       ▼                        ▼                          ▼
+┌──────────────┐  intent  ┌────────────────────┐  bounded IOCTL  ┌───────────────┐
+│ Dear ImGui UI├─────────►│ portable core +    ├───────────────►│ KDbgDriver /  │
+│ local staging│          │ Windows adapters   │                 │ KDbgProbe     │
+└──────┬───────┘          └─────────┬──────────┘                 └───────┬───────┘
+       │                            │ exact requested/completed          │
+       │ typed target identity      │ bytes + controller identity        │
+       ▼                            ▼                                    ▼
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ preflight baseline comparison → one-shot write → full read-back → reload   │
+│ → rollback verification → package/evidence hashes                          │
+└──────────────────────────────────────────────────────────────────────────────┘
+       │
+       └── conflict, short I/O, identity change, verification mismatch,
+           or lost controller ownership stops promotion of the result
+```
+
+| 위협 또는 실패 | 신뢰하면 안 되는 상태 | 제품의 판정 근거 |
+|---|---|---|
+| 잘못된 PFN/PID/VA | UI 입력값만 맞아 보임 | RAM range, process start identity, DTB와 PA/PFN round trip |
+| 읽은 뒤 대상이 변경됨 | 오래된 baseline | Apply 직전 전체 preflight와 conflict offsets |
+| 부분 read/write | API 성공 코드 | requested/completed byte 수와 full-page 비교 |
+| 다른 controller가 개입 | 장치 open 성공 | 단일 controller identity와 handle별 write state |
+| package 또는 symbol 혼합 | 파일 이름/버전 문자열 | ZIP/source snapshot, Authenticode/CAT, RSDS/PDB identity |
+| write 성공처럼 보이나 값이 다름 | write 반환값 | 전체 read-back, independent reload, CRC/byte diff |
+| rollback 실패 | 원래 값으로 보이는 일부 화면 | 원본 4 KiB snapshot 전체 write/read-back/CRC |
+| 캡처가 다른 실행에서 옴 | 영상의 시각적 유사성 | package/report/media SHA-256과 ordered scene review |
+
+신뢰 경계 밖에는 임의의 third-party target, 바뀐 guest snapshot, production
+publisher identity가 확인되지 않은 package, 그리고 사람이 아직 검토하지 않은
+화면 캡처가 있다. 이런 입력은 자동 증거와 분리된 상태로 보고한다.
+
+## 14. 검증 Gate
 
 ### Source-complete
 

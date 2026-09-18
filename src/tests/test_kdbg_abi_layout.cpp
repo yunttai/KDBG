@@ -10,6 +10,9 @@ void RunKDbgAbiLayoutTests(kdbg::test::TestRunner& runner) {
     KDBG_CHECK(runner, KDBG_PROBE_ABI_VERSION == 1U);
     KDBG_CHECK(runner, KDBG_MAX_TRANSFER_SIZE == 1024U * 1024U);
     KDBG_CHECK(runner, KDBG_MAX_PHYSICAL_RANGES == 4096U);
+    KDBG_CHECK(
+        runner,
+        KDBG_VERSION_FLAG_WRITE_GATE_ONE_SHOT == 0x00000080U);
     KDBG_CHECK(runner, KDBG_PROBE_PAGE_SIZE == KDBG_PAGE_SIZE);
     KDBG_CHECK(
         runner,

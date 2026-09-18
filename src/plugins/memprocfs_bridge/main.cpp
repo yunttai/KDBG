@@ -9,6 +9,7 @@
 #endif
 
 #include <array>
+#include <bit>
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
@@ -136,25 +137,56 @@ std::wstring ExecutableDirectory() {
         std::wstring(buffer.data(), length)).parent_path().wstring();
 }
 
-std::wstring Utf8ToWide(std::string_view value) {
+std::string WideToUtf8(std::wstring_view value) {
     if (value.empty()) return {};
-    const int size = MultiByteToWideChar(
+    const int size = WideCharToMultiByte(
         CP_UTF8,
-        MB_ERR_INVALID_CHARS,
+        WC_ERR_INVALID_CHARS,
         value.data(),
         static_cast<int>(value.size()),
         nullptr,
-        0);
+        0,
+        nullptr,
+        nullptr);
     if (size <= 0) return {};
-    std::wstring output(static_cast<std::size_t>(size), L'\0');
-    MultiByteToWideChar(
+    std::string output(static_cast<std::size_t>(size), '\0');
+    const int converted = WideCharToMultiByte(
         CP_UTF8,
-        MB_ERR_INVALID_CHARS,
+        WC_ERR_INVALID_CHARS,
         value.data(),
         static_cast<int>(value.size()),
         output.data(),
-        size);
-    return output;
+        size,
+        nullptr,
+        nullptr);
+    return converted == size ? output : std::string{};
+}
+
+std::optional<std::vector<std::wstring>> ParseWindowsCommandLine() {
+    using CommandLineToArgvWFn = wchar_t**(WINAPI*)(const wchar_t*, int*);
+    const HMODULE shell = LoadLibraryExW(
+        L"shell32.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
+    if (shell == nullptr) return std::nullopt;
+    const FARPROC address = GetProcAddress(shell, "CommandLineToArgvW");
+    if (address == nullptr) {
+        FreeLibrary(shell);
+        return std::nullopt;
+    }
+    static_assert(sizeof(CommandLineToArgvWFn) == sizeof(FARPROC));
+    const auto parse = std::bit_cast<CommandLineToArgvWFn>(address);
+    int count = 0;
+    wchar_t** raw = parse(GetCommandLineW(), &count);
+    std::vector<std::wstring> arguments;
+    if (raw != nullptr && count > 0) {
+        arguments.reserve(static_cast<std::size_t>(count));
+        for (int index = 0; index < count; ++index) {
+            arguments.emplace_back(raw[index]);
+        }
+    }
+    if (raw != nullptr) LocalFree(raw);
+    FreeLibrary(shell);
+    if (arguments.empty()) return std::nullopt;
+    return arguments;
 }
 
 std::string BaseName(std::string path) {
@@ -190,152 +222,245 @@ const char* ExtendedTypeName(std::uint32_t type) {
     return "unknown";
 }
 
-bool LoadApi(const std::wstring& explicit_path, Api* api, std::string* error) {
+bool LoadApi(
+    const std::filesystem::path& explicit_path,
+    Api* api,
+    std::string* error) {
     if (api == nullptr || error == nullptr) return false;
-    std::wstring path = explicit_path;
+    std::filesystem::path path = explicit_path;
     if (path.empty()) {
         const auto directory = ExecutableDirectory();
-        if (!directory.empty()) {
-            path = (std::filesystem::path(directory) / L"vmm.dll").wstring();
+        if (directory.empty()) {
+            *error = "Unable to resolve the bridge directory for vmm.dll";
+            return false;
         }
+        path = std::filesystem::path(directory) / L"vmm.dll";
     }
-    api->module = LoadLibraryW(path.empty() ? L"vmm.dll" : path.c_str());
+
+    std::error_code path_error;
+    path = std::filesystem::absolute(path, path_error);
+    if (path_error) {
+        *error = "Unable to resolve the configured vmm.dll path (error " +
+            std::to_string(path_error.value()) + ")";
+        return false;
+    }
+    const auto status = std::filesystem::status(path, path_error);
+    if (path_error || !std::filesystem::is_regular_file(status)) {
+        *error = "Configured vmm.dll is unavailable or is not a regular file";
+        return false;
+    }
+
+    // Resolve the explicitly selected DLL itself and its side-by-side
+    // dependencies from that DLL's directory, with only System32 as the
+    // additional fallback. Do not search the current directory or PATH.
+    api->module = LoadLibraryExW(
+        path.c_str(),
+        nullptr,
+        LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32);
     if (api->module == nullptr) {
-        *error = "Unable to load vmm.dll (Win32 error " +
+        *error = "Unable to safely load configured vmm.dll or a side-by-side/System32 dependency "
+            "(Win32 error " +
             std::to_string(GetLastError()) + ")";
         return false;
     }
-    api->initialize = reinterpret_cast<InitializeFn>(
-        GetProcAddress(api->module, "VMMDLL_Initialize"));
-    api->close = reinterpret_cast<CloseFn>(
-        GetProcAddress(api->module, "VMMDLL_Close"));
-    api->mem_free = reinterpret_cast<MemFreeFn>(
-        GetProcAddress(api->module, "VMMDLL_MemFree"));
-    api->get_pfn_ex = reinterpret_cast<GetPfnExFn>(
-        GetProcAddress(api->module, "VMMDLL_Map_GetPfnEx"));
-    api->process_string = reinterpret_cast<ProcessStringFn>(
-        GetProcAddress(api->module, "VMMDLL_ProcessGetInformationString"));
-    if (api->initialize == nullptr || api->close == nullptr ||
-        api->mem_free == nullptr || api->get_pfn_ex == nullptr ||
-        api->process_string == nullptr) {
-        *error = "vmm.dll is missing one or more required API exports";
-        return false;
+
+    auto load_export = [api, error]<typename Function>(
+                           const char* name,
+                           Function* target) {
+        static_assert(sizeof(Function) == sizeof(FARPROC));
+        const FARPROC address = GetProcAddress(api->module, name);
+        if (address == nullptr) {
+            *error = std::string("vmm.dll is missing required API export: ") +
+                name;
+            return false;
+        }
+        *target = std::bit_cast<Function>(address);
+        return true;
+    };
+    return load_export("VMMDLL_Initialize", &api->initialize) &&
+           load_export("VMMDLL_Close", &api->close) &&
+           load_export("VMMDLL_MemFree", &api->mem_free) &&
+           load_export("VMMDLL_Map_GetPfnEx", &api->get_pfn_ex) &&
+           load_export(
+               "VMMDLL_ProcessGetInformationString",
+               &api->process_string);
+}
+#endif
+
+#ifdef _WIN32
+struct Options {
+    std::optional<std::uint32_t> pfn;
+    std::wstring device;
+    std::filesystem::path vmm_path;
+    std::vector<std::wstring> vmm_arguments;
+};
+
+bool ParseUnsigned(std::wstring_view text, std::uint64_t* value) {
+    if (value == nullptr || text.empty()) return false;
+    std::uint32_t base = 10;
+    if (text.size() > 2U && text[0] == L'0' &&
+        (text[1] == L'x' || text[1] == L'X')) {
+        text.remove_prefix(2);
+        base = 16;
+    }
+    if (text.empty()) return false;
+
+    std::uint64_t parsed = 0;
+    for (const wchar_t character : text) {
+        std::uint32_t digit = 0;
+        if (character >= L'0' && character <= L'9') {
+            digit = static_cast<std::uint32_t>(character - L'0');
+        } else if (base == 16U && character >= L'a' && character <= L'f') {
+            digit = static_cast<std::uint32_t>(character - L'a') + 10U;
+        } else if (base == 16U && character >= L'A' && character <= L'F') {
+            digit = static_cast<std::uint32_t>(character - L'A') + 10U;
+        } else {
+            return false;
+        }
+        if (digit >= base ||
+            parsed > (std::numeric_limits<std::uint64_t>::max() - digit) /
+                base) {
+            return false;
+        }
+        parsed = parsed * base + digit;
+    }
+    *value = parsed;
+    return true;
+}
+
+[[nodiscard]] bool AsciiEqualInsensitive(
+    std::wstring_view left,
+    std::wstring_view right) noexcept {
+    if (left.size() != right.size()) return false;
+    for (std::size_t index = 0; index < left.size(); ++index) {
+        wchar_t lhs = left[index];
+        wchar_t rhs = right[index];
+        if (lhs >= L'A' && lhs <= L'Z') lhs += L'a' - L'A';
+        if (rhs >= L'A' && rhs <= L'Z') rhs += L'a' - L'A';
+        if (lhs != rhs) return false;
     }
     return true;
 }
-#endif
 
-struct Options {
-    std::optional<std::uint32_t> pfn;
-    std::string device;
-    std::wstring vmm_path;
-    std::vector<std::string> vmm_arguments;
-};
-
-bool ParseUnsigned(std::string_view text, std::uint64_t* value) {
-    if (value == nullptr || text.empty()) return false;
-    try {
-        std::size_t consumed = 0;
-        const auto parsed = std::stoull(std::string(text), &consumed, 0);
-        if (consumed != text.size()) return false;
-        *value = parsed;
-        return true;
-    } catch (...) {
-        return false;
-    }
+[[nodiscard]] bool IsProviderControlledVmmArgument(
+    std::wstring_view argument) noexcept {
+    return AsciiEqualInsensitive(argument, L"-device") ||
+        AsciiEqualInsensitive(argument, L"--device") ||
+        AsciiEqualInsensitive(argument, L"-waitinitialize") ||
+        AsciiEqualInsensitive(argument, L"--waitinitialize") ||
+        AsciiEqualInsensitive(argument, L"-disable-python") ||
+        AsciiEqualInsensitive(argument, L"--disable-python");
 }
 
-std::string ConfiguredDevice() {
-#ifdef _WIN32
-    char* configured = nullptr;
+std::wstring ConfiguredDevice() {
+    wchar_t* configured = nullptr;
     std::size_t length = 0;
-    if (_dupenv_s(&configured, &length, "KDBG_MEMPROCFS_DEVICE") != 0) {
+    if (_wdupenv_s(&configured, &length, L"KDBG_MEMPROCFS_DEVICE") != 0) {
         return {};
     }
-    std::string value = configured == nullptr ? "" : configured;
+    std::wstring value = configured == nullptr ? L"" : configured;
     std::free(configured);
     return value;
-#else
-    const char* configured = std::getenv("KDBG_MEMPROCFS_DEVICE");
-    return configured == nullptr ? "" : configured;
-#endif
 }
 
-std::optional<Options> ParseOptions(int argc, char** argv, std::string* error) {
+std::optional<Options> ParseOptions(
+    const std::vector<std::wstring>& arguments,
+    std::string* error) {
     Options options{};
     options.device = ConfiguredDevice();
-    if (options.device.empty()) options.device = "pmem";
+    if (options.device.empty()) options.device = L"pmem";
+    bool saw_device = false;
+    bool saw_vmm = false;
 
-    for (int index = 1; index < argc; ++index) {
-        const std::string argument = argv[index];
-        if (argument.size() > kMaxCommandArgumentBytes) {
+    for (std::size_t index = 1; index < arguments.size(); ++index) {
+        const std::wstring_view argument = arguments[index];
+        const auto encoded_argument = WideToUtf8(argument);
+        if ((!argument.empty() && encoded_argument.empty()) ||
+            encoded_argument.size() > kMaxCommandArgumentBytes) {
             *error = "Command-line argument exceeds the product cap";
             return std::nullopt;
         }
-        auto need_value = [&](const char* name) -> const char* {
-            if (index + 1 >= argc) {
+        auto need_value = [&](const char* name) -> const std::wstring* {
+            if (index + 1U >= arguments.size()) {
                 *error = std::string(name) + " requires a value";
                 return nullptr;
             }
-            return argv[++index];
+            return &arguments[++index];
         };
-        if (argument == "--pfn") {
-            const char* value = need_value("--pfn");
+        if (argument == L"--pfn") {
+            if (options.pfn.has_value()) {
+                *error = "--pfn may be specified only once";
+                return std::nullopt;
+            }
+            const std::wstring* value = need_value("--pfn");
             if (value == nullptr) return std::nullopt;
-            if (std::string_view(value).size() > 32U) {
+            if (value->size() > 32U) {
                 *error = "--pfn is too long";
                 return std::nullopt;
             }
             std::uint64_t parsed = 0;
-            if (!ParseUnsigned(value, &parsed) ||
+            if (!ParseUnsigned(*value, &parsed) ||
                 parsed > std::numeric_limits<std::uint32_t>::max()) {
                 *error = "--pfn is invalid or exceeds 32 bits";
                 return std::nullopt;
             }
             options.pfn = static_cast<std::uint32_t>(parsed);
-        } else if (argument == "--device") {
-            const char* value = need_value("--device");
-            if (value == nullptr) return std::nullopt;
-            if (*value == '\0' ||
-                std::string_view(value).size() > kMaxCommandArgumentBytes) {
-                *error = "--device is empty or too long";
+        } else if (argument == L"--device") {
+            if (saw_device) {
+                *error = "--device may be specified only once";
                 return std::nullopt;
             }
-            options.device = value;
-        } else if (argument == "--vmm") {
-            const char* value = need_value("--vmm");
+            const std::wstring* value = need_value("--device");
             if (value == nullptr) return std::nullopt;
-#ifdef _WIN32
-            if (*value == '\0' ||
-                std::string_view(value).size() > kMaxCommandArgumentBytes) {
+            const std::wstring_view device = *value;
+            const auto encoded = WideToUtf8(device);
+            if (device.empty() || device.front() == L'-' ||
+                encoded.empty() || encoded.size() > kMaxCommandArgumentBytes) {
+                *error = "--device is empty, option-like, or too long";
+                return std::nullopt;
+            }
+            options.device = device;
+            saw_device = true;
+        } else if (argument == L"--vmm") {
+            if (saw_vmm) {
+                *error = "--vmm may be specified only once";
+                return std::nullopt;
+            }
+            const std::wstring* value = need_value("--vmm");
+            if (value == nullptr) return std::nullopt;
+            const std::wstring_view path = *value;
+            const auto encoded = WideToUtf8(path);
+            if (path.empty() || encoded.empty() ||
+                encoded.size() > kMaxCommandArgumentBytes) {
                 *error = "--vmm is empty or too long";
                 return std::nullopt;
             }
-            options.vmm_path = Utf8ToWide(value);
-            if (options.vmm_path.empty()) {
-                *error = "--vmm is not valid UTF-8";
-                return std::nullopt;
-            }
-#else
-            (void)value;
-#endif
-        } else if (argument == "--vmm-arg") {
-            const char* value = need_value("--vmm-arg");
+            options.vmm_path = std::filesystem::path(path);
+            saw_vmm = true;
+        } else if (argument == L"--vmm-arg") {
+            const std::wstring* value = need_value("--vmm-arg");
             if (value == nullptr) return std::nullopt;
+            const std::wstring_view vmm_argument = *value;
+            const auto encoded = WideToUtf8(vmm_argument);
             if (options.vmm_arguments.size() >= kMaxVmmArguments ||
-                std::string_view(value).size() > kMaxCommandArgumentBytes) {
+                (!vmm_argument.empty() && encoded.empty()) ||
+                encoded.size() > kMaxCommandArgumentBytes) {
                 *error = "Too many or oversized --vmm-arg values";
                 return std::nullopt;
             }
-            options.vmm_arguments.emplace_back(value);
-        } else if (argument == "--help" || argument == "-h") {
-            std::cout
-                << "Usage: memprocfs_bridge --pfn <number> "
-                   "[--device pmem|dump.raw] [--vmm path] "
-                   "[--vmm-arg value]\n";
+            if (IsProviderControlledVmmArgument(vmm_argument)) {
+                *error = "--vmm-arg must not override provider-controlled options";
+                return std::nullopt;
+            }
+            options.vmm_arguments.emplace_back(vmm_argument);
+        } else if (argument == L"--help" || argument == L"-h") {
+            std::wcout
+                << L"Usage: memprocfs_bridge --pfn <number> "
+                   L"[--device pmem|dump.raw] [--vmm path] "
+                   L"[--vmm-arg value]\n";
             std::exit(0);
         } else {
-            *error = "Unknown argument: " + argument;
+            *error = "Unknown argument: " + ProtocolText(encoded_argument);
             return std::nullopt;
         }
     }
@@ -343,13 +468,16 @@ std::optional<Options> ParseOptions(int argc, char** argv, std::string* error) {
         *error = "--pfn is required";
         return std::nullopt;
     }
-    if (options.device.empty() ||
-        options.device.size() > kMaxCommandArgumentBytes) {
+    const auto encoded_device = WideToUtf8(options.device);
+    if (options.device.empty() || options.device.front() == L'-' ||
+        encoded_device.empty() ||
+        encoded_device.size() > kMaxCommandArgumentBytes) {
         *error = "Configured MemProcFS device is empty or too long";
         return std::nullopt;
     }
     return options;
 }
+#endif
 
 int Fail(std::string message) {
     std::cerr << message << '\n';
@@ -358,14 +486,16 @@ int Fail(std::string message) {
 
 }  // namespace
 
-int main(int argc, char** argv) {
+#ifdef _WIN32
+int main() {
     std::string error;
-    auto options = ParseOptions(argc, argv, &error);
+    const auto arguments = ParseWindowsCommandLine();
+    if (!arguments.has_value()) {
+        return Fail("Windows command line could not be decoded as UTF-16 argv");
+    }
+    auto options = ParseOptions(*arguments, &error);
     if (!options) return Fail(error);
 
-#ifndef _WIN32
-    return Fail("MemProcFS bridge is currently supported only on Windows");
-#else
     Api api{};
     if (!LoadApi(options->vmm_path, &api, &error)) {
         return Fail(error);
@@ -376,45 +506,81 @@ int main(int argc, char** argv) {
     const InitializeFn initialize = api.initialize;
     const GetPfnExFn get_pfn_ex = api.get_pfn_ex;
 
+    const auto encoded_device = WideToUtf8(options->device);
+    if (encoded_device.empty()) {
+        return Fail("Configured MemProcFS device is not valid Unicode");
+    }
     std::vector<std::string> argument_storage{
         "kdbg-memprocfs-bridge",
         "-device",
-        options->device,
+        encoded_device,
         "-waitinitialize",
-        "-disable-python"
-    };
-    argument_storage.insert(
-        argument_storage.end(),
-        options->vmm_arguments.begin(),
-        options->vmm_arguments.end());
+        "-disable-python"};
+    argument_storage.reserve(
+        argument_storage.size() + options->vmm_arguments.size());
+    for (const auto& argument : options->vmm_arguments) {
+        const auto encoded = WideToUtf8(argument);
+        if (!argument.empty() && encoded.empty()) {
+            return Fail("MemProcFS additional argument is not valid Unicode");
+        }
+        argument_storage.push_back(encoded);
+    }
     std::vector<const char*> argument_pointers;
     argument_pointers.reserve(argument_storage.size());
     for (const auto& argument : argument_storage) {
         argument_pointers.push_back(argument.c_str());
     }
 
+    SetLastError(ERROR_SUCCESS);
     VMM_HANDLE handle = initialize(
         static_cast<DWORD>(argument_pointers.size()),
         argument_pointers.data());
+    const DWORD initialize_error = GetLastError();
     if (handle == nullptr) {
-        return Fail("VMMDLL_Initialize failed for device: " + options->device);
+        std::string diagnostic =
+            "stage=VMMDLL_Initialize device=\"" +
+            ProtocolText(encoded_device) + "\" failed";
+        if (initialize_error != ERROR_SUCCESS) {
+            diagnostic += " (Win32 error " +
+                std::to_string(initialize_error) + ")";
+        }
+        if (options->device == L"pmem") {
+            diagnostic +=
+                "; pmem acquisition is not ready: verify elevated execution, "
+                "the compatible LeechCore runtime, and its acquisition driver";
+        } else {
+            diagnostic +=
+                "; verify that the acquisition device is readable and matches "
+                "the installed MemProcFS runtime";
+        }
+        return Fail(std::move(diagnostic));
     }
     VmmHandleGuard handle_guard{&api, handle};
 
     std::uint32_t requested = *options->pfn;
     PfnMap* map = nullptr;
+    SetLastError(ERROR_SUCCESS);
     const BOOL queried = get_pfn_ex(
         handle,
         &requested,
         1,
         &map,
         kPfnFlagExtended);
+    const DWORD query_error = GetLastError();
     VmmAllocationGuard map_guard{&api, map};
     if (!queried || map == nullptr) {
-        return Fail("VMMDLL_Map_GetPfnEx failed");
+        std::string diagnostic = "stage=VMMDLL_Map_GetPfnEx failed";
+        if (query_error != ERROR_SUCCESS) {
+            diagnostic += " (Win32 error " +
+                std::to_string(query_error) + ")";
+        }
+        return Fail(std::move(diagnostic));
     }
     if (map->version != kPfnMapVersion || map->count != 1U) {
-        return Fail("MemProcFS returned an incompatible PFN map");
+        return Fail(
+            "MemProcFS returned an incompatible PFN map (version=" +
+            std::to_string(map->version) + ", count=" +
+            std::to_string(map->count) + ")");
     }
 
     std::cout << "KDBG_PFN_RESULT\t1\t" << requested << '\n';
@@ -473,5 +639,9 @@ int main(int argc, char** argv) {
         return Fail("Failed while writing the bridge protocol response");
     }
     return 0;
-#endif
 }
+#else
+int main() {
+    return Fail("MemProcFS bridge is currently supported only on Windows");
+}
+#endif

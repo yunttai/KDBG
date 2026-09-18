@@ -19,7 +19,9 @@ namespace {
 
 #ifdef _WIN32
 constexpr std::size_t kMaxBridgeOutput = 8U * 1024U * 1024U;
-constexpr DWORD kBridgePollMilliseconds = 25;
+constexpr std::size_t kMaxWindowsCommandCharacters = 32767U;
+constexpr DWORD kBridgePipeBytes = 64U * 1024U;
+constexpr DWORD kBridgePollMilliseconds = 5;
 constexpr DWORD kBridgeShutdownMilliseconds = 1000;
 
 class ScopedHandle {
@@ -76,6 +78,7 @@ std::wstring Utf8ToWide(std::string_view value) {
 }
 
 std::wstring QuoteWindowsArgument(std::wstring_view value) {
+    if (value.empty()) return L"\"\"";
     if (value.find_first_of(L" \t\"") == std::wstring_view::npos) {
         return std::wstring(value);
     }
@@ -121,15 +124,183 @@ bool ReadDecimal(std::istringstream& stream, UInt* value) {
            parsed.ptr == token.data() + token.size();
 }
 
+[[nodiscard]] bool IsValidUtf8(std::string_view value) noexcept {
+    std::size_t index = 0;
+    while (index < value.size()) {
+        const auto first = static_cast<unsigned char>(value[index]);
+        std::size_t continuation_count = 0;
+        std::uint32_t code_point = 0;
+        if (first <= 0x7FU) {
+            ++index;
+            continue;
+        }
+        if (first >= 0xC2U && first <= 0xDFU) {
+            continuation_count = 1;
+            code_point = first & 0x1FU;
+        } else if (first >= 0xE0U && first <= 0xEFU) {
+            continuation_count = 2;
+            code_point = first & 0x0FU;
+        } else if (first >= 0xF0U && first <= 0xF4U) {
+            continuation_count = 3;
+            code_point = first & 0x07U;
+        } else {
+            return false;
+        }
+        if (continuation_count > value.size() - index - 1U) return false;
+        for (std::size_t offset = 1; offset <= continuation_count; ++offset) {
+            const auto continuation =
+                static_cast<unsigned char>(value[index + offset]);
+            if ((continuation & 0xC0U) != 0x80U) return false;
+            code_point = (code_point << 6U) | (continuation & 0x3FU);
+        }
+        if ((continuation_count == 2U && code_point < 0x800U) ||
+            (continuation_count == 3U && code_point < 0x10000U) ||
+            (code_point >= 0xD800U && code_point <= 0xDFFFU) ||
+            code_point > 0x10FFFFU) {
+            return false;
+        }
+        index += continuation_count + 1U;
+    }
+    return true;
+}
+
+[[nodiscard]] bool AsciiEqualInsensitive(
+    std::string_view left,
+    std::string_view right) noexcept {
+    if (left.size() != right.size()) return false;
+    for (std::size_t index = 0; index < left.size(); ++index) {
+        unsigned char lhs = static_cast<unsigned char>(left[index]);
+        unsigned char rhs = static_cast<unsigned char>(right[index]);
+        if (lhs >= 'A' && lhs <= 'Z') lhs = static_cast<unsigned char>(lhs + 0x20U);
+        if (rhs >= 'A' && rhs <= 'Z') rhs = static_cast<unsigned char>(rhs + 0x20U);
+        if (lhs != rhs) return false;
+    }
+    return true;
+}
+
+Result<void> ValidateUtf8Value(
+    std::string_view value,
+    std::string_view label,
+    bool allow_empty) {
+    if ((!allow_empty && value.empty()) || value.find('\0') != std::string_view::npos) {
+        return Result<void>::Failure(MakeError(
+            ErrorCode::InvalidArgument,
+            std::string(label) + " is empty or contains an embedded NUL",
+            "MemProcFsProvider::ValidateConfiguration"));
+    }
+    if (value.size() > MemProcFsProvider::kMaxBridgeArgumentBytes) {
+        return Result<void>::Failure(MakeError(
+            ErrorCode::LimitReached,
+            std::string(label) + " exceeds the product cap",
+            "MemProcFsProvider::ValidateConfiguration",
+            0,
+            MemProcFsProvider::kMaxBridgeArgumentBytes,
+            value.size()));
+    }
+    if (!IsValidUtf8(value)) {
+        return Result<void>::Failure(MakeError(
+            ErrorCode::InvalidArgument,
+            std::string(label) + " is not valid UTF-8",
+            "MemProcFsProvider::ValidateConfiguration"));
+    }
+    return Result<void>::Success();
+}
+
+Result<void> ValidateConfiguration(
+    const MemProcFsConfiguration& configuration) {
+    if (configuration.vmm_arguments.size() >
+        MemProcFsProvider::kMaxVmmArguments) {
+        return Result<void>::Failure(MakeError(
+            ErrorCode::LimitReached,
+            "MemProcFS --vmm-arg count exceeds the product cap",
+            "MemProcFsProvider::ValidateConfiguration",
+            0,
+            MemProcFsProvider::kMaxVmmArguments,
+            configuration.vmm_arguments.size()));
+    }
+
+    if (configuration.device.has_value()) {
+        auto valid = ValidateUtf8Value(
+            *configuration.device, "MemProcFS device", false);
+        if (!valid) return valid;
+        if (configuration.device->front() == '-') {
+            return Result<void>::Failure(MakeError(
+                ErrorCode::InvalidArgument,
+                "MemProcFS device must not be option-like",
+                "MemProcFsProvider::ValidateConfiguration"));
+        }
+    }
+
+    if (configuration.vmm_path.has_value()) {
+        if (configuration.vmm_path->empty()) {
+            return Result<void>::Failure(MakeError(
+                ErrorCode::InvalidArgument,
+                "MemProcFS vmm.dll path is empty",
+                "MemProcFsProvider::ValidateConfiguration"));
+        }
+#ifdef _WIN32
+        const auto& native = configuration.vmm_path->native();
+        if (native.find(L'\0') != std::wstring::npos) {
+#else
+        const auto& native = configuration.vmm_path->native();
+        if (native.find('\0') != std::string::npos) {
+#endif
+            return Result<void>::Failure(MakeError(
+                ErrorCode::InvalidArgument,
+                "MemProcFS vmm.dll path contains an embedded NUL",
+                "MemProcFsProvider::ValidateConfiguration"));
+        }
+    }
+
+    for (const auto& argument : configuration.vmm_arguments) {
+        auto valid = ValidateUtf8Value(
+            argument, "MemProcFS additional VMMDLL argument", true);
+        if (!valid) return valid;
+        if (AsciiEqualInsensitive(argument, "-device") ||
+            AsciiEqualInsensitive(argument, "--device") ||
+            AsciiEqualInsensitive(argument, "-waitinitialize") ||
+            AsciiEqualInsensitive(argument, "--waitinitialize") ||
+            AsciiEqualInsensitive(argument, "-disable-python") ||
+            AsciiEqualInsensitive(argument, "--disable-python")) {
+            return Result<void>::Failure(MakeError(
+                ErrorCode::InvalidArgument,
+                "MemProcFS additional arguments must not override provider-controlled options",
+                "MemProcFsProvider::ValidateConfiguration"));
+        }
+    }
+    return Result<void>::Success();
+}
+
 }  // namespace
 
 MemProcFsProvider::MemProcFsProvider(
     std::filesystem::path bridge_path,
-    std::vector<std::string> bridge_arguments,
+    MemProcFsConfiguration configuration,
     std::chrono::milliseconds timeout)
     : bridge_path_(std::move(bridge_path)),
-      bridge_arguments_(std::move(bridge_arguments)),
+      configuration_(std::move(configuration)),
       timeout_(timeout) {}
+
+std::filesystem::path MemProcFsProvider::PackagedBridgePath() {
+#ifdef _WIN32
+    std::vector<wchar_t> executable(32768U, L'\0');
+    SetLastError(ERROR_SUCCESS);
+    const DWORD length = GetModuleFileNameW(
+        nullptr,
+        executable.data(),
+        static_cast<DWORD>(executable.size()));
+    if (length == 0 ||
+        static_cast<std::size_t>(length) >= executable.size()) {
+        return {};
+    }
+    return std::filesystem::path(
+        std::wstring(executable.data(), length)).parent_path() /
+        L"plugins" / L"memprocfs_bridge" / L"kdbg_memprocfs_bridge.exe";
+#else
+    return std::filesystem::current_path() / "plugins" /
+        "memprocfs_bridge" / "kdbg_memprocfs_bridge";
+#endif
+}
 
 const char* MemProcFsProvider::Name() const noexcept {
     return "memprocfs-bridge";
@@ -144,29 +315,50 @@ Result<PfnUsageResult> MemProcFsProvider::Query(
             "MemProcFS accepts PFNs up to 32 bits",
             "MemProcFsProvider::Query"));
     }
-    std::vector<std::string> arguments = bridge_arguments_;
-    arguments.emplace_back("--pfn");
-    arguments.push_back(std::to_string(pfn));
-    auto output = Execute(arguments, stop_token);
+    if (stop_token.stop_requested()) {
+        return Result<PfnUsageResult>::Failure(MakeError(
+            ErrorCode::Cancelled,
+            "MemProcFS query was cancelled before launch",
+            "MemProcFsProvider::Query"));
+    }
+    auto configuration = ValidateConfiguration(configuration_);
+    if (!configuration) {
+        return Result<PfnUsageResult>::Failure(configuration.GetError());
+    }
+    auto output = Execute(static_cast<std::uint32_t>(pfn), stop_token);
     if (!output) return Result<PfnUsageResult>::Failure(output.GetError());
     return ParseOutput(pfn, output.Value());
 }
 
 Result<std::string> MemProcFsProvider::Execute(
-    const std::vector<std::string>& arguments,
+    std::uint32_t pfn,
     std::stop_token stop_token) const {
-#ifdef _WIN32
-    if (bridge_path_.empty() || !std::filesystem::exists(bridge_path_)) {
-        return Result<std::string>::Failure(MakeError(
-            ErrorCode::BridgeUnavailable,
-            "MemProcFS bridge executable does not exist",
-            "MemProcFsProvider::Execute"));
-    }
     if (timeout_ <= std::chrono::milliseconds::zero()) {
         return Result<std::string>::Failure(MakeError(
             ErrorCode::InvalidArgument,
             "MemProcFS bridge timeout must be positive",
             "MemProcFsProvider::Execute"));
+    }
+#ifdef _WIN32
+    std::error_code bridge_error;
+    const auto bridge_status = std::filesystem::status(
+        bridge_path_, bridge_error);
+    if (bridge_path_.empty() || bridge_error ||
+        !std::filesystem::is_regular_file(bridge_status)) {
+        return Result<std::string>::Failure(MakeError(
+            ErrorCode::BridgeUnavailable,
+            "MemProcFS bridge path is unavailable or is not a regular file",
+            "MemProcFsProvider::Execute",
+            static_cast<std::uint64_t>(bridge_error.value())));
+    }
+    const auto resolved_bridge = std::filesystem::absolute(
+        bridge_path_, bridge_error);
+    if (bridge_error) {
+        return Result<std::string>::Failure(MakeError(
+            ErrorCode::BridgeUnavailable,
+            "Unable to resolve the MemProcFS bridge path",
+            "MemProcFsProvider::Execute",
+            static_cast<std::uint64_t>(bridge_error.value())));
     }
 
     SECURITY_ATTRIBUTES security{};
@@ -174,7 +366,11 @@ Result<std::string> MemProcFsProvider::Execute(
     security.bInheritHandle = TRUE;
     HANDLE raw_read_pipe = nullptr;
     HANDLE raw_write_pipe = nullptr;
-    if (!CreatePipe(&raw_read_pipe, &raw_write_pipe, &security, 0)) {
+    if (!CreatePipe(
+            &raw_read_pipe,
+            &raw_write_pipe,
+            &security,
+            kBridgePipeBytes)) {
         return Result<std::string>::Failure(MakeError(
             ErrorCode::IoFailure,
             "CreatePipe failed for MemProcFS bridge",
@@ -214,17 +410,60 @@ Result<std::string> MemProcFsProvider::Execute(
             GetLastError()));
     }
 
-    std::wstring command = QuoteWindowsArgument(bridge_path_.wstring());
-    for (const auto& argument : arguments) {
+    std::vector<std::wstring> arguments;
+    arguments.reserve(
+        (configuration_.vmm_arguments.size() * 2U) + 6U);
+    if (configuration_.device.has_value()) {
+        const auto device = Utf8ToWide(*configuration_.device);
+        if (device.empty()) {
+            return Result<std::string>::Failure(MakeError(
+                ErrorCode::InvalidArgument,
+                "MemProcFS device could not be converted to UTF-16",
+                "MemProcFsProvider::Execute"));
+        }
+        arguments.emplace_back(L"--device");
+        arguments.push_back(device);
+    }
+    if (configuration_.vmm_path.has_value()) {
+        arguments.emplace_back(L"--vmm");
+        arguments.push_back(configuration_.vmm_path->native());
+    }
+    for (const auto& argument : configuration_.vmm_arguments) {
         const auto wide = Utf8ToWide(argument);
         if (!argument.empty() && wide.empty()) {
             return Result<std::string>::Failure(MakeError(
                 ErrorCode::InvalidArgument,
-                "MemProcFS bridge argument is not valid UTF-8",
+                "MemProcFS additional argument could not be converted to UTF-16",
                 "MemProcFsProvider::Execute"));
         }
+        arguments.emplace_back(L"--vmm-arg");
+        arguments.push_back(wide);
+    }
+    arguments.emplace_back(L"--pfn");
+    arguments.push_back(std::to_wstring(pfn));
+    if (arguments.size() > kMaxBridgeArguments) {
+        return Result<std::string>::Failure(MakeError(
+            ErrorCode::LimitReached,
+            "MemProcFS bridge argument count exceeds the product cap",
+            "MemProcFsProvider::Execute",
+            0,
+            kMaxBridgeArguments,
+            arguments.size()));
+    }
+
+    std::wstring command = QuoteWindowsArgument(resolved_bridge.native());
+    for (const auto& argument : arguments) {
         command.push_back(L' ');
-        command += QuoteWindowsArgument(wide);
+        command += QuoteWindowsArgument(argument);
+        if (command.size() >= kMaxWindowsCommandCharacters) {
+            return Result<std::string>::Failure(MakeError(
+                ErrorCode::LimitReached,
+                "MemProcFS bridge command line exceeds the Windows limit",
+                "MemProcFsProvider::Execute",
+                0,
+                kMaxWindowsCommandCharacters - 1U,
+                command.size()));
+        }
     }
 
     STARTUPINFOW startup{};
@@ -238,16 +477,16 @@ Result<std::string> MemProcFsProvider::Execute(
     std::vector<wchar_t> mutable_command(command.begin(), command.end());
     mutable_command.push_back(L'\0');
     const BOOL created = CreateProcessW(
-        bridge_path_.c_str(),
+        resolved_bridge.c_str(),
         mutable_command.data(),
         nullptr,
         nullptr,
         TRUE,
         CREATE_NO_WINDOW | CREATE_SUSPENDED,
         nullptr,
-        bridge_path_.parent_path().empty()
+        resolved_bridge.parent_path().empty()
             ? nullptr
-            : bridge_path_.parent_path().c_str(),
+            : resolved_bridge.parent_path().c_str(),
         &startup,
         &raw_process);
     const DWORD create_error = created ? ERROR_SUCCESS : GetLastError();
@@ -453,7 +692,7 @@ Result<std::string> MemProcFsProvider::Execute(
 #else
     (void)bridge_path_;
     (void)timeout_;
-    (void)arguments;
+    (void)pfn;
     (void)stop_token;
     return Result<std::string>::Failure(MakeError(
         ErrorCode::Unsupported,

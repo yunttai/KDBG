@@ -9,7 +9,9 @@
 #include <filesystem>
 #include <iomanip>
 #include <limits>
+#include <new>
 #include <sstream>
+#include <stdexcept>
 #include <string_view>
 
 namespace kdbg {
@@ -53,6 +55,18 @@ std::string Preview(std::span<const std::uint8_t> bytes) {
     return output.str();
 }
 
+const char* PhaseName(SnapshotProgressPhase phase) {
+    switch (phase) {
+    case SnapshotProgressPhase::CaptureRead: return "Reading memory";
+    case SnapshotProgressPhase::CaptureChecksum: return "Checksumming capture";
+    case SnapshotProgressPhase::Diff: return "Comparing snapshots";
+    case SnapshotProgressPhase::Save: return "Saving snapshot";
+    case SnapshotProgressPhase::LoadRead: return "Loading snapshot";
+    case SnapshotProgressPhase::LoadChecksum: return "Verifying checksum";
+    }
+    return "Working";
+}
+
 }  // namespace
 
 SnapshotPanel::SnapshotPanel() {
@@ -67,6 +81,16 @@ SnapshotPanel::SnapshotPanel() {
 }
 
 SnapshotPanel::~SnapshotPanel() { StopWorker(); }
+
+void SnapshotPanel::RequestCancel() noexcept {
+    if (worker_.joinable()) worker_.request_stop();
+}
+
+void SnapshotPanel::CancelAndWait() { StopWorker(); }
+
+bool SnapshotPanel::Busy() const noexcept {
+    return running_.load(std::memory_order_acquire);
+}
 
 void SnapshotPanel::Attach(IProcessMemory* memory) {
     Reset();
@@ -83,21 +107,91 @@ void SnapshotPanel::Reset() {
     baseline_.reset();
     current_.reset();
     diffs_.clear();
-    pending_snapshot_.reset();
-    pending_error_.reset();
+    {
+        std::scoped_lock lock(result_mutex_);
+        pending_result_.reset();
+        progress_ = {};
+    }
     status_.clear();
 }
 
 void SnapshotPanel::StopWorker() {
+    generation_.fetch_add(1, std::memory_order_acq_rel);
     if (worker_.joinable()) {
         worker_.request_stop();
         worker_.join();
     }
     running_.store(false, std::memory_order_release);
+    std::scoped_lock lock(result_mutex_);
+    pending_result_.reset();
+    progress_ = {};
+}
+
+void SnapshotPanel::StartWorker(
+    WorkerOperation operation,
+    std::string status,
+    WorkerTask task) {
+    ConsumeWorkerResult();
+    if (running_.load(std::memory_order_acquire)) return;
+    if (worker_.joinable()) worker_.join();
+
+    const auto generation =
+        generation_.fetch_add(1, std::memory_order_acq_rel) + 1;
+    {
+        std::scoped_lock lock(result_mutex_);
+        pending_result_.reset();
+        progress_ = {};
+    }
+    status_ = std::move(status);
+    running_.store(true, std::memory_order_release);
+    worker_ = std::jthread(
+        [this, generation, operation, task = std::move(task)](
+            std::stop_token stop_token) mutable {
+            const SnapshotProgressCallback progress =
+                [this, generation](const SnapshotProgress& update) {
+                    if (generation_.load(std::memory_order_acquire) != generation) {
+                        return;
+                    }
+                    std::scoped_lock lock(result_mutex_);
+                    progress_ = update;
+                };
+
+            WorkerResult result{};
+            try {
+                result = task(stop_token, progress);
+            } catch (const std::bad_alloc&) {
+                result.error = MakeError(
+                    ErrorCode::LimitReached,
+                    "Snapshot worker exhausted the allocation budget",
+                    "SnapshotPanel");
+            } catch (const std::length_error&) {
+                result.error = MakeError(
+                    ErrorCode::LimitReached,
+                    "Snapshot worker requested an invalid allocation",
+                    "SnapshotPanel");
+            } catch (const std::exception& error) {
+                result.error = MakeError(
+                    ErrorCode::InternalInvariant,
+                    error.what(),
+                    "SnapshotPanel");
+            }
+            result.generation = generation;
+            result.operation = operation;
+            {
+                std::scoped_lock lock(result_mutex_);
+                if (generation_.load(std::memory_order_acquire) == generation) {
+                    pending_result_ = std::move(result);
+                }
+            }
+            running_.store(false, std::memory_order_release);
+        });
 }
 
 void SnapshotPanel::StartCapture(CaptureTarget target) {
-    if (memory_ == nullptr || !memory_->IsOpen() || running_.load()) return;
+    if (memory_ == nullptr || !memory_->IsOpen() ||
+        running_.load(std::memory_order_acquire)) {
+        return;
+    }
 
     std::uint64_t address = 0;
     std::uint64_t size = 0;
@@ -107,43 +201,41 @@ void SnapshotPanel::StartCapture(CaptureTarget target) {
         status_ = "Enter a non-zero address and size in decimal or 0x-prefixed hexadecimal.";
         return;
     }
-    constexpr std::uint64_t kMaxSnapshotBytes = 512ULL * 1024ULL * 1024ULL;
-    if (size > kMaxSnapshotBytes ||
+    if (size > MemorySnapshot::kMaxSnapshotBytes ||
         address > std::numeric_limits<std::uint64_t>::max() - size) {
         status_ = "Snapshot range is invalid or exceeds the 512 MiB UI limit.";
         return;
     }
 
-    StopWorker();
-    {
-        std::scoped_lock lock(result_mutex_);
-        pending_snapshot_.reset();
-        pending_error_.reset();
-        pending_target_ = target;
-    }
     IProcessMemory* const memory = memory_;
-    running_.store(true, std::memory_order_release);
-    status_ = target == CaptureTarget::Baseline
-        ? "Capturing baseline snapshot..."
-        : "Capturing current snapshot...";
-    worker_ = std::jthread(
-        [this, memory, address, size, target](std::stop_token stop_token) {
+    const auto operation = target == CaptureTarget::Baseline
+        ? WorkerOperation::CaptureBaseline
+        : WorkerOperation::CaptureCurrent;
+    StartWorker(
+        operation,
+        target == CaptureTarget::Baseline
+            ? "Capturing baseline snapshot..."
+            : "Capturing current snapshot...",
+        [memory, address, size, target](
+            std::stop_token stop_token,
+            const SnapshotProgressCallback& progress) {
+            WorkerResult completed{};
             auto result = MemorySnapshot::Capture(
                 *memory,
                 address,
                 size,
                 1024U * 1024U,
-                stop_token);
-            std::scoped_lock lock(result_mutex_);
-            pending_target_ = target;
+                stop_token,
+                progress);
             if (result) {
-                pending_snapshot_ = result.TakeValue();
-                pending_error_.reset();
+                completed.snapshot = result.TakeValue();
+                completed.success_status = target == CaptureTarget::Baseline
+                    ? "Baseline snapshot captured."
+                    : "Current snapshot captured.";
             } else {
-                pending_snapshot_.reset();
-                pending_error_ = result.GetError();
+                completed.error = result.GetError();
             }
-            running_.store(false, std::memory_order_release);
+            return completed;
         });
 }
 
@@ -151,32 +243,54 @@ void SnapshotPanel::ConsumeWorkerResult() {
     if (running_.load(std::memory_order_acquire) || !worker_.joinable()) return;
     worker_.join();
 
-    std::optional<MemorySnapshot> snapshot;
-    std::optional<Error> error;
-    CaptureTarget target = CaptureTarget::Baseline;
+    std::optional<WorkerResult> result;
     {
         std::scoped_lock lock(result_mutex_);
-        snapshot = std::move(pending_snapshot_);
-        error = std::move(pending_error_);
-        target = pending_target_;
-        pending_snapshot_.reset();
-        pending_error_.reset();
+        result = std::move(pending_result_);
+        pending_result_.reset();
     }
-    if (error.has_value()) {
-        status_ = error->message;
+    if (!result.has_value() ||
+        result->generation != generation_.load(std::memory_order_acquire)) {
         return;
     }
-    if (!snapshot.has_value()) return;
+    if (result->error.has_value()) {
+        status_ = result->error->message;
+        return;
+    }
 
-    if (target == CaptureTarget::Baseline) {
-        baseline_ = std::move(snapshot);
+    switch (result->operation) {
+    case WorkerOperation::CaptureBaseline:
+        baseline_ = std::move(result->snapshot);
         current_.reset();
         diffs_.clear();
-        status_ = "Baseline snapshot captured.";
-    } else {
-        current_ = std::move(snapshot);
+        break;
+    case WorkerOperation::CaptureCurrent:
+        current_ = std::move(result->snapshot);
         diffs_.clear();
-        status_ = "Current snapshot captured.";
+        break;
+    case WorkerOperation::LoadBaseline:
+        baseline_ = std::move(result->snapshot);
+        diffs_.clear();
+        break;
+    case WorkerOperation::LoadCurrent:
+        current_ = std::move(result->snapshot);
+        diffs_.clear();
+        break;
+    case WorkerOperation::Diff:
+        if (result->diffs.has_value()) {
+            diffs_ = std::move(*result->diffs);
+        }
+        break;
+    case WorkerOperation::SaveBaseline:
+    case WorkerOperation::SaveCurrent:
+    case WorkerOperation::None:
+        break;
+    }
+    if (!result->success_status.empty()) {
+        status_ = std::move(result->success_status);
+    } else if (result->operation == WorkerOperation::Diff) {
+        status_ = "Snapshot diff complete: " + std::to_string(diffs_.size()) +
+            " changed run(s).";
     }
 }
 
@@ -206,23 +320,50 @@ void SnapshotPanel::SaveSnapshot(CaptureTarget target, const char* path) {
         status_ = "There is no snapshot to save.";
         return;
     }
-    const auto result = snapshot->Save(std::filesystem::path(path));
-    status_ = result ? "Snapshot saved." : result.GetError().message;
+    const MemorySnapshot* const source = &*snapshot;
+    const auto destination = std::filesystem::path(path);
+    const auto operation = target == CaptureTarget::Baseline
+        ? WorkerOperation::SaveBaseline
+        : WorkerOperation::SaveCurrent;
+    StartWorker(
+        operation,
+        "Saving snapshot...",
+        [source, destination](
+            std::stop_token stop_token,
+            const SnapshotProgressCallback& progress) {
+            WorkerResult completed{};
+            const auto result = source->Save(destination, stop_token, progress);
+            if (result) {
+                completed.success_status = "Snapshot saved.";
+            } else {
+                completed.error = result.GetError();
+            }
+            return completed;
+        });
 }
 
 void SnapshotPanel::LoadSnapshot(CaptureTarget target, const char* path) {
-    const auto result = MemorySnapshot::Load(std::filesystem::path(path));
-    if (!result) {
-        status_ = result.GetError().message;
-        return;
-    }
-    if (target == CaptureTarget::Baseline) {
-        baseline_ = result.Value();
-    } else {
-        current_ = result.Value();
-    }
-    diffs_.clear();
-    status_ = "Snapshot loaded and checksum verified.";
+    const auto source = std::filesystem::path(path);
+    const auto operation = target == CaptureTarget::Baseline
+        ? WorkerOperation::LoadBaseline
+        : WorkerOperation::LoadCurrent;
+    StartWorker(
+        operation,
+        "Loading snapshot...",
+        [source](
+            std::stop_token stop_token,
+            const SnapshotProgressCallback& progress) {
+            WorkerResult completed{};
+            auto result = MemorySnapshot::Load(source, stop_token, progress);
+            if (result) {
+                completed.snapshot = result.TakeValue();
+                completed.success_status =
+                    "Snapshot loaded and checksum verified.";
+            } else {
+                completed.error = result.GetError();
+            }
+            return completed;
+        });
 }
 
 void SnapshotPanel::ComputeDiff() {
@@ -230,16 +371,30 @@ void SnapshotPanel::ComputeDiff() {
         status_ = "Capture or load both baseline and current snapshots first.";
         return;
     }
-    const auto result = baseline_->Diff(
-        *current_,
-        static_cast<std::size_t>(std::max(max_diff_runs_, 1)));
-    if (!result) {
-        status_ = result.GetError().message;
-        return;
-    }
-    diffs_ = result.Value();
-    status_ = "Snapshot diff complete: " + std::to_string(diffs_.size()) +
-        " changed run(s).";
+    const MemorySnapshot* const baseline = &*baseline_;
+    const MemorySnapshot* const current = &*current_;
+    const auto max_runs =
+        static_cast<std::size_t>(std::max(max_diff_runs_, 1));
+    StartWorker(
+        WorkerOperation::Diff,
+        "Comparing snapshots...",
+        [baseline, current, max_runs](
+            std::stop_token stop_token,
+            const SnapshotProgressCallback& progress) {
+            WorkerResult completed{};
+            auto result = baseline->Diff(
+                *current,
+                max_runs,
+                MemorySnapshot::kMaxSnapshotBytes,
+                stop_token,
+                progress);
+            if (result) {
+                completed.diffs = result.TakeValue();
+            } else {
+                completed.error = result.GetError();
+            }
+            return completed;
+        });
 }
 
 void SnapshotPanel::Draw() {
@@ -269,11 +424,27 @@ void SnapshotPanel::Draw() {
     if (running) ImGui::EndDisabled();
     if (running) {
         ImGui::SameLine();
-        if (ImGui::Button("Cancel Capture")) worker_.request_stop();
-        ImGui::SameLine();
-        ImGui::TextDisabled("Reading in a cancellable worker...");
+        if (ImGui::Button("Cancel Operation")) worker_.request_stop();
+        SnapshotProgress progress;
+        {
+            std::scoped_lock lock(result_mutex_);
+            progress = progress_;
+        }
+        const float fraction = progress.total == 0
+            ? 0.0F
+            : std::clamp(
+                static_cast<float>(progress.completed) /
+                    static_cast<float>(progress.total),
+                0.0F,
+                1.0F);
+        const std::string overlay =
+            std::string(PhaseName(progress.phase)) + " " +
+            std::to_string(progress.completed) + " / " +
+            std::to_string(progress.total);
+        ImGui::ProgressBar(fraction, ImVec2(-1.0F, 0.0F), overlay.c_str());
     }
 
+    if (running) ImGui::BeginDisabled();
     ImGui::Separator();
     if (ImGui::BeginTable(
             "snapshot-summary", 2,
@@ -317,6 +488,7 @@ void SnapshotPanel::Draw() {
         diffs_.clear();
         status_ = "Snapshot workspace cleared.";
     }
+    if (running) ImGui::EndDisabled();
 
     ImGui::Text(
         "Changed runs: %llu",
@@ -348,12 +520,26 @@ void SnapshotPanel::Draw() {
                     static_cast<unsigned long long>(
                         baseline_->Address() + diff.offset));
                 ImGui::TableNextColumn();
-                ImGui::Text("%llu", static_cast<unsigned long long>(diff.before.size()));
+                ImGui::Text("%llu", static_cast<unsigned long long>(diff.length));
                 ImGui::TableNextColumn();
-                const auto before = Preview(diff.before);
+                const auto offset = static_cast<std::size_t>(diff.offset);
+                const auto length = static_cast<std::size_t>(diff.length);
+                const bool descriptor_valid =
+                    baseline_.has_value() && current_.has_value() &&
+                    offset <= baseline_->Bytes().size() &&
+                    length <= baseline_->Bytes().size() - offset &&
+                    offset <= current_->Bytes().size() &&
+                    length <= current_->Bytes().size() - offset;
+                const auto before = descriptor_valid
+                    ? Preview(std::span<const std::uint8_t>(
+                        baseline_->Bytes()).subspan(offset, length))
+                    : std::string("<invalid descriptor>");
                 ImGui::TextUnformatted(before.c_str());
                 ImGui::TableNextColumn();
-                const auto after = Preview(diff.after);
+                const auto after = descriptor_valid
+                    ? Preview(std::span<const std::uint8_t>(
+                        current_->Bytes()).subspan(offset, length))
+                    : std::string("<invalid descriptor>");
                 ImGui::TextUnformatted(after.c_str());
             }
         }

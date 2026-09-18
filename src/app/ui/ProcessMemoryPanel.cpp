@@ -2,9 +2,11 @@
 
 #include <algorithm>
 #include <charconv>
+#include <chrono>
 #include <climits>
 #include <cstdio>
 #include <cstring>
+#include <exception>
 #include <limits>
 #include <string_view>
 #include <utility>
@@ -70,18 +72,53 @@ ProcessMemoryPanel::ProcessMemoryPanel() {
     editor_.BgColorFn = &ProcessMemoryPanel::ByteBackground;
 }
 
+ProcessMemoryPanel::~ProcessMemoryPanel() {
+    CancelAndWait();
+}
+
+bool ProcessMemoryPanel::Busy() const noexcept {
+    return operation_future_.valid();
+}
+
+void ProcessMemoryPanel::Poll() {
+    PollOperation();
+}
+
+void ProcessMemoryPanel::RequestCancel() noexcept {
+    cancel_requested_.store(true, std::memory_order_relaxed);
+}
+
+void ProcessMemoryPanel::CancelAndWait() noexcept {
+    RequestCancel();
+    try {
+        if (operation_future_.valid()) {
+            PublishOperation(operation_future_.get());
+        }
+    } catch (...) {
+        // Teardown still clears the session and releases the process pointer.
+    }
+    pending_navigation_.reset();
+}
+
 void ProcessMemoryPanel::Attach(IProcessMemory* memory) {
     Reset();
     memory_ = memory;
     if (memory_ != nullptr) {
+        attached_pid_ = memory_->ProcessId();
+        cached_writes_armed_ = memory_->WritesArmed();
         status_ = "Process memory browser ready for PID " +
-            std::to_string(memory_->ProcessId()) + ".";
+            std::to_string(attached_pid_) + ".";
     }
 }
 
 void ProcessMemoryPanel::Reset() {
+    CancelAndWait();
+    ++generation_;
+    pending_navigation_.reset();
     session_.Reset();
     memory_ = nullptr;
+    attached_pid_ = 0;
+    cached_writes_armed_ = false;
     write_confirmation_.fill('\0');
     status_.clear();
 }
@@ -96,10 +133,17 @@ void ProcessMemoryPanel::Navigate(
         length,
         1U,
         ProcessMemorySession::kMaximumViewSize));
-    if (memory_ != nullptr && memory_->IsOpen()) {
-        const auto result = session_.Load(
-            *memory_, address, static_cast<std::uint32_t>(length_));
-        SetStatus(result, "Process memory view loaded.");
+    if (memory_ != nullptr && (Busy() || memory_->IsOpen())) {
+        const auto bounded_length = static_cast<std::uint32_t>(length_);
+        if (Busy()) {
+            ++generation_;
+            pending_navigation_ = std::pair{address, bounded_length};
+            cancel_requested_.store(true, std::memory_order_relaxed);
+            status_ =
+                "Navigation queued; cancelling the superseded process-memory operation.";
+        } else {
+            StartLoad(address, bounded_length, Operation::Load);
+        }
     }
 }
 
@@ -121,16 +165,192 @@ bool ProcessMemoryPanel::ParseRange(
     return true;
 }
 
+void ProcessMemoryPanel::StartLoad(
+    std::uint64_t address,
+    std::uint32_t length,
+    Operation operation) {
+    if (Busy() || memory_ == nullptr || !memory_->IsOpen()) return;
+    cancel_requested_.store(false, std::memory_order_relaxed);
+    operation_progress_.store(0, std::memory_order_relaxed);
+    const auto generation = ++generation_;
+    IProcessMemory* const memory = memory_;
+    status_ = operation == Operation::Reload
+        ? "Reloading the process-memory view asynchronously..."
+        : "Reading the process-memory view asynchronously...";
+    operation_future_ = std::async(
+        std::launch::async,
+        [this, memory, address, length, operation, generation] {
+            OperationOutcome outcome;
+            outcome.generation = generation;
+            outcome.operation = operation;
+            try {
+                if (cancel_requested_.load(std::memory_order_relaxed)) {
+                    outcome.cancel_observed = true;
+                    outcome.error = MakeError(
+                        ErrorCode::Cancelled,
+                        "Process-memory read was cancelled before starting",
+                        "ProcessMemoryPanel::StartLoad");
+                    return outcome;
+                }
+                operation_progress_.store(1, std::memory_order_relaxed);
+                const auto result = outcome.session.Load(*memory, address, length);
+                operation_progress_.store(2, std::memory_order_relaxed);
+                if (!result) {
+                    outcome.error = result.GetError();
+                    return outcome;
+                }
+                if (cancel_requested_.load(std::memory_order_relaxed)) {
+                    outcome.cancel_observed = true;
+                    outcome.error = MakeError(
+                        ErrorCode::Cancelled,
+                        "Completed process-memory read was discarded after cancellation",
+                        "ProcessMemoryPanel::StartLoad");
+                    return outcome;
+                }
+                outcome.succeeded = true;
+            } catch (const std::exception& exception) {
+                outcome.error = MakeError(
+                    ErrorCode::InternalInvariant,
+                    "Process-memory read worker failed: " +
+                        std::string(exception.what()),
+                    "ProcessMemoryPanel::StartLoad");
+            } catch (...) {
+                outcome.error = MakeError(
+                    ErrorCode::InternalInvariant,
+                    "Process-memory read worker failed with an unknown exception",
+                    "ProcessMemoryPanel::StartLoad");
+            }
+            return outcome;
+        });
+}
+
+void ProcessMemoryPanel::StartSessionOperation(Operation operation) {
+    if (Busy() || memory_ == nullptr || !memory_->IsOpen() ||
+        !session_.HasBuffer()) {
+        return;
+    }
+    cancel_requested_.store(false, std::memory_order_relaxed);
+    operation_progress_.store(0, std::memory_order_relaxed);
+    const auto generation = ++generation_;
+    IProcessMemory* const memory = memory_;
+    ProcessMemorySession snapshot = session_;
+    status_ = operation == Operation::Apply
+        ? "Applying staged process-memory changes and verifying read-back asynchronously..."
+        : "Rolling back process-memory changes and verifying read-back asynchronously...";
+    operation_future_ = std::async(
+        std::launch::async,
+        [this, memory, operation, generation, snapshot = std::move(snapshot)]() mutable {
+            OperationOutcome outcome;
+            outcome.generation = generation;
+            outcome.operation = operation;
+            outcome.session = std::move(snapshot);
+            try {
+                if (cancel_requested_.load(std::memory_order_relaxed)) {
+                    outcome.cancel_observed = true;
+                    outcome.error = MakeError(
+                        ErrorCode::Cancelled,
+                        "Process-memory write operation was cancelled before starting",
+                        "ProcessMemoryPanel::StartSessionOperation");
+                    return outcome;
+                }
+                operation_progress_.store(1, std::memory_order_relaxed);
+                const auto result = operation == Operation::Apply
+                    ? outcome.session.ApplyAndVerify(*memory)
+                    : outcome.session.Rollback(*memory);
+                operation_progress_.store(2, std::memory_order_relaxed);
+                outcome.cancel_observed =
+                    cancel_requested_.load(std::memory_order_relaxed);
+                outcome.succeeded = result.Ok();
+                if (!result) outcome.error = result.GetError();
+            } catch (const std::exception& exception) {
+                outcome.error = MakeError(
+                    ErrorCode::InternalInvariant,
+                    "Process-memory write worker failed: " +
+                        std::string(exception.what()),
+                    "ProcessMemoryPanel::StartSessionOperation");
+            } catch (...) {
+                outcome.error = MakeError(
+                    ErrorCode::InternalInvariant,
+                    "Process-memory write worker failed with an unknown exception",
+                    "ProcessMemoryPanel::StartSessionOperation");
+            }
+            return outcome;
+        });
+}
+
+void ProcessMemoryPanel::PollOperation() {
+    using namespace std::chrono_literals;
+    if (!operation_future_.valid() ||
+        operation_future_.wait_for(0ms) != std::future_status::ready) {
+        return;
+    }
+    std::optional<OperationOutcome> completed;
+    try {
+        completed = operation_future_.get();
+    } catch (const std::exception& exception) {
+        status_ = "Process-memory operation publication failed: " +
+            std::string(exception.what());
+    } catch (...) {
+        status_ =
+            "Process-memory operation publication failed with an unknown exception.";
+    }
+    if (completed.has_value()) PublishOperation(std::move(*completed));
+    if (pending_navigation_.has_value() && memory_ != nullptr &&
+        memory_->IsOpen()) {
+        const auto [address, length] = *pending_navigation_;
+        pending_navigation_.reset();
+        StartLoad(address, length, Operation::Load);
+    }
+}
+
+void ProcessMemoryPanel::PublishOperation(OperationOutcome outcome) {
+    if (outcome.generation != generation_) return;
+    const bool load = outcome.operation == Operation::Load ||
+        outcome.operation == Operation::Reload;
+    if (outcome.succeeded) {
+        session_ = std::move(outcome.session);
+        if (!load) cached_writes_armed_ = false;
+        switch (outcome.operation) {
+        case Operation::Load:
+            status_ = "Process memory view loaded.";
+            break;
+        case Operation::Reload:
+            status_ = "Process memory view reloaded from the target.";
+            break;
+        case Operation::Apply:
+            status_ = "Process-memory changes were written and the full view matched on read-back.";
+            break;
+        case Operation::Rollback:
+            status_ = "The previous process-memory baseline was restored and verified.";
+            break;
+        }
+        if (outcome.cancel_observed && !load) {
+            status_ +=
+                " Cancellation arrived after the safety-critical transaction began; verification and gate relock completed.";
+        }
+        return;
+    }
+    if (!load) {
+        session_ = std::move(outcome.session);
+        cached_writes_armed_ = false;
+    }
+    status_ = outcome.error.message;
+}
+
 void ProcessMemoryPanel::Draw() {
-    if (memory_ == nullptr || !memory_->IsOpen()) {
+    PollOperation();
+    const bool operation_busy = Busy();
+    if (memory_ == nullptr || (!operation_busy && !memory_->IsOpen())) {
         ImGui::TextDisabled("Attach to a process to browse and edit its memory.");
         return;
     }
+    if (!operation_busy) cached_writes_armed_ = memory_->WritesArmed();
 
     ImGui::Text(
         "Attached PID: %u | Process write gate: %s",
-        memory_->ProcessId(),
-        memory_->WritesArmed() ? "ARMED" : "LOCKED");
+        attached_pid_,
+        operation_busy ? "TRANSACTION IN PROGRESS" :
+            (cached_writes_armed_ ? "ARMED" : "LOCKED"));
     ImGui::SetNextItemWidth(220.0F);
     ImGui::InputText("Address", address_.data(), address_.size());
     ImGui::SameLine();
@@ -140,32 +360,47 @@ void ProcessMemoryPanel::Draw() {
         length_, 1,
         static_cast<int>(ProcessMemorySession::kMaximumViewSize));
     ImGui::SameLine();
+    ImGui::BeginDisabled(operation_busy);
     if (ImGui::Button("Read View")) {
         std::uint64_t address = 0;
         std::uint32_t length = 0;
         if (!ParseRange(&address, &length)) {
             status_ = "Enter a valid non-zero address and a length up to 1 MiB.";
         } else {
-            const auto result = session_.Load(*memory_, address, length);
-            SetStatus(result, "Process memory view loaded.");
+            StartLoad(address, length, Operation::Load);
         }
     }
+    ImGui::EndDisabled();
     ImGui::SameLine();
-    if (!session_.HasBuffer()) ImGui::BeginDisabled();
+    ImGui::BeginDisabled(operation_busy || !session_.HasBuffer());
     if (ImGui::Button("Reload Live")) {
-        const auto result = session_.Load(
-            *memory_, session_.Address(),
-            static_cast<std::uint32_t>(session_.Working().size()));
-        SetStatus(result, "Process memory view reloaded from the target.");
+        StartLoad(
+            session_.Address(),
+            static_cast<std::uint32_t>(session_.Working().size()),
+            Operation::Reload);
     }
-    if (!session_.HasBuffer()) ImGui::EndDisabled();
+    ImGui::EndDisabled();
+    if (operation_busy) {
+        ImGui::SameLine();
+        if (ImGui::Button("Request Cancel")) {
+            cancel_requested_.store(true, std::memory_order_relaxed);
+            status_ =
+                "Cancellation requested. A started write transaction will finish verification and gate relock.";
+        }
+        const auto progress = operation_progress_.load(std::memory_order_relaxed);
+        ImGui::ProgressBar(
+            static_cast<float>(progress) / 2.0F,
+            ImVec2(-1.0F, 0.0F),
+            progress == 0 ? "queued" :
+                (progress == 1 ? "working" : "publishing"));
+    }
 
     if (!session_.HasBuffer()) {
         ImGui::Separator();
         ImGui::TextDisabled(
             "Load a committed readable range from the Memory Map or enter an address.");
         if (!status_.empty()) ImGui::TextWrapped("%s", status_.c_str());
-        DrawWriteGateModal();
+        if (!operation_busy) DrawWriteGateModal();
         return;
     }
 
@@ -179,6 +414,7 @@ void ProcessMemoryPanel::Draw() {
 
     editor_.UserData = &session_;
     auto* bytes = const_cast<std::uint8_t*>(session_.Working().data());
+    ImGui::BeginDisabled(operation_busy);
     editor_.DrawContents(
         bytes,
         session_.Working().size(),
@@ -201,38 +437,43 @@ void ProcessMemoryPanel::Draw() {
         status_ = "Staged process-memory edits reverted.";
     }
     ImGui::SameLine();
-    if (!memory_->WritesArmed()) {
+    if (!cached_writes_armed_) {
         if (ImGui::Button("Arm Process Writes")) {
             write_confirmation_.fill('\0');
             ImGui::OpenPopup("Arm Process Browser Writes##KDBG");
         }
     } else if (ImGui::Button("Lock Process Writes")) {
         const auto result = memory_->SetWritesArmed(false);
+        if (result) cached_writes_armed_ = false;
         SetStatus(result, "Process writes locked.");
     }
     ImGui::SameLine();
-    const bool can_apply = session_.IsDirty() && memory_->WritesArmed();
+    const bool can_apply = session_.IsDirty() && cached_writes_armed_;
     if (!can_apply) ImGui::BeginDisabled();
     if (ImGui::Button("Apply Changed Runs & Verify")) {
-        const auto result = session_.ApplyAndVerify(*memory_);
-        SetStatus(result,
-            "Process-memory changes were written and the full view matched on read-back.");
+        StartSessionOperation(Operation::Apply);
     }
     if (!can_apply) ImGui::EndDisabled();
     if (session_.CanRollback()) {
         ImGui::SameLine();
-        if (!memory_->WritesArmed()) ImGui::BeginDisabled();
+        if (!cached_writes_armed_) ImGui::BeginDisabled();
         if (ImGui::Button("Rollback Previous Apply")) {
-            const auto result = session_.Rollback(*memory_);
-            SetStatus(result,
-                "The previous process-memory baseline was restored and verified.");
+            StartSessionOperation(Operation::Rollback);
         }
-        if (!memory_->WritesArmed()) ImGui::EndDisabled();
+        if (!cached_writes_armed_) ImGui::EndDisabled();
     }
+    ImGui::EndDisabled();
 
-    const auto diffs = session_.ByteDiffs();
+    constexpr std::size_t kDiffPreviewCap = 16384;
+    const auto diffs = session_.ByteDiffs(kDiffPreviewCap);
     if (!diffs.empty() && ImGui::CollapsingHeader(
             "Staged Byte Diff", ImGuiTreeNodeFlags_DefaultOpen)) {
+        if (session_.DirtyCount() > diffs.size()) {
+            ImGui::TextDisabled(
+                "Showing the first %llu of %llu changed bytes; the hex view retains every dirty highlight.",
+                static_cast<unsigned long long>(diffs.size()),
+                static_cast<unsigned long long>(session_.DirtyCount()));
+        }
         if (ImGui::BeginTable(
                 "process-memory-diffs", 4,
                 ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
@@ -271,7 +512,7 @@ void ProcessMemoryPanel::Draw() {
         ImGui::Separator();
         ImGui::TextWrapped("%s", status_.c_str());
     }
-    DrawWriteGateModal();
+    if (!operation_busy) DrawWriteGateModal();
 }
 
 void ProcessMemoryPanel::DrawWriteGateModal() {
@@ -282,7 +523,7 @@ void ProcessMemoryPanel::DrawWriteGateModal() {
         ImGui::TextWrapped(
             "Process writes can destabilize the target. Use only in the assignment VM. "
             "Enter the attached PID (%u) to open the shared process write gate.",
-            memory_->ProcessId());
+            attached_pid_);
         ImGui::InputText(
             "PID confirmation",
             write_confirmation_.data(),
@@ -297,10 +538,11 @@ void ProcessMemoryPanel::DrawWriteGateModal() {
         const bool valid = parsed.ec == std::errc{} &&
             parsed.ptr == write_confirmation_.data() +
                 std::strlen(write_confirmation_.data()) &&
-            confirmed == memory_->ProcessId();
+            confirmed == attached_pid_ && !Busy();
         if (!valid) ImGui::BeginDisabled();
         if (ImGui::Button("Arm")) {
             const auto result = memory_->SetWritesArmed(true);
+            if (result) cached_writes_armed_ = true;
             SetStatus(result, "Process writes armed.");
             if (result) ImGui::CloseCurrentPopup();
         }

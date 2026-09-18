@@ -12,12 +12,23 @@ DEFINE_GUID(
 namespace {
 
 static_assert(PAGE_SIZE == KDBG_PROBE_PAGE_SIZE, "Probe ABI page size mismatch");
+constexpr ULONG kContextTag = 'PDBK';
+
+struct FileContext {
+    volatile LONG CleanedUp;
+    PEPROCESS OwnerProcess;
+    ULONG OwnerPid;
+};
 
 struct ProbeState {
     PDEVICE_OBJECT DeviceObject;
     PUCHAR Buffer;
     PHYSICAL_ADDRESS PhysicalAddress;
     FAST_MUTEX BufferLock;
+    FAST_MUTEX OwnerLock;
+    PEPROCESS OwnerProcess;
+    volatile LONG OwnerPid;
+    volatile LONG OpenHandleCount;
     volatile LONG Generation;
 };
 
@@ -28,6 +39,37 @@ NTSTATUS Complete(PIRP irp, NTSTATUS status, ULONG_PTR information = 0) {
     irp->IoStatus.Information = information;
     IoCompleteRequest(irp, IO_NO_INCREMENT);
     return status;
+}
+
+FileContext* GetFileContext(PIRP irp) noexcept {
+    const auto stack = IoGetCurrentIrpStackLocation(irp);
+    return static_cast<FileContext*>(stack->FileObject->FsContext);
+}
+
+bool IsControllerContext(FileContext* context) noexcept {
+    if (context == nullptr ||
+        InterlockedCompareExchange(&context->CleanedUp, 0, 0) != 0) {
+        return false;
+    }
+    return context->OwnerProcess == PsGetCurrentProcess() &&
+        context->OwnerPid == HandleToULong(PsGetCurrentProcessId());
+}
+
+void CleanupFileContext(FileContext* context) noexcept {
+    if (context == nullptr ||
+        InterlockedCompareExchange(&context->CleanedUp, 1, 0) != 0) {
+        return;
+    }
+
+    ExAcquireFastMutex(&g_state.OwnerLock);
+    if (g_state.OpenHandleCount > 0) {
+        --g_state.OpenHandleCount;
+    }
+    if (g_state.OpenHandleCount == 0) {
+        g_state.OwnerPid = 0;
+        g_state.OwnerProcess = nullptr;
+    }
+    ExReleaseFastMutex(&g_state.OwnerLock);
 }
 
 void ResetPattern() {
@@ -54,7 +96,59 @@ NTSTATUS DispatchUnsupported(PDEVICE_OBJECT, PIRP irp) {
     return Complete(irp, STATUS_INVALID_DEVICE_REQUEST);
 }
 
-NTSTATUS DispatchCreateClose(PDEVICE_OBJECT, PIRP irp) {
+NTSTATUS DispatchCreate(PDEVICE_OBJECT, PIRP irp) {
+    const ULONG pid = HandleToULong(PsGetCurrentProcessId());
+    PEPROCESS owner_process = PsGetCurrentProcess();
+    auto* context = static_cast<FileContext*>(ExAllocatePool2(
+        POOL_FLAG_NON_PAGED,
+        sizeof(FileContext),
+        kContextTag));
+    if (context == nullptr) {
+        return Complete(irp, STATUS_INSUFFICIENT_RESOURCES);
+    }
+    RtlZeroMemory(context, sizeof(*context));
+    ObReferenceObject(owner_process);
+    context->OwnerProcess = owner_process;
+    context->OwnerPid = pid;
+
+    NTSTATUS status = STATUS_SUCCESS;
+    ExAcquireFastMutex(&g_state.OwnerLock);
+    if (g_state.OwnerProcess != nullptr &&
+        g_state.OwnerProcess != owner_process) {
+        status = STATUS_SHARING_VIOLATION;
+    } else {
+        g_state.OwnerProcess = owner_process;
+        g_state.OwnerPid = static_cast<LONG>(pid);
+        ++g_state.OpenHandleCount;
+    }
+    ExReleaseFastMutex(&g_state.OwnerLock);
+
+    if (!NT_SUCCESS(status)) {
+        ObDereferenceObject(owner_process);
+        ExFreePoolWithTag(context, kContextTag);
+        return Complete(irp, status);
+    }
+
+    const auto stack = IoGetCurrentIrpStackLocation(irp);
+    stack->FileObject->FsContext = context;
+    return Complete(irp, STATUS_SUCCESS);
+}
+
+NTSTATUS DispatchCleanup(PDEVICE_OBJECT, PIRP irp) {
+    CleanupFileContext(GetFileContext(irp));
+    return Complete(irp, STATUS_SUCCESS);
+}
+
+NTSTATUS DispatchClose(PDEVICE_OBJECT, PIRP irp) {
+    const auto stack = IoGetCurrentIrpStackLocation(irp);
+    auto* context = static_cast<FileContext*>(stack->FileObject->FsContext);
+    if (context != nullptr) {
+        CleanupFileContext(context);
+        ObDereferenceObject(context->OwnerProcess);
+        context->OwnerProcess = nullptr;
+        ExFreePoolWithTag(context, kContextTag);
+        stack->FileObject->FsContext = nullptr;
+    }
     return Complete(irp, STATUS_SUCCESS);
 }
 
@@ -66,6 +160,10 @@ NTSTATUS DispatchDeviceControl(PDEVICE_OBJECT, PIRP irp) {
     const ULONG output_length =
         stack->Parameters.DeviceIoControl.OutputBufferLength;
     auto* buffer = static_cast<UCHAR*>(irp->AssociatedIrp.SystemBuffer);
+
+    if (!IsControllerContext(GetFileContext(irp))) {
+        return Complete(irp, STATUS_ACCESS_DENIED);
+    }
 
     switch (code) {
     case IOCTL_KDBG_PROBE_GET_INFO: {
@@ -158,6 +256,7 @@ extern "C" NTSTATUS DriverEntry(
     UNREFERENCED_PARAMETER(registry_path);
 
     ExInitializeFastMutex(&g_state.BufferLock);
+    ExInitializeFastMutex(&g_state.OwnerLock);
 
     PHYSICAL_ADDRESS low{};
     PHYSICAL_ADDRESS high{};
@@ -178,8 +277,9 @@ extern "C" NTSTATUS DriverEntry(
     for (ULONG index = 0; index <= IRP_MJ_MAXIMUM_FUNCTION; ++index) {
         driver_object->MajorFunction[index] = DispatchUnsupported;
     }
-    driver_object->MajorFunction[IRP_MJ_CREATE] = DispatchCreateClose;
-    driver_object->MajorFunction[IRP_MJ_CLOSE] = DispatchCreateClose;
+    driver_object->MajorFunction[IRP_MJ_CREATE] = DispatchCreate;
+    driver_object->MajorFunction[IRP_MJ_CLEANUP] = DispatchCleanup;
+    driver_object->MajorFunction[IRP_MJ_CLOSE] = DispatchClose;
     driver_object->MajorFunction[IRP_MJ_DEVICE_CONTROL] = DispatchDeviceControl;
     driver_object->DriverUnload = DriverUnload;
 

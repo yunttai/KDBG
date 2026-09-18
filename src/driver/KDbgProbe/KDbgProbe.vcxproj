@@ -19,20 +19,24 @@
     <ConfigurationType>Driver</ConfigurationType><UseDebugLibraries>false</UseDebugLibraries><PlatformToolset>WindowsKernelModeDriver10.0</PlatformToolset><DriverType>WDM</DriverType><TargetVersion>Windows10</TargetVersion><WholeProgramOptimization>true</WholeProgramOptimization>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <PropertyGroup>
+    <KDbgRepositoryRoot Condition="'$(KDbgRepositoryRoot)'==''">$([System.IO.Path]::GetFullPath('$(MSBuildProjectDirectory)\..\..\..'))</KDbgRepositoryRoot>
+  </PropertyGroup>
   <ItemDefinitionGroup>
     <Inf>
       <SpecifyDriverVerDirectiveDate>true</SpecifyDriverVerDirectiveDate>
-      <DateStamp>08/15/2026</DateStamp>
+      <DateStamp>09/18/2026</DateStamp>
       <SpecifyDriverVerDirectiveVersion>true</SpecifyDriverVerDirectiveVersion>
-      <TimeStamp>1.0.0.0</TimeStamp>
+      <TimeStamp>1.1.0.0</TimeStamp>
     </Inf>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup>
-    <ClCompile><WarningLevel>Level4</WarningLevel><TreatWarningAsError>true</TreatWarningAsError><LanguageStandard>stdcpp20</LanguageStandard><ExceptionHandling>false</ExceptionHandling><RuntimeTypeInfo>false</RuntimeTypeInfo><AdditionalIncludeDirectories>$(ProjectDir)..\..\shared;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories></ClCompile>
-    <Link><AdditionalDependencies>Wdmsec.lib;%(AdditionalDependencies)</AdditionalDependencies></Link>
+    <ClCompile><WarningLevel>Level4</WarningLevel><TreatWarningAsError>true</TreatWarningAsError><LanguageStandard>stdcpp20</LanguageStandard><ExceptionHandling>false</ExceptionHandling><RuntimeTypeInfo>false</RuntimeTypeInfo><DebugInformationFormat>OldStyle</DebugInformationFormat><AdditionalIncludeDirectories>$(ProjectDir)..\..\shared;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories><AdditionalOptions>/Z7 /experimental:deterministic &quot;/pathmap:$(KDbgRepositoryRoot)=KDBG_ROOT&quot; %(AdditionalOptions)</AdditionalOptions></ClCompile>
+    <Link><AdditionalDependencies>Wdmsec.lib;%(AdditionalDependencies)</AdditionalDependencies><GenerateDebugInformation>true</GenerateDebugInformation><ProgramDatabaseFile>$(OutDir)$(TargetName).pdb</ProgramDatabaseFile><StripPrivateSymbols>$(OutDir)$(TargetName).public.pdb</StripPrivateSymbols><AdditionalOptions>/Brepro /experimental:deterministic &quot;/pathmap:$(KDbgRepositoryRoot)=KDBG_ROOT&quot; /PDBALTPATH:%_PDB% %(AdditionalOptions)</AdditionalOptions></Link>
     <DriverSign><FileDigestAlgorithm>sha256</FileDigestAlgorithm></DriverSign>
   </ItemDefinitionGroup>
   <ItemGroup><ClCompile Include="Driver.cpp" /></ItemGroup>
+  <ItemGroup><ResourceCompile Include="KDbgProbe.rc" /></ItemGroup>
   <ItemGroup><Inf Include="KDbgProbe.inf" /></ItemGroup>
   <ItemGroup><FilesToPackage Include="$(TargetPath)" /></ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

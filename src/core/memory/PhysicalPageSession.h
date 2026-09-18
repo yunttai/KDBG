@@ -10,6 +10,7 @@
 #include <bitset>
 #include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <memory>
 #include <optional>
 #include <vector>
@@ -48,6 +49,8 @@ struct PhysicalPageEvidence {
 
 class PhysicalPageSession {
 public:
+    static constexpr std::size_t kMaxEditHistory = 4096U;
+
     Result<void> Load(IMemoryBackend& backend, const PfnAddress& address);
     Result<void> ReloadPreservingRollback(IMemoryBackend& backend);
 
@@ -71,6 +74,8 @@ public:
     [[nodiscard]] bool LastApplyVerified() const noexcept;
     [[nodiscard]] bool CanUndo() const noexcept;
     [[nodiscard]] bool CanRedo() const noexcept;
+    [[nodiscard]] std::size_t UndoDepth() const noexcept;
+    [[nodiscard]] std::size_t RedoDepth() const noexcept;
     [[nodiscard]] std::uint64_t Revision() const noexcept;
 
     [[nodiscard]] const PfnAddress& Address() const;
@@ -119,8 +124,8 @@ private:
     std::bitset<kPhysicalPageSize> dirty_{};
     std::vector<std::size_t> last_conflicts_;
     std::vector<std::size_t> last_mismatches_;
-    std::vector<ByteEdit> undo_stack_;
-    std::vector<ByteEdit> redo_stack_;
+    std::deque<ByteEdit> undo_stack_;
+    std::deque<ByteEdit> redo_stack_;
     PageSessionState state_{PageSessionState::Empty};
     bool write_unlocked_{false};
     std::uint64_t revision_{0};

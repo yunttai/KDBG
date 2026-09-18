@@ -146,6 +146,54 @@ bool ByteEqual(
         std::equal(left.begin(), left.end(), right.begin());
 }
 
+std::uint8_t FoldAscii(std::uint8_t value) noexcept {
+    return value >= static_cast<std::uint8_t>('A') &&
+            value <= static_cast<std::uint8_t>('Z')
+        ? static_cast<std::uint8_t>(
+            value + static_cast<std::uint8_t>('a' - 'A'))
+        : value;
+}
+
+bool TextEqual(
+    ScanValueType type,
+    std::span<const std::uint8_t> left,
+    std::span<const std::uint8_t> right,
+    bool case_sensitive) noexcept {
+    if (case_sensitive || left.size() != right.size()) {
+        return ByteEqual(left, right);
+    }
+    if (type == ScanValueType::Utf8) {
+        return std::equal(
+            left.begin(),
+            left.end(),
+            right.begin(),
+            [](std::uint8_t lhs, std::uint8_t rhs) {
+                return FoldAscii(lhs) == FoldAscii(rhs);
+            });
+    }
+    if (type != ScanValueType::Utf16 || (left.size() % 2U) != 0U) {
+        return false;
+    }
+    for (std::size_t offset = 0; offset < left.size(); offset += 2U) {
+        const auto lhs = static_cast<std::uint16_t>(left[offset]) |
+            (static_cast<std::uint16_t>(left[offset + 1U]) << 8U);
+        const auto rhs = static_cast<std::uint16_t>(right[offset]) |
+            (static_cast<std::uint16_t>(right[offset + 1U]) << 8U);
+        const auto folded_lhs = lhs >= static_cast<std::uint16_t>(u'A') &&
+                lhs <= static_cast<std::uint16_t>(u'Z')
+            ? static_cast<std::uint16_t>(lhs + (u'a' - u'A'))
+            : lhs;
+        const auto folded_rhs = rhs >= static_cast<std::uint16_t>(u'A') &&
+                rhs <= static_cast<std::uint16_t>(u'Z')
+            ? static_cast<std::uint16_t>(rhs + (u'a' - u'A'))
+            : rhs;
+        if (folded_lhs != folded_rhs) {
+            return false;
+        }
+    }
+    return true;
+}
+
 template <typename T>
 T Load(std::span<const std::uint8_t> bytes) noexcept {
     T value{};
@@ -392,6 +440,19 @@ Result<CompiledScanQuery> CompileScanQuery(const ScanQuery& query) {
         query.comparison == ScanCompare::Increased ||
         query.comparison == ScanCompare::Decreased;
 
+    const bool text_type = query.type == ScanValueType::Utf8 ||
+        query.type == ScanValueType::Utf16;
+    if (text_type && query.comparison != ScanCompare::Exact &&
+        query.comparison != ScanCompare::NotEqual &&
+        query.comparison != ScanCompare::Changed &&
+        query.comparison != ScanCompare::Unchanged &&
+        query.comparison != ScanCompare::UnknownInitial) {
+        return Result<CompiledScanQuery>::Failure(MakeError(
+            ErrorCode::InvalidArgument,
+            "Text scans support exact/not-equal/changed/unchanged/unknown-initial comparisons",
+            "CompileScanQuery"));
+    }
+
     if (query.type == ScanValueType::ByteArray) {
         if (query.comparison != ScanCompare::Exact &&
             query.comparison != ScanCompare::NotEqual &&
@@ -461,7 +522,11 @@ bool MatchInitialValue(
     }
     if (query.query.type == ScanValueType::Utf8 ||
         query.query.type == ScanValueType::Utf16) {
-        bool match = ByteEqual(current.first(query.width), query.first);
+        const bool match = TextEqual(
+            query.query.type,
+            current.first(query.width),
+            query.first,
+            query.query.case_sensitive);
         return query.query.comparison == ScanCompare::NotEqual ? !match : match;
     }
     return MatchByTypeInitial(query, current.first(query.width));
@@ -481,10 +546,18 @@ bool MatchNextValue(
         case ScanCompare::Unchanged: return !changed;
         case ScanCompare::Exact:
             if (query.query.type == ScanValueType::ByteArray) return query.aob.Matches(current.first(query.width));
-            return ByteEqual(current.first(query.width), query.first);
+            return TextEqual(
+                query.query.type,
+                current.first(query.width),
+                query.first,
+                query.query.case_sensitive);
         case ScanCompare::NotEqual:
             if (query.query.type == ScanValueType::ByteArray) return !query.aob.Matches(current.first(query.width));
-            return !ByteEqual(current.first(query.width), query.first);
+            return !TextEqual(
+                query.query.type,
+                current.first(query.width),
+                query.first,
+                query.query.case_sensitive);
         default: return false;
         }
     }

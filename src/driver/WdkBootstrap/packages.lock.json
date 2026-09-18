@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "dependencies": {
+    "net8.0": {
+      "Microsoft.Windows.WDK.x64": {
+        "type": "Direct",
+        "requested": "[10.0.26100.2454]",
+        "resolved": "10.0.26100.2454",
+        "contentHash": "qeVL585WJBWLiLQKdVsRtpBI9RWFjAh5XxtjmgzoT5BHZ4ySaLBebIXUVcMrFvvbSRHF9la/0Vwq5N/dwuE4Pg==",
+        "dependencies": {
+          "Microsoft.Windows.SDK.cpp.x64": "[10.0.26100.2454]"
+        }
+      },
+      "Microsoft.Windows.SDK.CPP": {
+        "type": "Transitive",
+        "resolved": "10.0.26100.2454",
+        "contentHash": "lDe+Y+HRdOLooeeET4Nl7niIkI2DPtL2BoHrTxm1S927AsHa81ZoGsqt5dH1jVxDP8PvJxZF7N9/YttnpKzt4w=="
+      },
+      "Microsoft.Windows.SDK.CPP.x64": {
+        "type": "Transitive",
+        "resolved": "10.0.26100.2454",
+        "contentHash": "Vca1vfEgDpQf3eqzAbm2oZwssV4IKab3ERA/9x7dlpb/edccUerLMSDJCZWGXdsIw7mDEaSffhxK3ol/PtOhyg==",
+        "dependencies": {
+          "Microsoft.Windows.SDK.cpp": "[10.0.26100.2454]"
+        }
+      }
+    }
+  }
+}

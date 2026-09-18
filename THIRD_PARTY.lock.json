@@ -85,6 +85,15 @@
       "license": "reference-only; no source consumed",
       "use": "scan/address-list/pointer/disassembly workflow reference",
       "integration": "independent implementation"
+    },
+    {
+      "name": "Microsoft.Windows.WDK.x64",
+      "url": "https://www.nuget.org/packages/Microsoft.Windows.WDK.x64/10.0.26100.2454",
+      "revision": "10.0.26100.2454",
+      "sha512": "zzOYh91xa827HWByuF5KEXpb92/oJSa9l8bRkRnq9Da6ljwFDGHDFU/JTfPlc/UyIT7ZOiohC3mLBTIuIYMTQA==",
+      "license": "Microsoft pre-release software license terms",
+      "use": "build-only x64 WDK headers, libraries, and Inf2Cat fallback",
+      "integration": "locked NuGet restore; never redistributed in KDBG packages"
     }
   ]
 }

@@ -67,6 +67,9 @@ Result<std::uint32_t> MockProcessMemory::Write(
             "Mock process writes are not armed",
             "MockProcessMemory::Write"));
     }
+    // Match the production process-write contract: one arm authorizes one
+    // attempted write only, including malformed or out-of-range requests.
+    writes_armed_ = false;
     if (data.empty() || address < base_) {
         return Result<std::uint32_t>::Failure(MakeError(
             ErrorCode::InvalidArgument,

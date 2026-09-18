@@ -1,8 +1,8 @@
 # KDBG
 
-KDBG는 Windows 10/11 x64 과제용 가상 머신에서 동작하는 GUI 기반 커널·메모리 연구 도구다. 핵심 기능은 PFN(Page Frame Number)을 입력해 해당 4 KiB 물리 페이지를 읽고, Hex Editor에서 로컬 편집한 뒤, 충돌 검사와 전체 페이지 read-back 검증을 거쳐 실제 물리 메모리에 반영하는 것이다.
+KDBG는 Windows 10 build 19041+/Windows 11 x64에서 동작하는 고성능 커널 메모리 디버깅·편집 워크벤치다. PFN(Page Frame Number), 프로세스 VA, PTE와 페이지 테이블을 한 작업공간에서 연결하고, 4 KiB 물리 페이지를 읽어 Hex Editor에서 편집한 뒤 충돌 검사, 전체 페이지 read-back과 rollback까지 하나의 트랜잭션으로 처리한다.
 
-과제 가산점과 분석 편의 기능을 위해 다음 기능도 하나의 프로그램에 통합했다.
+커널 메모리의 탐색, 귀속 분석, 편집과 재현 가능한 증거 수집을 위해 다음 기능을 하나의 프로그램에 통합했다.
 
 - PFN → PID/프로세스/VA/PTE 분석
 - PML5/PML4/PDPT/PD/PT 시각화와 VA → PA 변환
@@ -12,6 +12,9 @@ KDBG는 Windows 10/11 x64 과제용 가상 머신에서 동작하는 GUI 기반 
 - 다단계 Pointer Scan
 - Zydis 기반 x64 디스어셈블리
 - 비동기 메모리 Snapshot, CRC32, 저장/불러오기, Diff
+- 관리자 권한 `KDBGSetup.exe`의 Install/Repair/Update/Uninstall, Program Files
+  트랜잭션과 Windows 앱 제거 등록
+- opt-in 로컬 runtime JSON의 scan region/byte/I/O/cancellation 및 GUI frame-stall 계측
 
 > 사용 범위는 본인이 관리하는 스냅샷 가능한 실습 VM이다. KDBG는 Code Integrity 우회, 취약 드라이버 로딩, 은닉, 안티치트 우회, 프로세스 주입, 임의 커널 가상주소 쓰기를 구현하지 않는다.
 
@@ -32,7 +35,7 @@ KDBG는 Windows 10/11 x64 과제용 가상 머신에서 동작하는 GUI 기반 
 
 `KDbgProbe.sys`는 시연용으로 알려진 4 KiB contiguous page의 VA, PA, PFN, CRC32를 제공한다. 임의 시스템 페이지 대신 이 fixture를 사용한다.
 
-### Cheat Engine 계열 분석 기능
+### 고속 메모리 분석 기능
 
 - 데이터 형식: signed/unsigned 8·16·32·64비트, float, double, UTF-8, UTF-16, AOB wildcard
 - 비교: Exact, Not Equal, Greater/Less, Between, Unknown Initial, Changed/Unchanged, Increased/Decreased, Increased By/Decreased By
@@ -42,7 +45,7 @@ KDBG는 Windows 10/11 x64 과제용 가상 머신에서 동작하는 GUI 기반 
 - Disassembler: Zydis long-mode decoder와 Intel formatter
 - Snapshot: cancellable worker, 최대 512 MiB UI 제한, CRC32, `.kdbgmem`, contiguous changed-run Diff
 
-KDBG의 고도화 범위는 메모리 관찰·검색·검증형 수정이다. debugger breakpoint, code injection, anti-debug 우회, driver exploit 기능은 범위 밖이다.
+현재 구현은 메모리 관찰·검색·귀속 분석·검증형 수정에 집중한다. 커널 모듈/로컬 심볼/디스어셈블리 계층을 확장 중이며, breakpoint·register·single-step 실행 제어가 구현되기 전에는 이를 완전한 execution debugger로 표시하지 않는다. Code injection, anti-debug 우회와 driver exploit은 제품 범위가 아니다.
 
 ## Codex 전용 구성
 
@@ -108,7 +111,7 @@ Pop-Location
 python .\src\tools\validate_release.py --source-complete
 ```
 
-Portable suite는 PFN/ABI 계산, x64/LA57 page walk, 4 KiB physical transaction, process identity/transaction, scanner/AOB, load-disarmed Freeze, bounded pointer path, snapshot, MemProcFS protocol과 PFN reverse mapping을 검사한다. 2026-08-23 최종 실행은 707 checks, 0 failures였고 Clang Debug/Release, ASan/UBSan, clang-tidy, MSVC `/analyze`도 통과했다. 실제 MSVC GUI/bridge와 WDK Debug/Release 바이너리 결과는 `docs/VALIDATION_REPORT.md`에 기록한다.
+Portable suite는 PFN/ABI 계산, x64/LA57 page walk, 4 KiB physical transaction, process identity/transaction, scanner/AOB, load-disarmed Freeze, bounded pointer path, snapshot, MemProcFS protocol, PFN reverse mapping, Kernel Explorer 입력 계약과 runtime telemetry를 검사한다. 2026-09-17 현재 실행은 `1771 checks, 0 failures`이며 GNU core와 MSVC Debug/Release/`/analyze` CTest는 각각 7/7 통과했다. 현재 MinGW 배포에는 sanitizer runtime이 없어 sanitizer gate는 통과로 주장하지 않는다. 두 WDK 드라이버는 hash-locked NuGet WDK offline fallback으로 Debug/Release 빌드와 Inf2Cat signability 검사를 통과했다. 실제 결과와 과거 기록의 경계는 `docs/VALIDATION_REPORT.md`에 기록한다.
 
 ## Windows 빌드
 
@@ -116,8 +119,11 @@ Portable suite는 PFN/ABI 계산, x64/LA57 page walk, 4 KiB physical transaction
 
 - Visual Studio 2022 C++ Desktop workload
 - Windows 10/11 SDK
-- Windows Driver Kit
+- Windows Driver Kit 또는 repository가 고정한 NuGet WDK offline cache
 - CMake 3.25 이상, Ninja, Git
+
+배포되는 user-mode 실행 파일은 MSVC 런타임을 정적 링크하므로 대상 VM에
+별도의 Visual C++ Redistributable 설치가 필요하지 않다.
 
 ```powershell
 # GUI + native MemProcFS bridge + portable tests
@@ -144,20 +150,34 @@ VM에서 서비스 관리:
 
 ## 검증 Gate
 
+현재 저장소 버전은 **1.1.0**이다. 아래 표에서 `PENDING REBIND`는 구현 실패가
+아니라, 버전 변경 후 생성할 정확한 1.1.0 package/hash/live evidence가 아직 이
+문서에 결속되지 않았다는 뜻이다. 1.0.0 실행 결과는 역사 증거로만 유지한다.
+
 | Gate | 의미 | 현재 이 산출물에서 확인된 상태 |
 |---|---|---|
 | Source-complete | 기능 소스, Codex 구성, portable tests, 문서 정합성 | PASS |
-| Windows-source-audited | `_WIN32`/WDK API-surface 정적 컴파일 | PASS |
-| Windows-build-verified | GUI, native bridge, 두 WDK 프로젝트를 Windows에서 실제 빌드 | PASS — MSVC Debug/Release/`/analyze`, WDK Debug/Release |
-| VM prerequisites | 기존 `Windows-VM` checkpoint, Administrator, test-signing 확인 | PASS |
-| Final Release package | `kdbg.source-snapshot.v1`, main/symbol validators, 동일 입력 ZIP 재현성, 5/5 negative fixtures | PASS — exact identity는 외부 release manifest 참조 |
-| Interim physical transaction | ABI 6, Probe Read/Edit/Write/Read-back/Reload/Rollback, 종료 gate lock | PASS — ZIP `DADF43AA...`, final package 증거 아님 |
-| Candidate advanced read-only | ZIP `D3390AD4...`, Probe query, process scan, built-in PFN reverse map, VA→PA, pointer/disassembly/snapshot | PASS — write/freeze 미실행 |
-| Final Release read-only/lifecycle Live VM | exact deploy/hash binding, device/main ABI 6, fresh Probe query, 4 KiB read, invalid IOCTL rejection, stop/remove | PASS — physical writes 0 |
-| Optional MemProcFS runtime | 격리 bridge의 실제 `vmm.dll` 로드 | BLOCKED — Win32 error 126 |
-| Final write-sensitive/v2 | physical write, process write/Freeze, Driver Verifier, hash-bound v2 | BLOCKED — final physical write `NOT_RUN` |
+| Windows user-mode analyzed | `_WIN32` GUI/backend/bridge/tests MSVC `/analyze` | PASS |
+| MSVC user-mode | GUI, native bridge와 tests를 Windows에서 실제 빌드 | PENDING REBIND — 1.1.0 clean Release build/CTest 결과와 build ID를 기록해야 함 |
+| Windows-build-verified | MSVC 산출물과 WDK package inputs를 같은 candidate에서 실제 빌드 | PENDING REBIND — 1.1.0 main/symbol package validator와 정확한 hashes를 기록해야 함 |
+| Release package | main/symbol package, hashes, SBOM, setup/lifecycle tools와 원자적 publish | PENDING REBIND — 1.1.0 package/source snapshot identity 미기록 |
+| Commercial operations docs | security/support/privacy/license/update/vulnerability/release notes | PASS (configured contract) — support/security routes configured; notification/acknowledgement evidence pending |
+| Live device/runtime | exact package install, ABI 6, Probe physical transaction, cleanup | PENDING REBIND — 1.1.0 exact test-signed ZIP으로 재실행해야 함; 1.0.0 Win11 결과는 역사 증거 |
+| Live VM evidence | PFN discovery/read/edit/diff/unlock/apply/read-back, ownership/PTView, MP4 | PENDING REBIND — 최종 1.1.0 MP4/hash와 exact-package evidence를 기록해야 함 |
+| Windows 11 readiness/live | static workspace, readiness, required-core, extended lifecycle/soak | PENDING REBIND — 1.1.0 exact-package run/archive hash 미기록 |
+| Commercial release | production trust, operational acknowledgement, supported-platform validation | BLOCKED — production signer/TSA/returned signed drivers와 route notification/ack evidence가 없음. VM 전용 test trust는 production trust를 대체하지 않음 |
+| Optional MemProcFS runtime | 격리 bridge의 실제 `vmm.dll`/acquisition backend | UNVERIFIED — helper-process 회귀만 PASS |
 
-정확한 package identity는 `out/evidence/final-live-manifest.json`과
-`out/evidence/RELEASE-HASHES.txt`가 authoritative binding이다. 상태와 명령은
+과거 1.0.0 candidate의 상세 결과는 `docs/VALIDATION_REPORT.md`의
+`ARCHIVED / HISTORICAL` 절에 보존한다. 현재 상태와 재현 명령은
 `docs/IMPLEMENTATION_STATUS.md`, `docs/VALIDATION_REPORT.md`,
 `docs/exec-plans/STATUS.md`에 기록한다.
+
+현재 release target은 `1.1.0`이다. Main/symbol ZIP SHA-256과 source identity는
+새 package가 생성된 뒤 epoch-local sidecar와 packaged `BUILD-METADATA.json`에서
+채운다. Windows 10 build 19044 final v4 `fc0afb4b…9823`, archive
+`438881e7…a18e3`, 그리고 과거 `product-rc1/test2` 기록은 모두 1.0.0 역사
+증거이며 1.1.0에 재결속하지 않는다.
+
+DEF CON 제안서 초안, 발표 구조, 라이브 데모 복구 경로와 현재 증거 경계는
+[`docs/DEFCON_SUBMISSION.md`](docs/DEFCON_SUBMISSION.md)에 정리되어 있다.

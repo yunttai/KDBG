@@ -4,14 +4,35 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cstring>
 #include <fstream>
 #include <limits>
+
+#if defined(_WIN32)
+#include <process.h>
+#include <windows.h>
+#else
+#include <fcntl.h>
+#include <unistd.h>
+#endif
 
 namespace kdbg {
 namespace {
 
 #pragma pack(push, 1)
+struct WatchFilePrefix {
+    char magic[8];
+    std::uint32_t version;
+};
+
+struct LegacyWatchFileHeader {
+    char magic[8];
+    std::uint32_t version;
+    std::uint32_t pid;
+    std::uint64_t entry_count;
+};
+
 struct WatchFileHeader {
     char magic[8];
     std::uint32_t version;
@@ -29,17 +50,156 @@ struct WatchFileEntryHeader {
 };
 #pragma pack(pop)
 
+static_assert(sizeof(WatchFilePrefix) == 12);
+static_assert(sizeof(LegacyWatchFileHeader) == 24);
 static_assert(sizeof(WatchFileHeader) == 32);
 static_assert(sizeof(WatchFileEntryHeader) == 24);
 
 constexpr std::array<char, 8> kWatchMagic{
     'K', 'D', 'B', 'G', 'A', 'L', '\0', '\0'};
+constexpr std::uint32_t kLegacyWatchVersion = 1;
 constexpr std::uint32_t kWatchVersion = 2;
 constexpr std::uint32_t kWatchFlagHexadecimal = 1U << 0U;
 constexpr std::uint32_t kWatchFlagWasFrozen = 1U << 1U;
 constexpr std::uint64_t kMaxPersistedEntries = 100'000;
 constexpr std::uint32_t kMaxDescriptionBytes = 4096U;
 constexpr std::uintmax_t kMaxWatchFileBytes = 64ULL * 1024ULL * 1024ULL;
+
+class ProcessWriteArmGuard {
+public:
+    ProcessWriteArmGuard(IProcessMemory& memory, bool armed)
+        : memory_(memory), armed_(armed) {}
+
+    Result<void> Disarm() {
+        if (!armed_) return Result<void>::Success();
+        auto result = memory_.SetWritesArmed(false);
+        if (result) {
+            armed_ = false;
+            return result;
+        }
+        const auto retry = memory_.SetWritesArmed(false);
+        if (retry) {
+            armed_ = false;
+            auto error = result.GetError();
+            error.message +=
+                "; a cleanup retry locked the gate, but the transaction is failed";
+            return Result<void>::Failure(std::move(error));
+        }
+        auto error = result.GetError();
+        error.message += "; cleanup retry also failed: " +
+            retry.GetError().message;
+        return Result<void>::Failure(std::move(error));
+    }
+
+    ~ProcessWriteArmGuard() {
+        if (armed_) static_cast<void>(memory_.SetWritesArmed(false));
+    }
+
+    ProcessWriteArmGuard(const ProcessWriteArmGuard&) = delete;
+    ProcessWriteArmGuard& operator=(const ProcessWriteArmGuard&) = delete;
+
+private:
+    IProcessMemory& memory_;
+    bool armed_{false};
+};
+
+std::filesystem::path TemporarySibling(
+    const std::filesystem::path& destination) {
+    static std::atomic<std::uint64_t> sequence{0};
+#if defined(_WIN32)
+    const auto pid = static_cast<std::uint64_t>(_getpid());
+#else
+    const auto pid = static_cast<std::uint64_t>(getpid());
+#endif
+    auto parent = destination.parent_path();
+    if (parent.empty()) parent = std::filesystem::path{"."};
+    for (;;) {
+        const auto ordinal = sequence.fetch_add(1, std::memory_order_relaxed);
+        const auto candidate = parent /
+            (destination.filename().string() + ".kdbg-tmp-" +
+             std::to_string(pid) + '-' + std::to_string(ordinal));
+        std::error_code error;
+        if (!std::filesystem::exists(candidate, error)) return candidate;
+    }
+}
+
+Result<void> FlushFileToDisk(
+    const std::filesystem::path& path,
+    std::string_view operation) {
+#if defined(_WIN32)
+    const auto handle = ::CreateFileW(
+        path.c_str(),
+        GENERIC_WRITE,
+        FILE_SHARE_READ,
+        nullptr,
+        OPEN_EXISTING,
+        FILE_ATTRIBUTE_NORMAL,
+        nullptr);
+    if (handle == INVALID_HANDLE_VALUE) {
+        return Result<void>::Failure(MakeError(
+            ErrorCode::IoFailure,
+            "Unable to reopen the temporary address-list file for flush",
+            std::string(operation),
+            ::GetLastError()));
+    }
+    const bool flushed = ::FlushFileBuffers(handle) != FALSE;
+    const auto error = flushed ? ERROR_SUCCESS : ::GetLastError();
+    ::CloseHandle(handle);
+    if (!flushed) {
+        return Result<void>::Failure(MakeError(
+            ErrorCode::IoFailure,
+            "Unable to flush the temporary address-list file to disk",
+            std::string(operation),
+            error));
+    }
+#else
+    const int descriptor = ::open(path.c_str(), O_RDONLY);
+    if (descriptor < 0) {
+        return Result<void>::Failure(MakeError(
+            ErrorCode::IoFailure,
+            "Unable to reopen the temporary address-list file for flush",
+            std::string(operation)));
+    }
+    const bool flushed = ::fsync(descriptor) == 0;
+    ::close(descriptor);
+    if (!flushed) {
+        return Result<void>::Failure(MakeError(
+            ErrorCode::IoFailure,
+            "Unable to flush the temporary address-list file to disk",
+            std::string(operation)));
+    }
+#endif
+    return Result<void>::Success();
+}
+
+Result<void> ReplaceAtomically(
+    const std::filesystem::path& temporary,
+    const std::filesystem::path& destination,
+    std::string_view operation) {
+#if defined(_WIN32)
+    if (::MoveFileExW(
+            temporary.c_str(),
+            destination.c_str(),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) == FALSE) {
+        return Result<void>::Failure(MakeError(
+            ErrorCode::IoFailure,
+            "Unable to atomically replace the address-list file",
+            std::string(operation),
+            ::GetLastError()));
+    }
+#else
+    std::error_code error;
+    std::filesystem::rename(temporary, destination, error);
+    if (error) {
+        return Result<void>::Failure(MakeError(
+            ErrorCode::IoFailure,
+            "Unable to atomically replace the address-list file",
+            std::string(operation),
+            static_cast<std::uint64_t>(error.value())));
+    }
+#endif
+    return Result<void>::Success();
+}
 
 Result<void> FileFailure(std::string message, const char* operation) {
     return Result<void>::Failure(MakeError(
@@ -151,79 +311,110 @@ Result<void> WatchList::Refresh() {
 Result<void> WatchList::WriteValue(
     std::uint64_t id,
     std::string_view value_text) {
+    const bool writes_armed = memory_.WritesArmed();
+    ProcessWriteArmGuard arm_guard(memory_, writes_armed);
+    auto finish = [&](Result<void> outcome) -> Result<void> {
+        const auto disarm = arm_guard.Disarm();
+        return disarm ? outcome : Result<void>::Failure(disarm.GetError());
+    };
     auto* entry = Find(id);
     if (entry == nullptr) {
-        return Result<void>::Failure(MakeError(
+        return finish(Result<void>::Failure(MakeError(
             ErrorCode::NotFound,
             "Watch entry was not found",
-            "WatchList::WriteValue"));
+            "WatchList::WriteValue")));
     }
     const auto encoded = EncodeValue(
         entry->type,
         value_text,
         entry->hexadecimal);
     if (!encoded) {
-        return Result<void>::Failure(encoded.GetError());
+        return finish(Result<void>::Failure(encoded.GetError()));
     }
-    if (!memory_.WritesArmed()) {
-        return Result<void>::Failure(MakeError(
+    if (!writes_armed) {
+        return finish(Result<void>::Failure(MakeError(
             ErrorCode::WriteLocked,
             "Arm process writes before editing an address-list value",
-            "WatchList::WriteValue"));
+            "WatchList::WriteValue")));
     }
     const auto before = memory_.Read(
         entry->address,
         static_cast<std::uint32_t>(encoded.Value().size()));
     if (!before) {
         entry->last_error = before.GetError().message;
-        return Result<void>::Failure(before.GetError());
+        return finish(Result<void>::Failure(before.GetError()));
     }
     if (before.Value().size() != entry->value.size()) {
         entry->last_error = "Address-list preflight returned a short read";
-        return Result<void>::Failure(MakeError(
+        return finish(Result<void>::Failure(MakeError(
             ErrorCode::ShortRead,
             entry->last_error,
             "WatchList::WriteValue",
             0,
             entry->value.size(),
-            before.Value().size()));
+            before.Value().size())));
     }
     if (before.Value() != entry->value) {
         entry->last_error =
             "Value changed after it was presented; refresh before writing";
-        return Result<void>::Failure(MakeError(
+        return finish(Result<void>::Failure(MakeError(
             ErrorCode::ConcurrentModification,
             entry->last_error,
-            "WatchList::WriteValue"));
+            "WatchList::WriteValue")));
     }
     const auto written = memory_.Write(entry->address, encoded.Value());
     if (!written) {
-        return Result<void>::Failure(written.GetError());
+        entry->last_error = written.GetError().message;
+        return finish(Result<void>::Failure(written.GetError()));
     }
     if (written.Value() != encoded.Value().size()) {
-        return Result<void>::Failure(MakeError(
+        entry->last_error = "Watch value write was incomplete";
+        return finish(Result<void>::Failure(MakeError(
             ErrorCode::ShortWrite,
-            "Watch value write was incomplete",
+            entry->last_error,
             "WatchList::WriteValue",
             0,
             encoded.Value().size(),
-            written.Value()));
+            written.Value())));
     }
+    const auto disarm = arm_guard.Disarm();
     const auto readback = memory_.Read(
         entry->address,
         static_cast<std::uint32_t>(encoded.Value().size()));
-    if (!readback || readback.Value() != encoded.Value()) {
-        return Result<void>::Failure(MakeError(
+    if (!readback) {
+        entry->last_error = readback.GetError().message;
+        return disarm
+            ? Result<void>::Failure(readback.GetError())
+            : Result<void>::Failure(disarm.GetError());
+    }
+    if (readback.Value().size() != encoded.Value().size()) {
+        entry->last_error = "Watch value read-back returned a short read";
+        return disarm
+            ? Result<void>::Failure(MakeError(
+                ErrorCode::ShortRead,
+                entry->last_error,
+                "WatchList::WriteValue",
+                0,
+                encoded.Value().size(),
+                readback.Value().size()))
+            : Result<void>::Failure(disarm.GetError());
+    }
+    if (readback.Value() != encoded.Value()) {
+        entry->last_error = "Watch value read-back verification failed";
+        return disarm
+            ? Result<void>::Failure(MakeError(
             ErrorCode::VerificationMismatch,
-            "Watch value read-back verification failed",
-            "WatchList::WriteValue"));
+            entry->last_error,
+            "WatchList::WriteValue"))
+            : Result<void>::Failure(disarm.GetError());
     }
     entry->value = readback.Value();
     if (entry->frozen) {
         entry->frozen_value = entry->value;
     }
     entry->last_error.clear();
-    return Result<void>::Success();
+    return disarm ? Result<void>::Success()
+                  : Result<void>::Failure(disarm.GetError());
 }
 
 Result<void> WatchList::SetFrozen(std::uint64_t id, bool frozen) {
@@ -246,16 +437,30 @@ Result<void> WatchList::SetFrozen(std::uint64_t id, bool frozen) {
 }
 
 Result<void> WatchList::FreezeTick() {
-    std::size_t failures = 0;
-    for (auto& entry : entries_) {
-        if (!entry.frozen) {
-            continue;
-        }
-        if (!memory_.WritesArmed()) {
-            return Result<void>::Failure(MakeError(
+    const bool writes_armed = memory_.WritesArmed();
+    ProcessWriteArmGuard arm_guard(memory_, writes_armed);
+    auto finish = [&](Result<void> outcome) -> Result<void> {
+        const auto disarm = arm_guard.Disarm();
+        return disarm ? outcome : Result<void>::Failure(disarm.GetError());
+    };
+    if (!writes_armed) {
+        const bool any_frozen = std::any_of(
+            entries_.begin(),
+            entries_.end(),
+            [](const WatchEntry& entry) { return entry.frozen; });
+        if (any_frozen) {
+            return finish(Result<void>::Failure(MakeError(
                 ErrorCode::WriteLocked,
                 "Process write gate was closed while frozen entries were active",
-                "WatchList::FreezeTick"));
+                "WatchList::FreezeTick")));
+        }
+        return finish(Result<void>::Success());
+    }
+    std::size_t failures = 0;
+    for (std::size_t index = 0; index < entries_.size(); ++index) {
+        auto& entry = entries_[index];
+        if (!entry.frozen) {
+            continue;
         }
         const auto width = FixedValueWidth(entry.type);
         if (width == 0 || entry.frozen_value.size() != width) {
@@ -263,27 +468,79 @@ Result<void> WatchList::FreezeTick() {
             ++failures;
             continue;
         }
+        const auto before = memory_.Read(
+            entry.address,
+            static_cast<std::uint32_t>(width));
+        if (!before || before.Value().size() != width) {
+            entry.last_error = before
+                ? "Freeze preflight returned a short read"
+                : before.GetError().message;
+            ++failures;
+            continue;
+        }
+        const auto expected_before = memory_.Read(
+            entry.address,
+            static_cast<std::uint32_t>(width));
+        if (!expected_before || expected_before.Value().size() != width) {
+            entry.last_error = expected_before
+                ? "Freeze expected-before read was incomplete"
+                : expected_before.GetError().message;
+            ++failures;
+            continue;
+        }
+        if (expected_before.Value() != before.Value()) {
+            entry.last_error =
+                "Value changed during freeze preflight; no write was attempted";
+            ++failures;
+            continue;
+        }
+        // The initial user arm authorizes this tick. Each actual write still
+        // gets a fresh one-shot backend arm so multi-entry Freeze behaves the
+        // same through direct Win32 access and the KDBG driver fallback.
+        const auto armed = memory_.SetWritesArmed(true);
+        if (!armed) {
+            entry.last_error = armed.GetError().message;
+            ++failures;
+            continue;
+        }
+        ProcessWriteArmGuard write_guard(memory_, true);
         const auto written = memory_.Write(entry.address, entry.frozen_value);
+        const auto disarm = write_guard.Disarm();
         if (!written || written.Value() != entry.frozen_value.size()) {
             entry.last_error = written
                 ? "Freeze write was incomplete"
                 : written.GetError().message;
             ++failures;
+            if (!disarm) return finish(Result<void>::Failure(disarm.GetError()));
             continue;
         }
         const auto readback = memory_.Read(
             entry.address,
             static_cast<std::uint32_t>(entry.frozen_value.size()));
-        if (!readback || readback.Value() != entry.frozen_value) {
-            entry.last_error = readback
-                ? "Freeze read-back verification failed"
-                : readback.GetError().message;
+        if (!readback) {
+            entry.last_error = readback.GetError().message;
             ++failures;
+            if (!disarm) return finish(Result<void>::Failure(disarm.GetError()));
+            continue;
+        }
+        if (readback.Value().size() != entry.frozen_value.size()) {
+            entry.last_error = "Freeze read-back returned a short read";
+            ++failures;
+            if (!disarm) return finish(Result<void>::Failure(disarm.GetError()));
+            continue;
+        }
+        if (readback.Value() != entry.frozen_value) {
+            entry.last_error = "Freeze read-back verification failed";
+            ++failures;
+            if (!disarm) return finish(Result<void>::Failure(disarm.GetError()));
             continue;
         }
         entry.value = readback.Value();
         entry.last_error.clear();
+        if (!disarm) return finish(Result<void>::Failure(disarm.GetError()));
     }
+    const auto disarm = arm_guard.Disarm();
+    if (!disarm) return Result<void>::Failure(disarm.GetError());
     if (failures != 0) {
         return Result<void>::Failure(MakeError(
             ErrorCode::VerificationMismatch,
@@ -296,7 +553,9 @@ Result<void> WatchList::FreezeTick() {
     return Result<void>::Success();
 }
 
-Result<void> WatchList::Save(const std::filesystem::path& path) const {
+Result<void> WatchList::Save(
+    const std::filesystem::path& path,
+    WatchListSaveFault fault) const {
     if (entries_.size() > kMaxPersistedEntries) {
         return Result<void>::Failure(MakeError(
             ErrorCode::LimitReached,
@@ -307,7 +566,40 @@ Result<void> WatchList::Save(const std::filesystem::path& path) const {
             entries_.size()));
     }
 
-    std::ofstream output(path, std::ios::binary | std::ios::trunc);
+    if (path.empty() || path.filename().empty()) {
+        return Result<void>::Failure(MakeError(
+            ErrorCode::InvalidArgument,
+            "Address-list destination path is invalid",
+            "WatchList::Save"));
+    }
+    for (const auto& entry : entries_) {
+        const auto width = FixedValueWidth(entry.type);
+        const auto frozen_bytes = entry.frozen ? entry.frozen_value.size() : 0U;
+        if (entry.address == 0 || width == 0 ||
+            entry.address > std::numeric_limits<std::uint64_t>::max() - width ||
+            entry.description.size() > kMaxDescriptionBytes ||
+            entry.description.size() > std::numeric_limits<std::uint32_t>::max() ||
+            (entry.frozen && frozen_bytes != width)) {
+            return Result<void>::Failure(MakeError(
+                ErrorCode::InvalidArgument,
+                "Address-list entry is not persistable",
+                "WatchList::Save"));
+        }
+    }
+
+    const auto temporary = TemporarySibling(path);
+    struct TemporaryCleanup {
+        std::filesystem::path path;
+        bool committed{false};
+        ~TemporaryCleanup() {
+            if (!committed) {
+                std::error_code ignored_error;
+                std::filesystem::remove(path, ignored_error);
+            }
+        }
+    } cleanup{temporary};
+
+    std::ofstream output(temporary, std::ios::binary | std::ios::trunc);
     if (!output) {
         return FileFailure("Unable to create address-list file", "WatchList::Save");
     }
@@ -326,22 +618,7 @@ Result<void> WatchList::Save(const std::filesystem::path& path) const {
     }
 
     for (const auto& entry : entries_) {
-        const auto width = FixedValueWidth(entry.type);
-        if (width == 0 ||
-            entry.description.size() > kMaxDescriptionBytes ||
-            entry.description.size() > std::numeric_limits<std::uint32_t>::max()) {
-            return Result<void>::Failure(MakeError(
-                ErrorCode::InvalidArgument,
-                "Address-list entry is not persistable",
-                "WatchList::Save"));
-        }
         const auto frozen_bytes = entry.frozen ? entry.frozen_value.size() : 0U;
-        if (entry.frozen && frozen_bytes != width) {
-            return Result<void>::Failure(MakeError(
-                ErrorCode::InternalInvariant,
-                "Frozen address-list entry has an invalid value width",
-                "WatchList::Save"));
-        }
 
         WatchFileEntryHeader item{};
         item.address = entry.address;
@@ -371,13 +648,32 @@ Result<void> WatchList::Save(const std::filesystem::path& path) const {
             "Failed while flushing the address-list file",
             "WatchList::Save");
     }
+    output.close();
+    if (!output) {
+        return FileFailure(
+            "Failed while closing the temporary address-list file",
+            "WatchList::Save");
+    }
+    const auto durable = FlushFileToDisk(temporary, "WatchList::Save");
+    if (!durable) return durable;
+    if (fault == WatchListSaveFault::AfterFlushBeforeReplace) {
+        return FileFailure(
+            "Injected address-list failure before atomic replacement",
+            "WatchList::Save");
+    }
+    const auto replaced = ReplaceAtomically(
+        temporary,
+        path,
+        "WatchList::Save");
+    if (!replaced) return replaced;
+    cleanup.committed = true;
     return Result<void>::Success();
 }
 
 Result<void> WatchList::Load(const std::filesystem::path& path) {
     std::error_code size_error;
     const auto file_size = std::filesystem::file_size(path, size_error);
-    if (size_error || file_size < sizeof(WatchFileHeader) ||
+    if (size_error || file_size < sizeof(LegacyWatchFileHeader) ||
         file_size > kMaxWatchFileBytes) {
         return Result<void>::Failure(MakeError(
             size_error ? ErrorCode::IoFailure : ErrorCode::LimitReached,
@@ -392,44 +688,67 @@ Result<void> WatchList::Load(const std::filesystem::path& path) {
         return FileFailure("Unable to open address-list file", "WatchList::Load");
     }
 
-    WatchFileHeader header{};
-    input.read(reinterpret_cast<char*>(&header), sizeof(header));
+    WatchFilePrefix prefix{};
+    input.read(reinterpret_cast<char*>(&prefix), sizeof(prefix));
     if (!input ||
-        !std::equal(kWatchMagic.begin(), kWatchMagic.end(), header.magic) ||
-        header.version != kWatchVersion ||
-        header.entry_count > kMaxPersistedEntries) {
+        !std::equal(kWatchMagic.begin(), kWatchMagic.end(), prefix.magic) ||
+        (prefix.version != kLegacyWatchVersion &&
+         prefix.version != kWatchVersion)) {
         return Result<void>::Failure(MakeError(
             ErrorCode::ParseError,
             "Address-list header is invalid",
             "WatchList::Load"));
     }
-    if (header.pid != memory_.ProcessId()) {
+
+    input.seekg(0, std::ios::beg);
+    std::uint32_t persisted_pid = 0;
+    std::uint64_t persisted_identity = 0;
+    std::uint64_t persisted_entry_count = 0;
+    if (prefix.version == kLegacyWatchVersion) {
+        LegacyWatchFileHeader header{};
+        input.read(reinterpret_cast<char*>(&header), sizeof(header));
+        persisted_pid = header.pid;
+        persisted_entry_count = header.entry_count;
+    } else {
+        WatchFileHeader header{};
+        input.read(reinterpret_cast<char*>(&header), sizeof(header));
+        persisted_pid = header.pid;
+        persisted_identity = header.process_identity_token;
+        persisted_entry_count = header.entry_count;
+    }
+    if (!input || persisted_entry_count > kMaxPersistedEntries) {
+        return Result<void>::Failure(MakeError(
+            ErrorCode::ParseError,
+            "Address-list header is invalid or truncated",
+            "WatchList::Load"));
+    }
+    if (persisted_pid != memory_.ProcessId()) {
         return Result<void>::Failure(MakeError(
             ErrorCode::InvalidArgument,
             "Address list belongs to a different PID",
             "WatchList::Load",
             0,
             memory_.ProcessId(),
-            header.pid));
+            persisted_pid));
     }
     const auto current_identity = memory_.ProcessIdentityToken();
-    if (header.process_identity_token != 0 && current_identity != 0 &&
-        header.process_identity_token != current_identity) {
+    if (persisted_identity != 0 && current_identity != 0 &&
+        persisted_identity != current_identity) {
         return Result<void>::Failure(MakeError(
             ErrorCode::InvalidArgument,
             "Address list belongs to a previous process that reused this PID",
             "WatchList::Load",
             0,
             current_identity,
-            header.process_identity_token));
+            persisted_identity));
     }
     const bool identity_unverified =
-        header.process_identity_token == 0 || current_identity == 0;
+        persisted_identity == 0 || current_identity == 0;
 
     std::vector<WatchEntry> loaded;
-    loaded.reserve(static_cast<std::size_t>(header.entry_count));
+    loaded.reserve(static_cast<std::size_t>(persisted_entry_count));
     std::uint64_t next_id = 1;
-    for (std::uint64_t index = 0; index < header.entry_count; ++index) {
+    for (std::uint64_t index = 0; index < persisted_entry_count; ++index) {
         WatchFileEntryHeader item{};
         input.read(reinterpret_cast<char*>(&item), sizeof(item));
         if (!input || item.description_size > kMaxDescriptionBytes) {
@@ -491,7 +810,7 @@ Result<void> WatchList::Load(const std::filesystem::path& path) {
         entry.hexadecimal = (item.flags & kWatchFlagHexadecimal) != 0;
         entry.frozen = false;
         entry.value = current.Value();
-        entry.frozen_value = std::move(frozen_value);
+        entry.frozen_value.clear();
         if (was_frozen) {
             entry.last_error =
                 "Saved frozen state was loaded disarmed; explicitly arm and freeze again.";

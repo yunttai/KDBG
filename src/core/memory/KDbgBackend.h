@@ -47,6 +47,8 @@ public:
         std::uint64_t virtual_address) override;
 
 private:
+    Result<void> ForceWriteGateClosed(const char* operation);
+
     struct Impl;
     std::unique_ptr<Impl> impl_;
 };

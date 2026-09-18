@@ -3,18 +3,33 @@
 #include "core/address/AddressList.h"
 #include "core/address/PointerResolver.h"
 #include "core/memory/MockMemoryBackend.h"
+#include "core/memory/KDbgBackend.h"
 #include "core/memory/VerifiedWriter.h"
+#include "core/pfn/MemProcFsProvider.h"
 #include "core/pfn/PageTableReverseMapper.h"
 #include "core/snapshot/MemorySnapshot.h"
 
+#ifdef _WIN32
+#include <Windows.h>
+#endif
+
 #include <array>
+#include <atomic>
+#include <chrono>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <limits>
+#include <optional>
 #include <span>
+#include <stop_token>
 #include <string>
+#include <string_view>
+#include <thread>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -56,6 +71,84 @@ bool PatchFileScalar(
     return static_cast<bool>(file);
 }
 
+#ifdef _WIN32
+class ScopedEnvironment {
+public:
+    ScopedEnvironment(std::string name, std::string value)
+        : name_(std::move(name)) {
+        char* previous = nullptr;
+        std::size_t length = 0;
+        if (_dupenv_s(&previous, &length, name_.c_str()) == 0 &&
+            previous != nullptr) {
+            previous_ = previous;
+        }
+        std::free(previous);
+        configured_ = _putenv_s(name_.c_str(), value.c_str()) == 0;
+    }
+
+    ~ScopedEnvironment() {
+        if (!configured_) return;
+        const char* value = previous_.has_value() ? previous_->c_str() : "";
+        static_cast<void>(_putenv_s(name_.c_str(), value));
+    }
+
+    ScopedEnvironment(const ScopedEnvironment&) = delete;
+    ScopedEnvironment& operator=(const ScopedEnvironment&) = delete;
+
+    [[nodiscard]] bool Configured() const noexcept { return configured_; }
+
+private:
+    std::string name_;
+    std::optional<std::string> previous_;
+    bool configured_{false};
+};
+
+std::string WideToUtf8(std::wstring_view value) {
+    if (value.empty()) return {};
+    const int bytes = WideCharToMultiByte(
+        CP_UTF8,
+        WC_ERR_INVALID_CHARS,
+        value.data(),
+        static_cast<int>(value.size()),
+        nullptr,
+        0,
+        nullptr,
+        nullptr);
+    if (bytes <= 0) return {};
+    std::string result(static_cast<std::size_t>(bytes), '\0');
+    return WideCharToMultiByte(
+               CP_UTF8,
+               WC_ERR_INVALID_CHARS,
+               value.data(),
+               static_cast<int>(value.size()),
+               result.data(),
+               bytes,
+               nullptr,
+               nullptr) == bytes
+        ? result
+        : std::string{};
+}
+
+std::vector<std::string> VmmArguments(
+    std::size_t count,
+    const std::string& quoted_value = {}) {
+    std::vector<std::string> arguments;
+    arguments.reserve(count);
+    for (std::size_t index = 0; index < count; ++index) {
+        if (index == 0 && !quoted_value.empty()) {
+            arguments.push_back(quoted_value);
+        } else if (index == 1) {
+            arguments.emplace_back("--pfn");
+        } else if (index == 2) {
+            arguments.emplace_back();
+        } else {
+            arguments.push_back("value-" + std::to_string(index));
+        }
+    }
+    return arguments;
+}
+#endif
+
 }  // namespace
 
 void RunAdvancedCoreTests(kdbg::test::TestRunner& runner) {
@@ -64,7 +157,408 @@ void RunAdvancedCoreTests(kdbg::test::TestRunner& runner) {
     {
         MockMemoryBackend backend;
         KDBG_CHECK(runner, backend.Open().Ok());
+        const std::array<std::uint8_t, 2> physical_bytes{0xA5U, 0x5AU};
+        KDBG_CHECK(runner, backend.SetWriteEnabled(true).Ok());
+        KDBG_CHECK(runner, backend.WritePhysical(
+            MockMemoryBackend::kBaseAddress + 0x40U,
+            physical_bytes).Ok());
+        KDBG_CHECK(runner, !backend.Info().write_enabled);
+        const auto repeated_physical = backend.WritePhysical(
+            MockMemoryBackend::kBaseAddress + 0x42U,
+            physical_bytes);
+        KDBG_CHECK(runner, !repeated_physical.Ok());
+        if (!repeated_physical) {
+            KDBG_CHECK(
+                runner,
+                repeated_physical.GetError().code == ErrorCode::WriteLocked);
+        }
+
+        const std::array<std::uint8_t, 1> process_byte{0x3CU};
+        KDBG_CHECK(runner, backend.SetWriteEnabled(true).Ok());
+        KDBG_CHECK(runner, backend.WriteProcessVirtual(
+            MockMemoryBackend::kMockPid,
+            MockMemoryBackend::kVirtualBase + 0x50U,
+            process_byte).Ok());
+        KDBG_CHECK(runner, !backend.Info().write_enabled);
+        const auto repeated_process = backend.WriteProcessVirtual(
+            MockMemoryBackend::kMockPid,
+            MockMemoryBackend::kVirtualBase + 0x51U,
+            process_byte);
+        KDBG_CHECK(runner, !repeated_process.Ok());
+        if (!repeated_process) {
+            KDBG_CHECK(
+                runner,
+                repeated_process.GetError().code == ErrorCode::WriteLocked);
+        }
+        backend.Close();
+    }
+
+    const auto run_provider_tests = [&runner]() {
+        using namespace kdbg;
+
+    {
+        MemProcFsProvider invalid_timeout(
+            {}, {}, std::chrono::milliseconds::zero());
+        const auto timeout_result = invalid_timeout.Query(1, {});
+        KDBG_CHECK(runner, !timeout_result.Ok());
+        if (!timeout_result) {
+            KDBG_CHECK(runner,
+                timeout_result.GetError().code == ErrorCode::InvalidArgument);
+        }
+
+        std::stop_source stopped;
+        stopped.request_stop();
+        MemProcFsProvider cancelled({});
+        const auto cancelled_result = cancelled.Query(1, stopped.get_token());
+        KDBG_CHECK(runner, !cancelled_result.Ok());
+        if (!cancelled_result) {
+            KDBG_CHECK(runner,
+                cancelled_result.GetError().code == ErrorCode::Cancelled);
+        }
+
+        MemProcFsProvider reserved(
+            {},
+            MemProcFsConfiguration{
+                .device = "--help",
+                .vmm_path = std::nullopt,
+                .vmm_arguments = {}});
+        const auto reserved_result = reserved.Query(1, {});
+        KDBG_CHECK(runner, !reserved_result.Ok());
+        if (!reserved_result) {
+            KDBG_CHECK(runner,
+                reserved_result.GetError().code == ErrorCode::InvalidArgument);
+        }
+
+        MemProcFsProvider oversized(
+            {},
+            MemProcFsConfiguration{
+                .device = std::string(
+                    MemProcFsProvider::kMaxBridgeArgumentBytes + 1U,
+                    'A'),
+                .vmm_path = std::nullopt,
+                .vmm_arguments = {}});
+        const auto oversized_result = oversized.Query(1, {});
+        KDBG_CHECK(runner, !oversized_result.Ok());
+        if (!oversized_result) {
+            KDBG_CHECK(runner,
+                oversized_result.GetError().code == ErrorCode::LimitReached);
+        }
+
+        MemProcFsProvider too_many(
+            {},
+            MemProcFsConfiguration{
+                .device = std::nullopt,
+                .vmm_path = std::nullopt,
+                .vmm_arguments = std::vector<std::string>(
+                    MemProcFsProvider::kMaxVmmArguments + 1U,
+                    "value")});
+        const auto too_many_result = too_many.Query(1, {});
+        KDBG_CHECK(runner, !too_many_result.Ok());
+        if (!too_many_result) {
+            KDBG_CHECK(runner,
+                too_many_result.GetError().code == ErrorCode::LimitReached);
+        }
+
+        MemProcFsProvider embedded_nul(
+            {},
+            MemProcFsConfiguration{
+                .device = std::string("a\0b", 3),
+                .vmm_path = std::nullopt,
+                .vmm_arguments = {}});
+        const auto nul_result = embedded_nul.Query(1, {});
+        KDBG_CHECK(runner, !nul_result.Ok());
+        if (!nul_result) {
+            KDBG_CHECK(runner,
+                nul_result.GetError().code == ErrorCode::InvalidArgument);
+        }
+
+        MemProcFsProvider invalid_pfn({});
+        const auto invalid_pfn_result = invalid_pfn.Query(
+            static_cast<std::uint64_t>(
+                std::numeric_limits<std::uint32_t>::max()) + 1U,
+            {});
+        KDBG_CHECK(runner, !invalid_pfn_result.Ok());
+        if (!invalid_pfn_result) {
+            KDBG_CHECK(runner,
+                invalid_pfn_result.GetError().code == ErrorCode::InvalidPfn);
+        }
+
+        MemProcFsProvider too_many_vmm(
+            {},
+            MemProcFsConfiguration{
+                .device = std::nullopt,
+                .vmm_path = std::nullopt,
+                .vmm_arguments = VmmArguments(
+                    MemProcFsProvider::kMaxVmmArguments + 1U)});
+        const auto too_many_vmm_result = too_many_vmm.Query(1, {});
+        KDBG_CHECK(runner, !too_many_vmm_result.Ok());
+        if (!too_many_vmm_result) {
+            KDBG_CHECK(runner,
+                too_many_vmm_result.GetError().code == ErrorCode::LimitReached);
+            KDBG_CHECK(runner,
+                too_many_vmm_result.GetError().requested ==
+                    MemProcFsProvider::kMaxVmmArguments);
+            KDBG_CHECK(runner,
+                too_many_vmm_result.GetError().completed ==
+                    MemProcFsProvider::kMaxVmmArguments + 1U);
+        }
+
+        MemProcFsProvider controlled_override(
+            {},
+            MemProcFsConfiguration{
+                .device = std::nullopt,
+                .vmm_path = std::nullopt,
+                .vmm_arguments = {"-DeViCe", "untrusted"}});
+        const auto controlled_override_result =
+            controlled_override.Query(1, {});
+        KDBG_CHECK(runner, !controlled_override_result.Ok());
+        if (!controlled_override_result) {
+            KDBG_CHECK(runner,
+                controlled_override_result.GetError().code ==
+                    ErrorCode::InvalidArgument);
+        }
+
+        MemProcFsProvider invalid_utf8(
+            {},
+            MemProcFsConfiguration{
+                .device = std::nullopt,
+                .vmm_path = std::nullopt,
+                .vmm_arguments = {std::string("\xC0\xAF", 2)}});
+        const auto invalid_utf8_result = invalid_utf8.Query(1, {});
+        KDBG_CHECK(runner, !invalid_utf8_result.Ok());
+        if (!invalid_utf8_result) {
+            KDBG_CHECK(runner,
+                invalid_utf8_result.GetError().code ==
+                    ErrorCode::InvalidArgument);
+        }
+    }
+
+#ifdef _WIN32
+    {
+        const std::filesystem::path helper =
+            KDBG_MEMPROCFS_PROVIDER_TEST_HELPER_PATH;
+        KDBG_CHECK(runner, std::filesystem::is_regular_file(helper));
+
+        const std::string quoted =
+            "value with spaces \"quoted\" and trailing\\\\";
+        ScopedEnvironment success_mode("KDBG_MEMPROCFS_TEST_MODE", "success");
+        ScopedEnvironment expected_count(
+            "KDBG_MEMPROCFS_TEST_EXPECTED_COUNT",
+            std::to_string(MemProcFsProvider::kMaxVmmArguments));
+        ScopedEnvironment expected_argument(
+            "KDBG_MEMPROCFS_TEST_EXPECTED_ARGUMENT", quoted);
+        KDBG_CHECK(runner, success_mode.Configured());
+        KDBG_CHECK(runner, expected_count.Configured());
+        KDBG_CHECK(runner, expected_argument.Configured());
+
+        auto maximum_arguments =
+            VmmArguments(MemProcFsProvider::kMaxVmmArguments, quoted);
+        KDBG_CHECK(runner, maximum_arguments.size() ==
+            MemProcFsProvider::kMaxVmmArguments);
+        MemProcFsProvider provider(
+            helper,
+            MemProcFsConfiguration{
+                .device = "pmem",
+                .vmm_path = std::filesystem::path(
+                    L"C:\\runtime with spaces\\vmm.dll"),
+                .vmm_arguments = std::move(maximum_arguments)},
+            std::chrono::seconds{3});
+        const auto result = provider.Query(291, {});
+        KDBG_CHECK(runner, result.Ok());
+        if (result) {
+            KDBG_CHECK(runner, result.Value().pfn == 291U);
+            KDBG_CHECK(runner, result.Value().mappings.empty());
+        }
+    }
+
+    {
+        const std::filesystem::path original_helper =
+            KDBG_MEMPROCFS_PROVIDER_TEST_HELPER_PATH;
+        const auto root = test::UniqueTempPath(
+            "kdbg-memprocfs-wide-command");
+        const auto unicode_directory = root /
+            std::filesystem::path(
+                L"\u914D\u7F6E-\uACBD\uB85C-\U0001F642-"
+                L"long-install-directory-with-spaces");
+        const auto unicode_helper = unicode_directory /
+            std::filesystem::path(
+                L"bridge-\u914D\u7F6E-\uACBD\uB85C-\U0001F642.exe");
+        std::error_code file_error;
+        std::filesystem::create_directories(unicode_directory, file_error);
+        KDBG_CHECK(runner, !file_error);
+        std::filesystem::copy_file(
+            original_helper,
+            unicode_helper,
+            std::filesystem::copy_options::overwrite_existing,
+            file_error);
+        KDBG_CHECK(runner, !file_error);
+
+        constexpr std::wstring_view device =
+            L"dump-\u914D\u7F6E-\uACBD\uB85C-\U0001F642.raw";
+        constexpr std::wstring_view vmm_path =
+            L"C:\\runtime-\u914D\u7F6E-\uACBD\uB85C-\U0001F642\\vmm.dll";
+        constexpr std::wstring_view argument =
+            L"value-\u914D\u7F6E-\uACBD\uB85C-\U0001F642";
+        ScopedEnvironment mode("KDBG_MEMPROCFS_TEST_MODE", "unicode");
+        KDBG_CHECK(runner, mode.Configured());
+        MemProcFsProvider provider(
+            unicode_helper,
+            MemProcFsConfiguration{
+                .device = WideToUtf8(device),
+                .vmm_path = std::filesystem::path(vmm_path),
+                .vmm_arguments = {WideToUtf8(argument)}},
+            std::chrono::seconds{3});
+        const auto result = provider.Query(291, {});
+        KDBG_CHECK(runner, result.Ok());
+        if (!result) {
+            std::cerr << "Unicode provider helper failed: "
+                      << result.GetError().message << '\n';
+        }
+
+        std::filesystem::remove_all(root, file_error);
+    }
+
+    {
+        const std::filesystem::path helper =
+            KDBG_MEMPROCFS_PROVIDER_TEST_HELPER_PATH;
+        ScopedEnvironment mode("KDBG_MEMPROCFS_TEST_MODE", "exit");
+        KDBG_CHECK(runner, mode.Configured());
+        MemProcFsProvider provider(helper, {}, std::chrono::seconds{3});
+        const auto result = provider.Query(1, {});
+        KDBG_CHECK(runner, !result.Ok());
+        if (!result) {
+            KDBG_CHECK(runner,
+                result.GetError().code == ErrorCode::BridgeUnavailable);
+            KDBG_CHECK(runner, result.GetError().native_code == 7U);
+            KDBG_CHECK(runner,
+                result.GetError().message.find("deterministic helper exit") !=
+                    std::string::npos);
+        }
+    }
+
+    {
+        const std::filesystem::path helper =
+            KDBG_MEMPROCFS_PROVIDER_TEST_HELPER_PATH;
+        ScopedEnvironment mode("KDBG_MEMPROCFS_TEST_MODE", "sleep");
+        KDBG_CHECK(runner, mode.Configured());
+        MemProcFsProvider provider(
+            helper, {}, std::chrono::milliseconds{100});
+        const auto result = provider.Query(1, {});
+        KDBG_CHECK(runner, !result.Ok());
+        if (!result) {
+            KDBG_CHECK(runner, result.GetError().code == ErrorCode::IoFailure);
+            KDBG_CHECK(runner,
+                result.GetError().message == "MemProcFS bridge timed out");
+        }
+    }
+
+    {
+        const std::filesystem::path helper =
+            KDBG_MEMPROCFS_PROVIDER_TEST_HELPER_PATH;
+        const auto marker = std::filesystem::temp_directory_path() /
+            ("kdbg memprocfs cancellation " +
+             std::to_string(GetCurrentProcessId()) + ".tmp");
+        std::error_code ignored;
+        std::filesystem::remove(marker, ignored);
+        ScopedEnvironment mode("KDBG_MEMPROCFS_TEST_MODE", "sleep");
+        ScopedEnvironment marker_environment(
+            "KDBG_MEMPROCFS_TEST_MARKER", marker.string());
+        KDBG_CHECK(runner, mode.Configured());
+        KDBG_CHECK(runner, marker_environment.Configured());
+
+        std::stop_source stop;
+        std::atomic_bool saw_marker{false};
+        std::jthread canceller([&]() {
+            const auto deadline = std::chrono::steady_clock::now() +
+                std::chrono::seconds{5};
+            while (std::chrono::steady_clock::now() < deadline) {
+                if (std::filesystem::exists(marker)) {
+                    saw_marker.store(true);
+                    stop.request_stop();
+                    return;
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds{10});
+            }
+            stop.request_stop();
+        });
+        MemProcFsProvider provider(helper, {}, std::chrono::seconds{8});
+        const auto result = provider.Query(1, stop.get_token());
+        canceller.join();
+        KDBG_CHECK(runner, saw_marker.load());
+        KDBG_CHECK(runner, !result.Ok());
+        if (!result) {
+            KDBG_CHECK(runner, result.GetError().code == ErrorCode::Cancelled);
+        }
+        std::filesystem::remove(marker, ignored);
+    }
+
+    {
+        const std::filesystem::path helper =
+            KDBG_MEMPROCFS_PROVIDER_TEST_HELPER_PATH;
+        ScopedEnvironment mode("KDBG_MEMPROCFS_TEST_MODE", "flood");
+        KDBG_CHECK(runner, mode.Configured());
+        MemProcFsProvider provider(helper, {}, std::chrono::seconds{5});
+        const auto result = provider.Query(1, {});
+        KDBG_CHECK(runner, !result.Ok());
+        if (!result) {
+            if (result.GetError().code != ErrorCode::LimitReached) {
+                std::cerr << "MemProcFS output-cap helper returned: "
+                          << result.GetError().message << '\n';
+            }
+            KDBG_CHECK(runner,
+                result.GetError().code == ErrorCode::LimitReached);
+            KDBG_CHECK(runner,
+                result.GetError().requested == 8U * 1024U * 1024U);
+        }
+    }
+
+    {
+        const std::filesystem::path helper =
+            KDBG_MEMPROCFS_PROVIDER_TEST_HELPER_PATH;
+        ScopedEnvironment mode("KDBG_MEMPROCFS_TEST_MODE", "descendant");
+        KDBG_CHECK(runner, mode.Configured());
+        MemProcFsProvider provider(helper, {}, std::chrono::seconds{3});
+        const auto result = provider.Query(17, {});
+        KDBG_CHECK(runner, result.Ok());
+        if (result) {
+            KDBG_CHECK(runner, result.Value().pfn == 17U);
+        }
+    }
+#endif
+
+    };
+    run_provider_tests();
+
+    const auto run_memory_tool_tests = [&runner]() {
+        using namespace kdbg;
+
+#ifdef _WIN32
+    {
+        KDbgBackend disconnected(L"\\\\.\\KDBG-test-unopened");
+        const auto user_read = disconnected.ReadKernelVirtual(0x1000U, 16U);
+        KDBG_CHECK(runner, !user_read.Ok());
+        if (!user_read) {
+            KDBG_CHECK(runner,
+                user_read.GetError().code == ErrorCode::InvalidArgument);
+        }
+        const auto kernel_read = disconnected.ReadKernelVirtual(
+            0xFFFF800000001000ULL, 16U);
+        KDBG_CHECK(runner, !kernel_read.Ok());
+        if (!kernel_read) {
+            KDBG_CHECK(runner,
+                kernel_read.GetError().code == ErrorCode::BackendDisconnected);
+        }
+    }
+#endif
+
+    {
+        MockMemoryBackend backend;
+        KDBG_CHECK(runner, backend.Open().Ok());
         VerifiedWriter writer(backend);
+        const auto arm = [&writer](std::uint32_t pid =
+                                  MockMemoryBackend::kMockPid) {
+            return writer.ArmProcessWrite(pid).TakeValue();
+        };
         const std::uint64_t address = MockMemoryBackend::kVirtualBase + 0x80U;
         const auto before = backend.ReadProcessVirtual(
             MockMemoryBackend::kMockPid,
@@ -73,6 +567,7 @@ void RunAdvancedCoreTests(kdbg::test::TestRunner& runner) {
         KDBG_CHECK(runner, before.Ok());
         const std::array<std::uint8_t, 4> replacement{0x10, 0x20, 0x30, 0x40};
         const auto result = writer.Write(
+            arm(),
             MemorySpace::Process(MockMemoryBackend::kMockPid),
             address,
             replacement,
@@ -88,6 +583,7 @@ void RunAdvancedCoreTests(kdbg::test::TestRunner& runner) {
         const std::array<std::uint8_t, 4> wrong_expected{
             0xFF, 0x20, 0x30, 0x40};
         const auto mismatch = writer.Write(
+            arm(),
             MemorySpace::Process(MockMemoryBackend::kMockPid),
             address,
             replacement,
@@ -100,6 +596,7 @@ void RunAdvancedCoreTests(kdbg::test::TestRunner& runner) {
 
         const std::array<std::uint8_t, 2> wrong_length{0x10, 0x20};
         const auto length_mismatch = writer.Write(
+            arm(),
             MemorySpace::Process(MockMemoryBackend::kMockPid),
             address,
             replacement,
@@ -111,6 +608,7 @@ void RunAdvancedCoreTests(kdbg::test::TestRunner& runner) {
         }
 
         const auto physical_rejected = writer.Write(
+            arm(),
             MemorySpace::Physical(),
             MockMemoryBackend::kBaseAddress + 0x80U,
             replacement);
@@ -125,6 +623,7 @@ void RunAdvancedCoreTests(kdbg::test::TestRunner& runner) {
             VerifiedWriter::kMaxWriteLength + 1U,
             0x5A);
         const auto oversized_result = writer.Write(
+            arm(),
             MemorySpace::Process(MockMemoryBackend::kMockPid),
             address,
             oversized);
@@ -134,6 +633,7 @@ void RunAdvancedCoreTests(kdbg::test::TestRunner& runner) {
                 ErrorCode::LimitReached);
         }
         const auto overflow_result = writer.Write(
+            arm(),
             MemorySpace::Process(MockMemoryBackend::kMockPid),
             std::numeric_limits<std::uint64_t>::max() - 1U,
             replacement);
@@ -149,6 +649,7 @@ void RunAdvancedCoreTests(kdbg::test::TestRunner& runner) {
         disable_fault.fail_write_disable_count = 1;
         backend.SetFaults(disable_fault);
         const auto disable_failure = writer.Write(
+            arm(),
             MemorySpace::Process(MockMemoryBackend::kMockPid),
             address + 0x20U,
             replacement);
@@ -161,6 +662,202 @@ void RunAdvancedCoreTests(kdbg::test::TestRunner& runner) {
             disables_before + 2U);
         KDBG_CHECK(runner, !backend.Info().write_enabled);
         backend.ClearFaults();
+    }
+
+    {
+        MockMemoryBackend backend;
+        KDBG_CHECK(runner, backend.Open().Ok());
+        constexpr std::uint64_t kSize = 8192;
+        const std::uint64_t address =
+            MockMemoryBackend::kBaseAddress + 0x20000U;
+        const auto baseline = MemorySnapshot::Capture(
+            backend,
+            MemorySpace::Physical(),
+            address,
+            kSize,
+            4096);
+        KDBG_CHECK(runner, baseline.Ok());
+        if (baseline) {
+            auto all_changed = baseline.Value().Bytes();
+            for (auto& byte : all_changed) byte ^= 0xFFU;
+            KDBG_CHECK(runner, WriteBytes(backend, address, all_changed));
+            const auto all = MemorySnapshot::Capture(
+                backend,
+                MemorySpace::Physical(),
+                address,
+                kSize,
+                4096);
+            KDBG_CHECK(runner, all.Ok());
+            if (all) {
+                const auto diff = baseline.Value().Diff(all.Value());
+                KDBG_CHECK(runner, diff.Ok());
+                if (diff) {
+                    KDBG_CHECK(runner, diff.Value().size() == 1U);
+                    if (!diff.Value().empty()) {
+                        KDBG_CHECK(runner, diff.Value().front().offset == 0);
+                        KDBG_CHECK(runner, diff.Value().front().length == kSize);
+                    }
+                }
+                const auto byte_limited = baseline.Value().Diff(
+                    all.Value(),
+                    MemorySnapshot::kMaxDiffRuns,
+                    kSize - 1U);
+                KDBG_CHECK(runner, !byte_limited.Ok());
+                if (!byte_limited) {
+                    KDBG_CHECK(runner, byte_limited.GetError().code ==
+                        ErrorCode::LimitReached);
+                }
+
+                std::stop_source diff_stop;
+                const auto cancelled_diff = baseline.Value().Diff(
+                    all.Value(),
+                    MemorySnapshot::kMaxDiffRuns,
+                    MemorySnapshot::kMaxSnapshotBytes,
+                    diff_stop.get_token(),
+                    [&diff_stop](const SnapshotProgress&) {
+                        diff_stop.request_stop();
+                    });
+                KDBG_CHECK(runner, !cancelled_diff.Ok());
+                if (!cancelled_diff) {
+                    KDBG_CHECK(runner, cancelled_diff.GetError().code ==
+                        ErrorCode::Cancelled);
+                }
+            }
+
+            KDBG_CHECK(
+                runner,
+                WriteBytes(backend, address, baseline.Value().Bytes()));
+            auto alternating = baseline.Value().Bytes();
+            for (std::size_t index = 0; index < alternating.size(); index += 2) {
+                alternating[index] ^= 0xFFU;
+            }
+            KDBG_CHECK(runner, WriteBytes(backend, address, alternating));
+            const auto alternating_snapshot = MemorySnapshot::Capture(
+                backend,
+                MemorySpace::Physical(),
+                address,
+                kSize,
+                4096);
+            KDBG_CHECK(runner, alternating_snapshot.Ok());
+            if (alternating_snapshot) {
+                const auto alternating_diff =
+                    baseline.Value().Diff(alternating_snapshot.Value());
+                KDBG_CHECK(runner, alternating_diff.Ok());
+                if (alternating_diff) {
+                    KDBG_CHECK(
+                        runner,
+                        alternating_diff.Value().size() == kSize / 2U);
+                    KDBG_CHECK(runner, std::all_of(
+                        alternating_diff.Value().begin(),
+                        alternating_diff.Value().end(),
+                        [](const SnapshotDiffRun& run) {
+                            return run.length == 1U;
+                        }));
+                }
+                const auto run_limited = baseline.Value().Diff(
+                    alternating_snapshot.Value(),
+                    static_cast<std::size_t>(kSize / 2U - 1U));
+                KDBG_CHECK(runner, !run_limited.Ok());
+                if (!run_limited) {
+                    KDBG_CHECK(runner, run_limited.GetError().code ==
+                        ErrorCode::LimitReached);
+                }
+            }
+
+            const auto path = test::UniqueTempPath(
+                "kdbg-snapshot-cancel-test.kdbgmem");
+            constexpr std::string_view snapshot_sentinel =
+                "existing-snapshot-must-survive";
+            {
+                std::ofstream existing(
+                    path,
+                    std::ios::binary | std::ios::trunc);
+                existing.write(
+                    snapshot_sentinel.data(),
+                    static_cast<std::streamsize>(snapshot_sentinel.size()));
+            }
+            std::stop_source save_stop;
+            const auto cancelled_save = baseline.Value().Save(
+                path,
+                save_stop.get_token(),
+                [&save_stop](const SnapshotProgress&) {
+                    save_stop.request_stop();
+                });
+            KDBG_CHECK(runner, !cancelled_save.Ok());
+            if (!cancelled_save) {
+                KDBG_CHECK(runner, cancelled_save.GetError().code ==
+                        ErrorCode::Cancelled);
+            }
+            {
+                std::ifstream existing(path, std::ios::binary);
+                const std::string contents{
+                    std::istreambuf_iterator<char>(existing),
+                    std::istreambuf_iterator<char>()};
+                KDBG_CHECK(runner, contents == snapshot_sentinel);
+            }
+
+            const auto faulted_save = baseline.Value().Save(
+                path,
+                {},
+                {},
+                SnapshotSaveFault::AfterFlushBeforeReplace);
+            KDBG_CHECK(runner, !faulted_save.Ok());
+            if (!faulted_save) {
+                KDBG_CHECK(runner, faulted_save.GetError().code ==
+                    ErrorCode::IoFailure);
+            }
+            {
+                std::ifstream existing(path, std::ios::binary);
+                const std::string contents{
+                    std::istreambuf_iterator<char>(existing),
+                    std::istreambuf_iterator<char>()};
+                KDBG_CHECK(runner, contents == snapshot_sentinel);
+            }
+
+            SnapshotProgress save_progress{};
+            KDBG_CHECK(runner, baseline.Value().Save(
+                path,
+                {},
+                [&save_progress](const SnapshotProgress& update) {
+                    save_progress = update;
+                }).Ok());
+            KDBG_CHECK(runner, save_progress.phase == SnapshotProgressPhase::Save);
+            KDBG_CHECK(runner, save_progress.completed == save_progress.total);
+
+            std::stop_source load_stop;
+            const auto cancelled_load = MemorySnapshot::Load(
+                path,
+                load_stop.get_token(),
+                [&load_stop](const SnapshotProgress&) {
+                    load_stop.request_stop();
+                });
+            KDBG_CHECK(runner, !cancelled_load.Ok());
+            if (!cancelled_load) {
+                KDBG_CHECK(runner, cancelled_load.GetError().code ==
+                    ErrorCode::Cancelled);
+            }
+
+            SnapshotProgress load_progress{};
+            const auto loaded = MemorySnapshot::Load(
+                path,
+                {},
+                [&load_progress](const SnapshotProgress& update) {
+                    load_progress = update;
+                });
+            KDBG_CHECK(runner, loaded.Ok());
+            if (loaded) {
+                KDBG_CHECK(
+                    runner,
+                    loaded.Value().Bytes() == baseline.Value().Bytes());
+            }
+            KDBG_CHECK(
+                runner,
+                load_progress.phase == SnapshotProgressPhase::LoadChecksum);
+            KDBG_CHECK(runner, load_progress.completed == load_progress.total);
+
+            std::error_code ignored;
+            std::filesystem::remove(path, ignored);
+        }
     }
 
     {
@@ -330,13 +1027,34 @@ void RunAdvancedCoreTests(kdbg::test::TestRunner& runner) {
         }
 
         const std::array<std::uint8_t, 4> desired{0xAA, 0xBB, 0xCC, 0xDD};
-        KDBG_CHECK(runner, list.Write(id, desired).Ok());
+        auto wrong_arm = list.ArmProcessWrites(
+            MockMemoryBackend::kMockPid + 1U);
+        KDBG_CHECK(runner, wrong_arm.Ok());
+        if (wrong_arm) {
+            const auto rejected = list.Write(
+                wrong_arm.TakeValue(), id, desired);
+            KDBG_CHECK(runner, !rejected.Ok());
+            if (!rejected) {
+                KDBG_CHECK(runner, rejected.GetError().code ==
+                    ErrorCode::WriteLocked);
+            }
+        }
+        auto write_arm = list.ArmProcessWrites(MockMemoryBackend::kMockPid);
+        KDBG_CHECK(runner, write_arm.Ok());
+        if (write_arm) {
+            KDBG_CHECK(runner,
+                list.Write(write_arm.TakeValue(), id, desired).Ok());
+        }
         KDBG_CHECK(runner, list.SetFrozen(
             id,
             true,
             std::vector<std::uint8_t>(desired.begin(), desired.end())).Ok());
         backend.Mutate(MockMemoryBackend::kBaseAddress + 0x300U, 0x11U);
-        const auto frozen = list.TickFreeze();
+        auto freeze_arm = list.ArmProcessWrites(MockMemoryBackend::kMockPid);
+        KDBG_CHECK(runner, freeze_arm.Ok());
+        const auto frozen = freeze_arm
+            ? list.TickFreeze(freeze_arm.TakeValue())
+            : Result<FreezeSummary>::Failure(freeze_arm.GetError());
         KDBG_CHECK(runner, frozen.Ok());
         if (frozen) {
             KDBG_CHECK(runner, frozen.Value().verified == 1U);
@@ -351,8 +1069,8 @@ void RunAdvancedCoreTests(kdbg::test::TestRunner& runner) {
                 std::vector<std::uint8_t>(desired.begin(), desired.end()));
         }
 
-        const auto path = std::filesystem::temp_directory_path() /
-            "kdbg-address-list-test.txt";
+        const auto path = test::UniqueTempPath(
+            "kdbg-address-list-test.txt");
         AddressEntry unfrozen_entry{};
         unfrozen_entry.description = "unfrozen";
         unfrozen_entry.space = MemorySpace::Process(
@@ -386,7 +1104,12 @@ void RunAdvancedCoreTests(kdbg::test::TestRunner& runner) {
         const auto physical_id = loaded.Add(std::move(physical));
         KDBG_CHECK(runner, physical_id != 0);
         const auto writes_before = backend.WriteCallCount();
-        const auto physical_write = loaded.Write(physical_id, desired);
+        auto physical_arm = loaded.ArmProcessWrites(
+            MockMemoryBackend::kMockPid);
+        KDBG_CHECK(runner, physical_arm.Ok());
+        const auto physical_write = physical_arm
+            ? loaded.Write(physical_arm.TakeValue(), physical_id, desired)
+            : Result<VerifiedWriteResult>::Failure(physical_arm.GetError());
         KDBG_CHECK(runner, !physical_write.Ok());
         if (!physical_write) {
             KDBG_CHECK(runner, physical_write.GetError().code ==
@@ -407,7 +1130,11 @@ void RunAdvancedCoreTests(kdbg::test::TestRunner& runner) {
         kernel.width = 4;
         const auto kernel_id = loaded.Add(std::move(kernel));
         KDBG_CHECK(runner, kernel_id != 0);
-        const auto kernel_write = loaded.Write(kernel_id, desired);
+        auto kernel_arm = loaded.ArmProcessWrites(MockMemoryBackend::kMockPid);
+        KDBG_CHECK(runner, kernel_arm.Ok());
+        const auto kernel_write = kernel_arm
+            ? loaded.Write(kernel_arm.TakeValue(), kernel_id, desired)
+            : Result<VerifiedWriteResult>::Failure(kernel_arm.GetError());
         KDBG_CHECK(runner, !kernel_write.Ok());
         if (!kernel_write) {
             KDBG_CHECK(runner, kernel_write.GetError().code ==
@@ -419,8 +1146,8 @@ void RunAdvancedCoreTests(kdbg::test::TestRunner& runner) {
             std::vector<std::uint8_t>(desired.begin(), desired.end())).Ok());
         KDBG_CHECK(runner, backend.WriteCallCount() == writes_before);
 
-        const auto legacy_path = std::filesystem::temp_directory_path() /
-            "kdbg-address-list-unfrozen-legacy.txt";
+        const auto legacy_path = test::UniqueTempPath(
+            "kdbg-address-list-unfrozen-legacy.txt");
         {
             std::ofstream legacy(legacy_path, std::ios::binary | std::ios::trunc);
             legacy << "KDBG_ADDRESS_LIST\t1\n"
@@ -430,8 +1157,8 @@ void RunAdvancedCoreTests(kdbg::test::TestRunner& runner) {
         KDBG_CHECK(runner, legacy_loaded.Load(legacy_path).Ok());
         KDBG_CHECK(runner, legacy_loaded.Entries().size() == 1U);
 
-        const auto invalid_path = std::filesystem::temp_directory_path() /
-            "kdbg-address-list-invalid.txt";
+        const auto invalid_path = test::UniqueTempPath(
+            "kdbg-address-list-invalid.txt");
         {
             std::ofstream invalid(invalid_path, std::ios::binary | std::ios::trunc);
             invalid << "KDBG_ADDRESS_LIST\t1\n"
@@ -440,8 +1167,8 @@ void RunAdvancedCoreTests(kdbg::test::TestRunner& runner) {
         AddressList invalid_loaded(backend);
         KDBG_CHECK(runner, !invalid_loaded.Load(invalid_path).Ok());
 
-        const auto wide_path = std::filesystem::temp_directory_path() /
-            "kdbg-address-list-wide.txt";
+        const auto wide_path = test::UniqueTempPath(
+            "kdbg-address-list-wide.txt");
         {
             std::ofstream wide(wide_path, std::ios::binary | std::ios::trunc);
             wide << "KDBG_ADDRESS_LIST\t1\n"
@@ -459,8 +1186,8 @@ void RunAdvancedCoreTests(kdbg::test::TestRunner& runner) {
         invalid_entry.width = 4;
         KDBG_CHECK(runner, loaded.Add(std::move(invalid_entry)) == 0);
 
-        const auto long_row_path = std::filesystem::temp_directory_path() /
-            "kdbg-address-list-long-row.txt";
+        const auto long_row_path = test::UniqueTempPath(
+            "kdbg-address-list-long-row.txt");
         {
             std::ofstream long_row(
                 long_row_path,
@@ -479,6 +1206,12 @@ void RunAdvancedCoreTests(kdbg::test::TestRunner& runner) {
         std::filesystem::remove(wide_path, ignored);
         std::filesystem::remove(long_row_path, ignored);
     }
+
+    };
+    run_memory_tool_tests();
+
+    const auto run_snapshot_and_reverse_map_tests = [&runner]() {
+        using namespace kdbg;
 
     {
         MockMemoryBackend backend;
@@ -507,13 +1240,18 @@ void RunAdvancedCoreTests(kdbg::test::TestRunner& runner) {
                 KDBG_CHECK(runner, diff.Value().size() == 1U);
                 if (!diff.Value().empty()) {
                     KDBG_CHECK(runner, diff.Value().front().offset == 10U);
-                    KDBG_CHECK(runner, diff.Value().front().after ==
-                        std::vector<std::uint8_t>(change.begin(), change.end()));
+                    KDBG_CHECK(runner, diff.Value().front().length == change.size());
+                    const auto changed = std::span<const std::uint8_t>(
+                        second.Value().Bytes()).subspan(
+                            static_cast<std::size_t>(diff.Value().front().offset),
+                            static_cast<std::size_t>(diff.Value().front().length));
+                    KDBG_CHECK(runner, std::equal(
+                        changed.begin(), changed.end(), change.begin(), change.end()));
                 }
             }
 
-            const auto path = std::filesystem::temp_directory_path() /
-                "kdbg-snapshot-test.kdbgmem";
+            const auto path = test::UniqueTempPath(
+                "kdbg-snapshot-test.kdbgmem");
             KDBG_CHECK(runner, first.Value().Save(path).Ok());
             const auto loaded = MemorySnapshot::Load(path);
             KDBG_CHECK(runner, loaded.Ok());
@@ -645,4 +1383,7 @@ void RunAdvancedCoreTests(kdbg::test::TestRunner& runner) {
             }
         }
     }
+
+    };
+    run_snapshot_and_reverse_map_tests();
 }

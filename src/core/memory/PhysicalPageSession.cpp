@@ -210,7 +210,22 @@ Result<void> PhysicalPageSession::ApplyLocalEdit(
         return Result<void>::Success();
     }
     if (record_history) {
-        undo_stack_.push_back(ByteEdit{offset, previous, value});
+        try {
+            undo_stack_.push_back(ByteEdit{offset, previous, value});
+        } catch (const std::bad_alloc&) {
+            return Result<void>::Failure(MakeError(
+                ErrorCode::LimitReached,
+                "Physical-page edit history allocation failed",
+                "PhysicalPageSession::ApplyLocalEdit"));
+        } catch (const std::length_error&) {
+            return Result<void>::Failure(MakeError(
+                ErrorCode::LimitReached,
+                "Physical-page edit history reached its container limit",
+                "PhysicalPageSession::ApplyLocalEdit"));
+        }
+        if (undo_stack_.size() > kMaxEditHistory) {
+            undo_stack_.pop_front();
+        }
         redo_stack_.clear();
     }
     working_[offset] = value;
@@ -246,13 +261,25 @@ Result<void> PhysicalPageSession::Undo() {
             "PhysicalPageSession::Undo"));
     }
     const auto edit = undo_stack_.back();
-    undo_stack_.pop_back();
+    try {
+        redo_stack_.push_back(edit);
+    } catch (const std::bad_alloc&) {
+        return Result<void>::Failure(MakeError(
+            ErrorCode::LimitReached,
+            "Physical-page redo history allocation failed",
+            "PhysicalPageSession::Undo"));
+    } catch (const std::length_error&) {
+        return Result<void>::Failure(MakeError(
+            ErrorCode::LimitReached,
+            "Physical-page redo history reached its container limit",
+            "PhysicalPageSession::Undo"));
+    }
     const auto result = ApplyLocalEdit(edit.offset, edit.before, false);
     if (!result) {
-        undo_stack_.push_back(edit);
+        redo_stack_.pop_back();
         return result;
     }
-    redo_stack_.push_back(edit);
+    undo_stack_.pop_back();
     return Result<void>::Success();
 }
 
@@ -264,13 +291,25 @@ Result<void> PhysicalPageSession::Redo() {
             "PhysicalPageSession::Redo"));
     }
     const auto edit = redo_stack_.back();
-    redo_stack_.pop_back();
+    try {
+        undo_stack_.push_back(edit);
+    } catch (const std::bad_alloc&) {
+        return Result<void>::Failure(MakeError(
+            ErrorCode::LimitReached,
+            "Physical-page undo history allocation failed",
+            "PhysicalPageSession::Redo"));
+    } catch (const std::length_error&) {
+        return Result<void>::Failure(MakeError(
+            ErrorCode::LimitReached,
+            "Physical-page undo history reached its container limit",
+            "PhysicalPageSession::Redo"));
+    }
     const auto result = ApplyLocalEdit(edit.offset, edit.after, false);
     if (!result) {
-        redo_stack_.push_back(edit);
+        undo_stack_.pop_back();
         return result;
     }
-    undo_stack_.push_back(edit);
+    redo_stack_.pop_back();
     return Result<void>::Success();
 }
 
@@ -391,13 +430,6 @@ Result<void> PhysicalPageSession::ApplyAndVerify(
             "PhysicalPageSession::ApplyAndVerify"));
     }
 
-    WriteGateGuard gate(backend);
-    const auto gate_result = gate.Enable();
-    if (!gate_result) {
-        state_ = PageSessionState::Error;
-        return gate_result;
-    }
-
     rollback_snapshot_ = baseline_;
     rollback_expected_ = working_;
     rollback_allows_partial_ = true;
@@ -405,6 +437,12 @@ Result<void> PhysicalPageSession::ApplyAndVerify(
 
     state_ = PageSessionState::Writing;
     for (const auto& run : DiffRuns()) {
+        WriteGateGuard gate(backend);
+        const auto gate_result = gate.Enable();
+        if (!gate_result) {
+            state_ = PageSessionState::Error;
+            return gate_result;
+        }
         const auto physical_address =
             address_->physical_address +
             static_cast<std::uint64_t>(run.offset);
@@ -433,13 +471,11 @@ Result<void> PhysicalPageSession::ApplyAndVerify(
                 run.after.size(),
                 write_result.Value()));
         }
-    }
-
-
-    const auto close_result = gate.Close();
-    if (!close_result) {
-        state_ = PageSessionState::Error;
-        return close_result;
+        const auto close_result = gate.Close();
+        if (!close_result) {
+            state_ = PageSessionState::Error;
+            return close_result;
+        }
     }
 
     state_ = PageSessionState::Verifying;
@@ -656,6 +692,14 @@ bool PhysicalPageSession::CanUndo() const noexcept {
 
 bool PhysicalPageSession::CanRedo() const noexcept {
     return !redo_stack_.empty();
+}
+
+std::size_t PhysicalPageSession::UndoDepth() const noexcept {
+    return undo_stack_.size();
+}
+
+std::size_t PhysicalPageSession::RedoDepth() const noexcept {
+    return redo_stack_.size();
 }
 
 std::uint64_t PhysicalPageSession::Revision() const noexcept {

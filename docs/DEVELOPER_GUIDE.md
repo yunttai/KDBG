@@ -17,6 +17,6 @@ python .\src\tools\validate_release.py --source-complete
 ```
 
 Windows Release packaging requires `windows-release`, both Release WDK drivers,
-Syft, and PE VERSIONINFO 1.0.0. Packaging rejects Debug CRT imports, PDB leakage,
+Syft, and PE VERSIONINFO 1.1.0. Packaging rejects Debug CRT imports, PDB leakage,
 unsafe or incomplete hashes, wrong architecture/version, and private paths.
 Set `KDBG_SOURCE_REVISION` and `SOURCE_DATE_EPOCH` for recorded provenance.

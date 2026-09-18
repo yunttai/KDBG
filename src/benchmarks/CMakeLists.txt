@@ -3,7 +3,7 @@ cmake_minimum_required(VERSION 3.25)
 # This directory can be added by the product build or configured directly for
 # a portable, mock-only benchmark build.
 if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
-    project(KDBGBenchmarks VERSION 1.0.0 LANGUAGES CXX)
+    project(KDBGBenchmarks VERSION 1.1.0 LANGUAGES CXX)
 
     option(KDBG_WARNINGS_AS_ERRORS "Treat warnings as errors" ON)
     set(CMAKE_CXX_STANDARD 20)

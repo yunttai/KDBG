@@ -67,6 +67,9 @@ public:
     [[nodiscard]] virtual bool IsOpen() const noexcept = 0;
     [[nodiscard]] virtual bool WritesArmed() const noexcept = 0;
 
+    // Arming is one-shot: one attempted Write consumes the arm even when the
+    // request is malformed, rejected, short, or otherwise fails. Callers that
+    // intentionally perform a bounded batch must explicitly re-arm each item.
     virtual Result<void> SetWritesArmed(bool armed) = 0;
     virtual Result<std::vector<std::uint8_t>> Read(
         std::uint64_t address,

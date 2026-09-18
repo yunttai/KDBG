@@ -2,6 +2,7 @@
 
 #include "core/memory/MockMemoryBackend.h"
 #include "core/memory/PhysicalPageSession.h"
+#include "core/memory/ProbeEvidencePattern.h"
 #include "core/pfn/PfnAddress.h"
 
 #include <algorithm>
@@ -20,12 +21,53 @@ kdbg::PfnAddress FixtureAddress() {
 
 }  // namespace
 
-void RunPageSessionTests(kdbg::test::TestRunner& runner) {
+namespace {
+
+void RunPageSessionTestsPart1(kdbg::test::TestRunner& runner) {
     using kdbg::ErrorCode;
     using kdbg::MockFaults;
     using kdbg::MockMemoryBackend;
     using kdbg::PageSessionState;
     using kdbg::PhysicalPageSession;
+
+    {
+        KDBG_CHECK(runner, kdbg::kProbeEvidenceEditOffset == 0x100U);
+        KDBG_CHECK(runner, kdbg::kProbeEvidenceEditMask.size() == 8U);
+        KDBG_CHECK(
+            runner,
+            kdbg::kProbeEvidenceEditOffset +
+                kdbg::kProbeEvidenceEditMask.size() <=
+                kdbg::kPhysicalPageSize);
+        KDBG_CHECK(runner, std::all_of(
+            kdbg::kProbeEvidenceEditMask.begin(),
+            kdbg::kProbeEvidenceEditMask.end(),
+            [](std::uint8_t value) { return value != 0U; }));
+
+        MockMemoryBackend backend;
+        KDBG_CHECK(runner, backend.Open().Ok());
+        auto session_storage = std::make_unique<PhysicalPageSession>();
+        auto& session = *session_storage;
+        KDBG_CHECK(runner, session.Load(backend, FixtureAddress()).Ok());
+        for (std::size_t index = 0;
+             index < kdbg::kProbeEvidenceEditMask.size(); ++index) {
+            const auto offset = kdbg::kProbeEvidenceEditOffset + index;
+            KDBG_CHECK(runner, session.EditByte(
+                offset,
+                static_cast<std::uint8_t>(
+                    session.Baseline()[offset] ^
+                    kdbg::kProbeEvidenceEditMask[index])).Ok());
+        }
+        const auto runs = session.DiffRuns();
+        KDBG_CHECK(runner, session.DirtyCount() == 8U);
+        KDBG_CHECK(runner, runs.size() == 1U);
+        if (runs.size() == 1U) {
+            KDBG_CHECK(
+                runner,
+                runs.front().offset == kdbg::kProbeEvidenceEditOffset);
+            KDBG_CHECK(runner, runs.front().after.size() == 8U);
+        }
+        backend.Close();
+    }
 
     {
         MockMemoryBackend backend;
@@ -194,6 +236,14 @@ void RunPageSessionTests(kdbg::test::TestRunner& runner) {
         KDBG_CHECK(runner, session.RollbackBaseline(backend).Ok());
         KDBG_CHECK(runner, session.Evidence().Complete());
     }
+}
+
+void RunPageSessionTestsPart2(kdbg::test::TestRunner& runner) {
+    using kdbg::ErrorCode;
+    using kdbg::MockFaults;
+    using kdbg::MockMemoryBackend;
+    using kdbg::PageSessionState;
+    using kdbg::PhysicalPageSession;
 
     {
         MockMemoryBackend backend;
@@ -448,6 +498,14 @@ void RunPageSessionTests(kdbg::test::TestRunner& runner) {
             session.UnlockForRollback(FixtureAddress().pfn).Ok());
         KDBG_CHECK(runner, session.RollbackBaseline(backend).Ok());
     }
+}
+
+void RunPageSessionTestsPart3(kdbg::test::TestRunner& runner) {
+    using kdbg::ErrorCode;
+    using kdbg::MockFaults;
+    using kdbg::MockMemoryBackend;
+    using kdbg::PageSessionState;
+    using kdbg::PhysicalPageSession;
 
     {
         MockMemoryBackend backend;
@@ -553,4 +611,190 @@ void RunPageSessionTests(kdbg::test::TestRunner& runner) {
         }
         KDBG_CHECK(runner, !session.HasPage());
     }
+
+    {
+        // A UI restart before Apply must discard local edits and must not
+        // leave the backend write gate open.
+        MockMemoryBackend backend;
+        KDBG_CHECK(runner, backend.Open().Ok());
+        const auto original = backend.ReadPhysical(
+            FixtureAddress().physical_address + 0x180U,
+            1U);
+        KDBG_CHECK(runner, original.Ok());
+
+        {
+            auto abandoned_session_storage =
+                std::make_unique<PhysicalPageSession>();
+            auto& abandoned_session = *abandoned_session_storage;
+            KDBG_CHECK(runner,
+                abandoned_session.Load(backend, FixtureAddress()).Ok());
+            KDBG_CHECK(runner, abandoned_session.EditByte(
+                0x180U,
+                static_cast<std::uint8_t>(
+                    abandoned_session.Working()[0x180U] ^ 1U)).Ok());
+            KDBG_CHECK(runner, abandoned_session.UnlockForOneApply(
+                FixtureAddress().pfn).Ok());
+            KDBG_CHECK(runner, abandoned_session.WriteUnlocked());
+            KDBG_CHECK(runner, !backend.Info().write_enabled);
+            KDBG_CHECK(runner, backend.WriteCallCount() == 0U);
+        }
+
+        auto restarted_session_storage =
+            std::make_unique<PhysicalPageSession>();
+        auto& restarted_session = *restarted_session_storage;
+        KDBG_CHECK(runner,
+            restarted_session.Load(backend, FixtureAddress()).Ok());
+        KDBG_CHECK(runner,
+            restarted_session.State() == PageSessionState::Clean);
+        KDBG_CHECK(runner, !restarted_session.IsDirty());
+        KDBG_CHECK(runner, !restarted_session.WriteUnlocked());
+        KDBG_CHECK(runner, !restarted_session.CanRollback());
+        const auto after_restart = backend.ReadPhysical(
+            FixtureAddress().physical_address + 0x180U,
+            1U);
+        KDBG_CHECK(runner, after_restart.Ok());
+        if (original && after_restart) {
+            KDBG_CHECK(runner, after_restart.Value() == original.Value());
+        }
+    }
+}
+
+void RunPageSessionTestsPart4(kdbg::test::TestRunner& runner) {
+    using kdbg::ErrorCode;
+    using kdbg::MockMemoryBackend;
+    using kdbg::PhysicalPageSession;
+
+    {
+        // Driver/service reconnect is modeled by Close/Open.  Every reconnect
+        // must begin locked even if the previous session ended unlocked.
+        MockMemoryBackend backend;
+        for (std::size_t iteration = 0; iteration < 50U; ++iteration) {
+            KDBG_CHECK(runner, backend.Open().Ok());
+            KDBG_CHECK(runner, !backend.Info().write_enabled);
+            KDBG_CHECK(runner, backend.SetWriteEnabled(true).Ok());
+            KDBG_CHECK(runner, backend.Info().write_enabled);
+            backend.Close();
+            KDBG_CHECK(runner, !backend.Info().connected);
+            KDBG_CHECK(runner, !backend.Info().write_enabled);
+        }
+        KDBG_CHECK(runner, backend.Open().Ok());
+        const auto locked_write = backend.WritePhysical(
+            FixtureAddress().physical_address,
+            std::vector<std::uint8_t>{0xA5U});
+        KDBG_CHECK(runner, !locked_write.Ok());
+        if (!locked_write) {
+            KDBG_CHECK(runner,
+                locked_write.GetError().code == ErrorCode::WriteLocked);
+        }
+        backend.Close();
+    }
+
+    {
+        MockMemoryBackend backend;
+        KDBG_CHECK(runner, backend.Open().Ok());
+        auto session_storage = std::make_unique<PhysicalPageSession>();
+        auto& session = *session_storage;
+        KDBG_CHECK(runner, session.Load(backend, FixtureAddress()).Ok());
+        KDBG_CHECK(runner, session.EditByte(
+            1U,
+            static_cast<std::uint8_t>(session.Baseline()[1U] ^ 1U)).Ok());
+        KDBG_CHECK(runner, session.EditByte(
+            3U,
+            static_cast<std::uint8_t>(session.Baseline()[3U] ^ 1U)).Ok());
+        KDBG_CHECK(runner, session.DiffRuns().size() == 2U);
+        const auto enables_before = backend.WriteEnableCallCount();
+        const auto disables_before = backend.WriteDisableCallCount();
+        const auto writes_before = backend.WriteCallCount();
+        KDBG_CHECK(runner,
+            session.UnlockForOneApply(FixtureAddress().pfn).Ok());
+        KDBG_CHECK(runner, session.ApplyAndVerify(backend).Ok());
+        KDBG_CHECK(runner,
+            backend.WriteEnableCallCount() == enables_before + 2U);
+        KDBG_CHECK(runner,
+            backend.WriteDisableCallCount() == disables_before + 2U);
+        KDBG_CHECK(runner, backend.WriteCallCount() == writes_before + 2U);
+        KDBG_CHECK(runner, !backend.Info().write_enabled);
+    }
+
+    {
+        MockMemoryBackend backend;
+        KDBG_CHECK(runner, backend.Open().Ok());
+        auto session_storage = std::make_unique<PhysicalPageSession>();
+        auto& session = *session_storage;
+        KDBG_CHECK(runner, session.Load(backend, FixtureAddress()).Ok());
+        bool edits_ok = true;
+        for (std::size_t index = 0;
+             index < PhysicalPageSession::kMaxEditHistory + 17U;
+             ++index) {
+            edits_ok = session.EditByte(
+                0U,
+                static_cast<std::uint8_t>(session.Working()[0U] ^ 1U)).Ok() &&
+                edits_ok;
+        }
+        KDBG_CHECK(runner, edits_ok);
+        KDBG_CHECK(runner, session.UndoDepth() ==
+            PhysicalPageSession::kMaxEditHistory);
+        KDBG_CHECK(runner, session.RedoDepth() == 0U);
+    }
+}
+
+void RunPageSessionTestsPart5(kdbg::test::TestRunner& runner) {
+    using kdbg::MockMemoryBackend;
+    using kdbg::PhysicalPageSession;
+
+    {
+        // Exercise the documented repeated Apply/verify/rollback lifecycle.
+        // Each transaction gets a fresh session, as it would after returning
+        // to a clean page view.
+        MockMemoryBackend backend;
+        KDBG_CHECK(runner, backend.Open().Ok());
+        const auto original = backend.ReadPhysical(
+            FixtureAddress().physical_address,
+            static_cast<std::uint32_t>(kdbg::kPhysicalPageSize));
+        KDBG_CHECK(runner, original.Ok());
+
+        for (std::size_t iteration = 0; iteration < 10U; ++iteration) {
+            auto session_storage = std::make_unique<PhysicalPageSession>();
+            auto& session = *session_storage;
+            KDBG_CHECK(runner, session.Load(backend, FixtureAddress()).Ok());
+            const auto offset = 0x200U + iteration;
+            KDBG_CHECK(runner, session.EditByte(
+                offset,
+                static_cast<std::uint8_t>(
+                    session.Working()[offset] ^ 0x80U)).Ok());
+            KDBG_CHECK(runner, session.UnlockForOneApply(
+                FixtureAddress().pfn).Ok());
+            KDBG_CHECK(runner, session.ApplyAndVerify(backend).Ok());
+            KDBG_CHECK(runner, session.LastApplyVerified());
+            KDBG_CHECK(runner, !backend.Info().write_enabled);
+            KDBG_CHECK(runner,
+                session.ReloadPreservingRollback(backend).Ok());
+            KDBG_CHECK(runner, session.UnlockForRollback(
+                FixtureAddress().pfn).Ok());
+            KDBG_CHECK(runner, session.RollbackBaseline(backend).Ok());
+            KDBG_CHECK(runner, session.Evidence().Complete());
+            KDBG_CHECK(runner, !backend.Info().write_enabled);
+        }
+
+        const auto restored = backend.ReadPhysical(
+            FixtureAddress().physical_address,
+            static_cast<std::uint32_t>(kdbg::kPhysicalPageSize));
+        KDBG_CHECK(runner, restored.Ok());
+        if (original && restored) {
+            KDBG_CHECK(runner, restored.Value() == original.Value());
+        }
+        KDBG_CHECK(runner, backend.WriteEnableCallCount() == 20U);
+        KDBG_CHECK(runner, backend.WriteDisableCallCount() == 20U);
+        KDBG_CHECK(runner, backend.WriteCallCount() == 20U);
+    }
+}
+
+}  // namespace
+
+void RunPageSessionTests(kdbg::test::TestRunner& runner) {
+    RunPageSessionTestsPart1(runner);
+    RunPageSessionTestsPart2(runner);
+    RunPageSessionTestsPart3(runner);
+    RunPageSessionTestsPart4(runner);
+    RunPageSessionTestsPart5(runner);
 }

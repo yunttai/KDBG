@@ -1,5 +1,56 @@
 # Changelog
 
+## Unreleased — target 1.1.0
+
+Release identity note: implementation and documentation are versioned for
+1.1.0, but exact 1.1.0 package/source/media hashes and live-VM evidence remain
+pending until the final rebuilt epoch is produced and checked. The live results
+listed below describe the immediately preceding 1.0.0 final engineering epoch
+and must not be treated as 1.1.0 evidence without that rebind.
+
+- Added the read-only Kernel Explorer: bounded loaded-module catalog, explicit
+  local exact-signature PDB resolution, kernel-only virtual reads, and Zydis
+  disassembly with asynchronous cancellation and clipped tables.
+- Optimized aligned First Scan, dense Next Scan batching with exact-read
+  fallback, pointer scans, backend buffer use, page-table range snapshots, and
+  snapshot CRC32. Added schema-2 repeated mock benchmarks with median/p95 and
+  explicit non-product-runtime labels.
+- Added transactional SCM update/repair/recovery and packaged
+  diagnose/install/start/run/stop/uninstall workflows, including marked-delete
+  handling, bounded waits, rollback error preservation, and atomic publication.
+- Added the elevated native `KDBGSetup.exe` product UX with
+  Install/Repair/Update/Uninstall, a stable Program Files transaction,
+  Apps & Features/Start Menu registration, rollback, and identity-checked purge.
+- Added opt-in, local-only runtime performance JSON for bounded process-scan
+  region/byte/I/O/cancellation data and GUI frame-stall counters without target
+  contents, process names, or filesystem paths.
+- Added AddressList and WatchList migration coverage, disarmed persisted Freeze
+  state, expanded MemProcFS subprocess fault tests, and Windows backend range
+  validation.
+- Added the packaged Probe write/read-back/reload/rollback verifier, immutable
+  external v4 evidence workflow, GUI raw-page metadata, runtime driver hashes,
+  PE/PDB GUID+age pairing, mandatory INF/CAT provenance, and hash-bound timed
+  20-scene human review records.
+- In the preceding 1.0.0 final engineering epoch, completed the Windows 11 Pro
+  25H2 required-core live gate in an isolated
+  Generation-2 Hyper-V VM: exact test-signed package identity, ABI 6,
+  KDbgProbe PFN discovery, 8-byte apply, full-page read-back and independent
+  reload, 4 KiB rollback, final write-gate lock, uninstall cleanup, exact
+  checkpoint restore, and final VM Off all passed. The same epoch subsequently
+  completed interactive GUI capture, repeated lifecycle/reboot, full feature
+  evidence, a 30-minute soak, and MP4 composition; exact 1.1.0 rebind is pending.
+- Release user-mode builds now emit full PDBs with basename-only CodeView paths;
+  package-only validation no longer depends on a source checkout.
+- Current source gate: 1,771 checks with zero failures and 38/38 validator tests;
+  GNU and MSVC Debug/Release/`/analyze` pass. Pinned NuGet WDK Debug/Release and the
+  validated main/symbol package pair pass. Disposable-VM SYS/CAT test trust,
+  driver load, lifecycle/reboot/forced-exit/update/rollback/purge recovery, the
+  Probe physical transaction, current process write/Freeze, ownership/page walk,
+  Kernel Explorer, a two-cycle/four-reboot clean-guest script lifecycle, and
+  automated 20-scene evidence preflight pass. Production publisher
+  trust, sanitizer runtime, monitored intake, and the human-reviewed final v4
+  record remain separate external gates.
+
 ## 1.0.0 — 2026-08-23
 
 - Added the PFN physical-page transaction, process analysis, PFN ownership,

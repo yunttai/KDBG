@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <limits>
+#include <stdexcept>
 
 namespace kdbg {
 namespace {
@@ -79,6 +80,7 @@ Result<void> ProcessMemorySession::Load(
     baseline_ = bytes.Value();
     working_ = bytes.TakeValue();
     dirty_.assign(working_.size(), false);
+    dirty_count_ = 0;
     rollback_.reset();
     rollback_expected_.reset();
     rollback_allows_partial_ = false;
@@ -96,6 +98,7 @@ void ProcessMemorySession::Reset() noexcept {
     baseline_.clear();
     working_.clear();
     dirty_.clear();
+    dirty_count_ = 0;
     rollback_.reset();
     rollback_expected_.reset();
     rollback_allows_partial_ = false;
@@ -121,11 +124,35 @@ Result<void> ProcessMemorySession::ApplyLocalEdit(
         return Result<void>::Success();
     }
     if (record_history) {
-        undo_stack_.push_back(ByteEdit{offset, previous, value});
+        try {
+            undo_stack_.push_back(ByteEdit{offset, previous, value});
+        } catch (const std::bad_alloc&) {
+            return Result<void>::Failure(MakeError(
+                ErrorCode::LimitReached,
+                "Process-memory edit history allocation failed",
+                "ProcessMemorySession::ApplyLocalEdit"));
+        } catch (const std::length_error&) {
+            return Result<void>::Failure(MakeError(
+                ErrorCode::LimitReached,
+                "Process-memory edit history reached its container limit",
+                "ProcessMemorySession::ApplyLocalEdit"));
+        }
+        if (undo_stack_.size() > kMaxEditHistory) {
+            undo_stack_.pop_front();
+        }
         redo_stack_.clear();
     }
+    const bool was_dirty = dirty_[offset];
     working_[offset] = value;
-    dirty_[offset] = working_[offset] != baseline_[offset];
+    const bool is_dirty = working_[offset] != baseline_[offset];
+    dirty_[offset] = is_dirty;
+    if (was_dirty != is_dirty) {
+        if (is_dirty) {
+            ++dirty_count_;
+        } else {
+            --dirty_count_;
+        }
+    }
     state_ = IsDirty()
         ? ProcessMemorySessionState::Dirty
         : ProcessMemorySessionState::Clean;
@@ -156,13 +183,25 @@ Result<void> ProcessMemorySession::Undo() {
             "ProcessMemorySession::Undo"));
     }
     const auto edit = undo_stack_.back();
-    undo_stack_.pop_back();
+    try {
+        redo_stack_.push_back(edit);
+    } catch (const std::bad_alloc&) {
+        return Result<void>::Failure(MakeError(
+            ErrorCode::LimitReached,
+            "Process-memory redo history allocation failed",
+            "ProcessMemorySession::Undo"));
+    } catch (const std::length_error&) {
+        return Result<void>::Failure(MakeError(
+            ErrorCode::LimitReached,
+            "Process-memory redo history reached its container limit",
+            "ProcessMemorySession::Undo"));
+    }
     const auto result = ApplyLocalEdit(edit.offset, edit.before, false);
     if (!result) {
-        undo_stack_.push_back(edit);
+        redo_stack_.pop_back();
         return result;
     }
-    redo_stack_.push_back(edit);
+    undo_stack_.pop_back();
     return Result<void>::Success();
 }
 
@@ -174,13 +213,25 @@ Result<void> ProcessMemorySession::Redo() {
             "ProcessMemorySession::Redo"));
     }
     const auto edit = redo_stack_.back();
-    redo_stack_.pop_back();
+    try {
+        undo_stack_.push_back(edit);
+    } catch (const std::bad_alloc&) {
+        return Result<void>::Failure(MakeError(
+            ErrorCode::LimitReached,
+            "Process-memory undo history allocation failed",
+            "ProcessMemorySession::Redo"));
+    } catch (const std::length_error&) {
+        return Result<void>::Failure(MakeError(
+            ErrorCode::LimitReached,
+            "Process-memory undo history reached its container limit",
+            "ProcessMemorySession::Redo"));
+    }
     const auto result = ApplyLocalEdit(edit.offset, edit.after, false);
     if (!result) {
-        redo_stack_.push_back(edit);
+        undo_stack_.pop_back();
         return result;
     }
-    undo_stack_.push_back(edit);
+    redo_stack_.pop_back();
     return Result<void>::Success();
 }
 
@@ -188,6 +239,7 @@ void ProcessMemorySession::RevertAll() noexcept {
     if (!HasBuffer()) return;
     working_ = baseline_;
     std::fill(dirty_.begin(), dirty_.end(), false);
+    dirty_count_ = 0;
     conflicts_.clear();
     mismatches_.clear();
     undo_stack_.clear();
@@ -301,8 +353,25 @@ Result<void> ProcessMemorySession::ApplyAndVerify(IProcessMemory& memory) {
     rollback_expected_ = working_;
     rollback_allows_partial_ = true;
     const auto runs = DiffRuns();
+    if (runs.empty()) {
+        state_ = ProcessMemorySessionState::Error;
+        return finish(Result<void>::Failure(MakeError(
+            ErrorCode::InternalInvariant,
+            "Dirty process-memory view has no dirty byte",
+            "ProcessMemorySession::ApplyAndVerify")));
+    }
     for (const auto& run : runs) {
+        const auto armed = memory.SetWritesArmed(true);
+        if (!armed) {
+            state_ = ProcessMemorySessionState::Error;
+            return finish(Result<void>::Failure(armed.GetError()));
+        }
         const auto written = memory.Write(address_ + run.offset, run.after);
+        const auto disarmed = memory.SetWritesArmed(false);
+        if (!disarmed) {
+            state_ = ProcessMemorySessionState::Error;
+            return finish(Result<void>::Failure(disarmed.GetError()));
+        }
         if (!written) {
             state_ = ProcessMemorySessionState::Error;
             return finish(Result<void>::Failure(written.GetError()));
@@ -350,6 +419,7 @@ Result<void> ProcessMemorySession::ApplyAndVerify(IProcessMemory& memory) {
 
     baseline_ = working_;
     std::fill(dirty_.begin(), dirty_.end(), false);
+    dirty_count_ = 0;
     conflicts_.clear();
     mismatches_.clear();
     undo_stack_.clear();
@@ -427,7 +497,17 @@ Result<void> ProcessMemorySession::Rollback(IProcessMemory& memory) {
 
     rollback_expected_ = live.Value();
     rollback_allows_partial_ = true;
+    const auto armed = memory.SetWritesArmed(true);
+    if (!armed) {
+        state_ = ProcessMemorySessionState::Error;
+        return finish(Result<void>::Failure(armed.GetError()));
+    }
     const auto written = memory.Write(address_, *rollback_);
+    const auto closed = memory.SetWritesArmed(false);
+    if (!closed) {
+        state_ = ProcessMemorySessionState::Error;
+        return finish(Result<void>::Failure(closed.GetError()));
+    }
     if (!written) {
         state_ = ProcessMemorySessionState::Error;
         return finish(Result<void>::Failure(written.GetError()));
@@ -471,6 +551,7 @@ Result<void> ProcessMemorySession::Rollback(IProcessMemory& memory) {
     baseline_ = *rollback_;
     working_ = baseline_;
     std::fill(dirty_.begin(), dirty_.end(), false);
+    dirty_count_ = 0;
     rollback_.reset();
     rollback_expected_.reset();
     rollback_allows_partial_ = false;
@@ -487,13 +568,11 @@ bool ProcessMemorySession::HasBuffer() const noexcept {
 }
 
 bool ProcessMemorySession::IsDirty() const noexcept {
-    return std::any_of(dirty_.begin(), dirty_.end(), [](bool value) {
-        return value;
-    });
+    return dirty_count_ != 0;
 }
 
 std::size_t ProcessMemorySession::DirtyCount() const noexcept {
-    return static_cast<std::size_t>(std::count(dirty_.begin(), dirty_.end(), true));
+    return dirty_count_;
 }
 
 bool ProcessMemorySession::CanRollback() const noexcept {
@@ -508,6 +587,14 @@ bool ProcessMemorySession::CanRedo() const noexcept {
     return !redo_stack_.empty();
 }
 
+std::size_t ProcessMemorySession::UndoDepth() const noexcept {
+    return undo_stack_.size();
+}
+
+std::size_t ProcessMemorySession::RedoDepth() const noexcept {
+    return redo_stack_.size();
+}
+
 std::uint64_t ProcessMemorySession::Address() const noexcept { return address_; }
 ProcessMemorySessionState ProcessMemorySession::State() const noexcept { return state_; }
 const std::vector<std::uint8_t>& ProcessMemorySession::Baseline() const noexcept { return baseline_; }
@@ -516,12 +603,15 @@ const std::vector<bool>& ProcessMemorySession::DirtyBitmap() const noexcept { re
 const std::vector<std::size_t>& ProcessMemorySession::ConflictOffsets() const noexcept { return conflicts_; }
 const std::vector<std::size_t>& ProcessMemorySession::MismatchOffsets() const noexcept { return mismatches_; }
 
-std::vector<ByteDiff> ProcessMemorySession::ByteDiffs() const {
+std::vector<ByteDiff> ProcessMemorySession::ByteDiffs(
+    std::size_t max_count) const {
     std::vector<ByteDiff> output;
-    output.reserve(DirtyCount());
+    output.reserve(std::min(DirtyCount(), max_count));
+    if (max_count == 0) return output;
     for (std::size_t index = 0; index < dirty_.size(); ++index) {
         if (!dirty_[index]) continue;
         output.push_back(ByteDiff{index, baseline_[index], working_[index]});
+        if (output.size() == max_count) break;
     }
     return output;
 }
@@ -552,8 +642,10 @@ std::vector<DiffRun> ProcessMemorySession::DiffRuns() const {
 void ProcessMemorySession::RecomputeDirty() noexcept {
     if (baseline_.size() != working_.size()) return;
     dirty_.resize(working_.size());
+    dirty_count_ = 0;
     for (std::size_t index = 0; index < working_.size(); ++index) {
         dirty_[index] = baseline_[index] != working_[index];
+        if (dirty_[index]) ++dirty_count_;
     }
 }
 

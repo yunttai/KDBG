@@ -1,67 +1,76 @@
-# KDBG 제출 로드맵
+# KDBG DEF CON / product roadmap
 
-마감: 2026-08-23 23:59 KST
+기준일: 2026-09-16 KST. 일정이 아니라 검증 가능한 exit criteria로 단계를
+승격한다. 각 단계의 결과는 같은 source revision과 artifact hash에 묶는다.
 
-## 8월 15일 — Source baseline
+## P0 — Current source candidate
 
-- KDBG rename and Codex migration
-- driver/backend/probe source
-- physical editor transaction
-- process scanner/address/freeze/pointer/disassembly/snapshot
-- PFN ownership/page-table source
-- portable tests and documents
+- portable/MSVC 빌드와 deterministic tests를 전부 통과시킨다.
+- persistence migration, MemProcFS subprocess, SCM/package rollback 회귀를 닫는다.
+- First/Next Scan, pointer, snapshot과 backend hot path의 전후 benchmark를 남긴다.
+- false PASS와 현재 candidate에 없는 historical evidence를 분리한다.
 
-## 8월 16일 — Windows toolchain
+Exit: source validator, repeated CTest, static analysis와 benchmark correctness가
+PASS하고 미검증 Windows/live 항목이 명시돼야 한다.
 
-- Visual Studio/SDK/WDK 확인
-- `windows-debug` build
-- two driver projects build
-- warnings/interface drift 수정
+## P1 — Kernel memory debugger/editor vertical slice
 
-## 8월 17일 — Driver load and Read
+- loaded kernel module catalog와 주소 탐색
+- 명시적 local symbol path/PDB의 주소↔symbol 해석
+- kernel virtual read + Zydis disassembly
+- symbol/address → page-table → PA/PFN → physical page cross-navigation
+- exact-byte transaction, independent reload와 rollback evidence
 
-- VM snapshot/test-signing
-- service install/start/open/ABI
-- physical ranges
-- Probe PFN exact Read
+Exit: 한 GUI 세션에서 임의의 관찰 주소가 module/symbol/instruction/PTE/PFN으로
+이어지고, short read나 symbol 부재가 성공으로 표시되지 않아야 한다.
 
-## 8월 18일 — Write/rollback evidence
+## P2 — High-performance analysis
 
-- fixture-only edit
-- preflight conflict check
-- one-shot Apply and full read-back
-- independent reload and rollback
+- First Scan throughput와 memory footprint 최적화
+- Next Scan candidate filtering과 cache locality 최적화
+- pointer edge enumeration, snapshot capture/save/load 최적화
+- backend IOCTL/copy/page-walk hot path 최적화
+- large result virtualization과 render-thread stall 측정
 
-## 8월 19일 — Advanced UI validation
+Exit: 동일 machine/build에서 correctness hash를 유지한 7회 측정의 median/p95를
+전후 JSON으로 제시한다. 한 번의 최고값은 발표 수치로 사용하지 않는다.
 
-- process scan/address table/freeze fixture
-- pointer/disassembly/snapshot
-- PFN PID/VA/PTE
-- page-table walk
+## P3 — Exact Windows VM runtime
 
-## 8월 20일 — Stability
+- WDK Release clean build와 production candidate package
+- clean install, reboot, update/repair/rollback, 10회 start/stop, uninstall/reinstall
+- device/main ABI, Probe, physical range와 kernel module/symbol readiness
+- Probe PFN physical transaction과 process write/Freeze recovery
+- forced GUI exit와 cancellation 중단 복구
 
-- repeated attach/detach and driver load/unload
-- cancellation and large result UI
-- timeout/error presentation
-- optional Driver Verifier
+Exit: VM snapshot ID, OS build, binary hashes, raw page hashes, command log와 종료
+상태가 하나의 evidence bundle로 검증돼야 한다.
 
-## 8월 21일 — Recording
+## P4 — DEF CON submission packet
 
-- clean VM state
-- readable 1080p recording
-- required path first, advanced functions after
+- 한 문장 논지: PFN을 PID/VA/PTE/심볼까지 역추적하는 트랜잭션형 Windows 커널
+  메모리 워크벤치
+- 새 기술 기여, 기존 접근의 측정 가능한 병목, 구현 세부와 실패 사례
+- 20/45분 talk outline, architecture/threat diagrams, reproducible demo script
+- live demo와 동일한 5분 backup video, redacted logs와 benchmark raw JSON
+- breakpoint/register/single-step 부재를 포함한 정확한 capability statement
 
-## 8월 22일 — Release package
+Exit: 독립 검토자가 clean VM에서 문서만으로 데모를 재현하고 모든 발표 수치를
+raw evidence에서 다시 계산할 수 있어야 한다.
 
-- Release build/package
-- SHA-256 manifest
-- attribution and evidence audit
-- restore test
+## P5 — Commercial release candidate
 
-## 8월 23일 — Submission
+- production driver signing과 clean-machine trust/load 검증
+- 설치/복구/업데이트 UX, version migration과 rollback channel — native Setup
+  source/build, stable install root와 exact-package VM lifecycle 완료
+- packaged support, privacy, MIT license/EULA decision, vulnerability intake,
+  offline update/rollback contract와 release notes — source/package contract 완료
+- main/symbol package, SBOM, attribution, hashes와 crash diagnostics
+- clean guest install/reboot/update/uninstall soak
 
-- final replay of video
-- email subject `[SuperPass] 이름`
-- attachment/openability check
-- 23:59 KST 이전 전송
+현재 local documentation/package contract, native Setup source/build와 disposable
+test-trust guest의 script soak 및 exact-package Setup UI install/repair/update/reboot/
+uninstall/clean-reboot가 완료됐다. Monitored support/security route와 production
+signing/trust는 아직 외부/실행 gate다.
+
+Exit: 서명·설치·지원 같은 외부 gate까지 완료된 뒤에만 commercial-ready로 표시한다.

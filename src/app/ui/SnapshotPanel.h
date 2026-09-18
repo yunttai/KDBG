@@ -6,6 +6,7 @@
 #include <array>
 #include <atomic>
 #include <cstdint>
+#include <functional>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -24,6 +25,9 @@ public:
 
     void Attach(IProcessMemory* memory);
     void Reset();
+    void RequestCancel() noexcept;
+    void CancelAndWait();
+    [[nodiscard]] bool Busy() const noexcept;
     void Draw();
 
 private:
@@ -32,7 +36,35 @@ private:
         Current
     };
 
+    enum class WorkerOperation {
+        None,
+        CaptureBaseline,
+        CaptureCurrent,
+        SaveBaseline,
+        SaveCurrent,
+        LoadBaseline,
+        LoadCurrent,
+        Diff
+    };
+
+    struct WorkerResult {
+        std::uint64_t generation{0};
+        WorkerOperation operation{WorkerOperation::None};
+        std::optional<MemorySnapshot> snapshot;
+        std::optional<std::vector<SnapshotDiffRun>> diffs;
+        std::optional<Error> error;
+        std::string success_status;
+    };
+
+    using WorkerTask = std::function<WorkerResult(
+        std::stop_token,
+        const SnapshotProgressCallback&)>;
+
     void StartCapture(CaptureTarget target);
+    void StartWorker(
+        WorkerOperation operation,
+        std::string status,
+        WorkerTask task);
     void ConsumeWorkerResult();
     void StopWorker();
     void DrawSnapshotSummary(
@@ -55,10 +87,10 @@ private:
 
     std::jthread worker_;
     std::atomic_bool running_{false};
+    std::atomic_uint64_t generation_{0};
     std::mutex result_mutex_;
-    CaptureTarget pending_target_{CaptureTarget::Baseline};
-    std::optional<MemorySnapshot> pending_snapshot_;
-    std::optional<Error> pending_error_;
+    std::optional<WorkerResult> pending_result_;
+    SnapshotProgress progress_{};
     std::string status_;
 };
 

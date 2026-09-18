@@ -2,6 +2,7 @@
 
 #include "app/ui/DisassemblyPanel.h"
 #include "app/ui/HexEditorPanel.h"
+#include "app/ui/KernelExplorerPanel.h"
 #include "app/ui/MemoryMapPanel.h"
 #include "app/ui/PageTablePanel.h"
 #include "app/ui/PfnInputPanel.h"
@@ -18,7 +19,10 @@
 #include "core/memory/ProbeClient.h"
 
 #include <array>
+#include <atomic>
 #include <cstdint>
+#include <filesystem>
+#include <future>
 #include <memory>
 #include <optional>
 #include <string>
@@ -37,6 +41,44 @@ public:
     void Draw();
 
 private:
+    enum class LifecycleAction {
+        None,
+        BringLabOnline,
+        InstallDriver,
+        StartDriver,
+        StopDriver,
+        RemoveDriver,
+        InstallProbe,
+        StartProbe,
+        StopProbe,
+        RemoveProbe
+    };
+
+    enum class DeferredAction {
+        None,
+        LockAllWrites,
+        DisconnectProcess,
+        ConnectBackend,
+        AttachProcess,
+        StartLifecycle
+    };
+
+    struct LifecycleOutcome {
+        LifecycleAction action{LifecycleAction::None};
+        bool succeeded{false};
+        bool cancelled{false};
+        std::string message;
+        Error error;
+    };
+
+    struct AnalysisEvidenceOutcome {
+        bool succeeded{false};
+        bool cancelled{false};
+        std::string path;
+        std::string message;
+        Error error;
+    };
+
     void DrawTabbedWorkspace();
     void DrawDockedWorkspace();
     void DrawMenuBar();
@@ -49,14 +91,29 @@ private:
     void DrawProcessScannerTab();
     void DrawPointerScannerTab();
     void DrawDisassemblyTab();
+    void DrawKernelExplorerTab();
     void DrawSnapshotTab();
     void DrawTranslationTab();
     void DrawPfnOwnershipTab();
+    void DrawAnalysisEvidence();
     void DrawDiffPanel();
     void DrawPhysicalReadback();
     void DrawPhysicalActions();
     void DrawAboutDialog();
     void HandleShortcuts();
+    void StartLifecycleAction(LifecycleAction action);
+    void LaunchLifecycleAction(LifecycleAction action);
+    void PollLifecycleAction();
+    void QueueDeferredAction(
+        DeferredAction action,
+        LifecycleAction lifecycle = LifecycleAction::None,
+        std::optional<ProcessInfo> process = std::nullopt);
+    void PollDeferredAction();
+    void RequestProcessIoCancellation() noexcept;
+    void RequestBackendIoCancellation() noexcept;
+    [[nodiscard]] bool FinishDisconnectProcess();
+    void FinishConnectBackend();
+    [[nodiscard]] bool FinishLockAllWrites();
 
     void RefreshProcesses();
     void RefreshServiceStates();
@@ -67,6 +124,9 @@ private:
     void RetryProbeMetadataForEvidence();
     void ClearProbeEvidence() noexcept;
     void ExportPhysicalEvidence();
+    void StartAnalysisEvidenceExport();
+    void PollAnalysisEvidenceExport();
+    void CancelAnalysisEvidenceExport() noexcept;
     void LockAllWrites();
     bool ValidateProbeTargetForWrite();
     bool ValidateProbeTargetForRollback();
@@ -77,12 +137,17 @@ private:
         std::string operation_name);
     void SetOperationResult(const Result<void>& result, std::string success);
     [[nodiscard]] std::string AttachedProcessName() const;
+    [[nodiscard]] bool CurrentPageMatchesProbeIdentity() const noexcept;
     [[nodiscard]] bool CurrentPageIsProbeFixture() const noexcept;
     [[nodiscard]] std::optional<VerifiedProcessPhysicalTarget>
     CurrentPageProcessTarget() const noexcept;
     [[nodiscard]] bool CurrentPageIsVerifiedWriteTarget() const noexcept;
+    [[nodiscard]] bool LifecycleBusy() const noexcept;
+    [[nodiscard]] bool ProcessIoBusy() const noexcept;
+    [[nodiscard]] bool BackendIoBusy() const noexcept;
 
     KDbgBackend backend_;
+    BackendInfo cached_backend_info_;
     ProbeClient probe_;
     std::vector<ProcessInfo> processes_;
     int selected_process_index_{-1};
@@ -100,10 +165,19 @@ private:
     ProcessScannerPanel process_scanner_;
     PointerScanPanel pointer_scanner_;
     DisassemblyPanel disassembly_;
+    KernelExplorerPanel kernel_explorer_;
     SnapshotPanel snapshots_;
 
     std::array<char, 512> driver_path_{};
     std::array<char, 512> probe_driver_path_{};
+    std::future<LifecycleOutcome> lifecycle_future_;
+    std::atomic_bool lifecycle_cancel_requested_{false};
+    std::atomic_uint32_t lifecycle_step_{0};
+    LifecycleAction lifecycle_action_{LifecycleAction::None};
+    DeferredAction deferred_action_{DeferredAction::None};
+    LifecycleAction deferred_lifecycle_{LifecycleAction::None};
+    std::optional<ProcessInfo> deferred_process_;
+    bool deferred_lock_requested_{false};
     std::optional<bool> driver_service_running_;
     std::optional<bool> probe_service_running_;
     std::optional<ProbeInfo> probe_info_;
@@ -119,6 +193,12 @@ private:
     std::vector<std::uint8_t> last_physical_readback_;
     std::string last_physical_readback_status_;
     std::string last_physical_evidence_path_;
+    std::array<char, 512> fixture_info_path_{};
+    std::future<AnalysisEvidenceOutcome> analysis_evidence_future_;
+    std::atomic_bool analysis_evidence_cancel_{false};
+    std::atomic_uint32_t analysis_evidence_progress_{0};
+    std::string analysis_evidence_status_;
+    std::string last_analysis_evidence_path_;
     bool select_driver_tab_{false};
     bool select_process_memory_tab_{false};
     bool select_physical_memory_tab_{false};

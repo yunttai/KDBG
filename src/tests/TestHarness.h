@@ -1,9 +1,34 @@
 #pragma once
 
+#include <atomic>
+#include <cstdint>
+#include <filesystem>
 #include <iostream>
+#include <string>
 #include <string_view>
 
+#if defined(_WIN32)
+#include <process.h>
+#else
+#include <unistd.h>
+#endif
+
 namespace kdbg::test {
+
+inline std::filesystem::path UniqueTempPath(std::string_view filename) {
+    static std::atomic<std::uint64_t> sequence{0};
+#if defined(_WIN32)
+    const auto process_id = static_cast<std::uint64_t>(_getpid());
+#else
+    const auto process_id = static_cast<std::uint64_t>(getpid());
+#endif
+    const auto ordinal = sequence.fetch_add(1, std::memory_order_relaxed);
+    const std::filesystem::path requested{filename};
+    const auto unique_name = requested.stem().string() + '-' +
+        std::to_string(process_id) + '-' + std::to_string(ordinal) +
+        requested.extension().string();
+    return std::filesystem::temp_directory_path() / unique_name;
+}
 
 class TestRunner {
 public:

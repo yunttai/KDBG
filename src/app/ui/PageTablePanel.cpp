@@ -47,8 +47,15 @@ bool IsWritableUser4KiBWalk(const TranslationWalk& walk) noexcept {
 
 }  // namespace
 
+void PageTablePanel::InvalidateTranslation() noexcept {
+    context_.reset();
+    walk_.reset();
+    physical_navigation_.reset();
+}
+
 void PageTablePanel::SetPid(std::uint32_t pid) noexcept {
     std::snprintf(pid_.data(), pid_.size(), "%u", pid);
+    InvalidateTranslation();
 }
 
 void PageTablePanel::SetVirtualAddress(std::uint64_t address) noexcept {
@@ -57,6 +64,7 @@ void PageTablePanel::SetVirtualAddress(std::uint64_t address) noexcept {
         virtual_address_.size(),
         "0x%llX",
         static_cast<unsigned long long>(address));
+    InvalidateTranslation();
 }
 
 void PageTablePanel::Draw(
@@ -65,12 +73,18 @@ void PageTablePanel::Draw(
     if (attached_pid != 0 && pid_[0] == '\0') SetPid(attached_pid);
     ImGui::TextUnformatted("Live VA -> PA Translation");
     ImGui::SetNextItemWidth(120.0F);
-    ImGui::InputText("PID", pid_.data(), pid_.size());
+    const bool pid_changed = ImGui::InputText(
+        "PID", pid_.data(), pid_.size());
     ImGui::SetNextItemWidth(260.0F);
-    ImGui::InputText(
+    const bool address_changed = ImGui::InputText(
         "Virtual Address",
         virtual_address_.data(),
         virtual_address_.size());
+    if (pid_changed || address_changed) {
+        InvalidateTranslation();
+        status_ =
+            "Translation input changed; translate again before opening a physical page.";
+    }
 
     if (!backend.Info().connected) ImGui::BeginDisabled();
     if (ImGui::Button("Translate with KDBG")) {
@@ -262,6 +276,19 @@ Result<VerifiedProcessPhysicalTarget> PageTablePanel::RevalidateProcessTarget(
             context.Value().directory_table_base,
             translated.Value().physical_address,
             page.pfn});
+}
+
+std::optional<PageTableEvidenceSnapshot> PageTablePanel::CurrentEvidence(
+    std::uint32_t pid,
+    std::uint64_t virtual_address,
+    std::uint64_t pfn) const {
+    if (!context_.has_value() || !walk_.has_value() ||
+        context_->pid != pid || walk_->virtual_address != virtual_address ||
+        !IsWritableUser4KiBWalk(*walk_) ||
+        (walk_->physical_address >> 12U) != pfn) {
+        return std::nullopt;
+    }
+    return PageTableEvidenceSnapshot{*context_, *walk_};
 }
 
 }  // namespace kdbg

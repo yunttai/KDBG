@@ -1,84 +1,163 @@
 # KDBG execution status
 
-기준 시각: 2026-09-16 KST
+기준 시각: 2026-09-18 KST
+
+## 결론
+
+`feature/kdbg-1.1.0`의 unsigned epoch `product-1.1.0-rc1-final-20260918`은
+source/build/package gate를 통과했다. 동일 소스의 VM 전용 test-signed derivative
+`product-1.1.0-rc1-test1-20260918`은 Windows 11 required-core와 extended
+lifecycle/reboot/30분 soak gate를 통과했다.
+
+공식 source-bound GUI run의 자동 compositor MP4도 구조·해상도·프레임·재생시간
+검사를 통과했다.
+슬라이드와 GIF는 만들지 않았다. 다만 독립적인 사람 검토에서는 1024-pixel guest
+capture의 발표 가독성이 부족했다. scene 03은 grid가 보이지 않고, scene 20의 diff
+row가 잘리며, 일부 문구가 과도하게 wrapping된다. 따라서 GUI harness의 공식 상태는
+`CAPTURED_UNREVIEWED`이고, 이 캡처와 MP4를 DEF CON 제출용 `evidence_pass`로 승격하지
+않는다.
+
+이와 별개로 presentation-only overlay run
+`out/polished-1024-minimal/runs/run-20260918T102055Z-6c85cee7`은 scene 20 exact
+cue와 widened crops로 이전 시각 blocker를 해결했다. 이 run으로 구성한 최종
+presentation video `KDBG-demo-final2.mp4`는 automatic validation과 독립적인
+presentation-only human review를 모두 PASS했다. 이 성공은 발표 영상의 품질 판정이며,
+공식 source-bound GUI evidence의 `CAPTURED_UNREVIEWED`/`evidence_pass=false`를
+변경하거나 승격하지 않는다.
+
+공개 상용 배포 승격에는 외부 production signer/TSA가 반환한 정식 서명 드라이버와
+지원·보안 연락 채널의 실제 notification/acknowledgement도 필요하다. VM 전용 test
+certificate 결과를 production publisher trust로 주장하지 않는다.
+
+## 1.1.0 identity
+
+| 항목 | 값 |
+|---|---|
+| Unsigned epoch | `product-1.1.0-rc1-final-20260918` |
+| Main ZIP SHA-256 | `3698e5333957bec112bb39c372ae933a623af86bbc12e310c2f1bddc7bdce36f` |
+| Symbols ZIP SHA-256 | `0b6dadf7e4d1f8cfe7a77200cb6c76e01b01ec1a270ed3c4f5ae25c6ffe8f849` |
+| Source snapshot SHA-256 | `8f9a04740cc576e97a56776b017da7fc0c8d344289677b9be8d579f9d4edc184` |
+| Source scope SHA-256 | `bd2c93dad7604e84534515a00437e8198fa565a654fa665b6cbf235585b98932` |
+| Benchmark executable SHA-256 | `72348dff8a0a1623fd922fa316d3bf898a60f54b49bdc34c58a115924c25d4cf` |
+| VM-only derivative | `product-1.1.0-rc1-test1-20260918` |
+| VM-only package SHA-256 | `596ccdf0a65818591e87b28737115da3066328ede42583ef95bc83d8f3d74413` |
+| Test certificate SHA-256 | `bd7de7eb5e0dd305604d5f3dc617c13d268f844dbe541677f6eb4b7f166058b1` |
+| Test signer thumbprint | `ba34b393521d722ba01df87afccc6f3feb760b2c` |
 
 ## Gate 현황
 
-| Gate | 상태 | 실제 근거 |
+| Gate | 상태 | 실행 근거 |
 |---|---|---|
-| Repository/Codex layout | PASS | `python .\src\tools\verify_layout.py` |
-| Mandatory core baseline | PASS | configure/build/CTest 1/1; 707 checks, 0 failures |
-| Clang Debug | PASS | fresh strict build/CTest |
-| Clang Release | PASS | fresh strict build/CTest |
-| ASan/UBSan | PASS | fresh build/CTest; finding 0 |
-| clang-tidy analyzers | PASS | analyzer warnings-as-errors build/CTest |
-| Source-complete validator | PASS | strict required-source/test execution gate |
-| MSVC Debug GUI/bridge | PASS | fresh x64 build; CTest 1/1 |
-| MSVC Release GUI/bridge | PASS | fresh x64 build; CTest 1/1 |
-| MSVC `/analyze /WX` | PASS | core/Windows/GUI/bridge/tests/benchmarks |
-| WDK Debug drivers | PASS | clean build; both SYS/PDB/INF/CAT; signability 0 errors/warnings |
-| WDK Release drivers | PASS | clean build; both SYS/PDB/INF/CAT; signability 0 errors/warnings |
-| Deterministic/mock functional suite | PASS | 707/0 including negative/recovery/cancel/malformed fixtures |
-| Current performance benchmark | PASS | final Windows Release binary; all six mock-only metrics PASS |
-| Current candidate GUI visual workflow | PASS | D339 full-window captures across Probe/process/PFN/PTView/About |
-| Exact-package DPI matrix | PASS | 기존 VM 프로필에서 100/125/150/200% 실제 캡처 및 SHA-256 기록 |
-| Local log/crash diagnostics | PASS | rotation/cap/redaction/minidump smoke |
-| VM prerequisite | PASS | existing `Windows-VM` checkpoint, Administrator, test-signing |
-| Previous-package install/start | PASS | older package installed; KDBG/KDBGProbe Running |
-| Final Release main/symbol packages | PASS | `kdbg.source-snapshot.v1`, strict validators, same-input ZIP reproducibility |
-| Package validator negatives | PASS | 5/5 tamper/PDB/Debug/live expected exit-1 cases |
-| Same-VM interim package/device/ABI6 | PASS | continuously running `Windows-VM`; KDBG PID 1140; ABI 6 |
-| Final Release deploy/hash/device/main ABI6 | PASS | exact package identity bound externally; fresh Probe and 4 KiB read-only PASS; writes 0 |
-| Final Release invalid IOCTL rejection | PASS | malformed/unsupported request rejected fail-closed |
-| Final Release stop/remove | PASS | both drivers stopped and removed on same VM |
-| Driver Verifier | PASS | volatile `0x132`, KDbgDriver/KDbgProbe 대상, cleanup PASS |
-| Probe read/write/read-back/reload/rollback/gate-lock | PASS | final PFN `0xBC1E6`; all six 4096-byte page states match; baseline restored; gate locked |
-| D3390AD4 advanced read-only live | PASS | fresh Probe query; built-in PFN reverse map; exact PTView; process map/scan/disassembly/snapshot/pointer/address list |
-| Optional MemProcFS runtime | BLOCKED (optional) | v5.18.11 DLL load 성공; `VMMDLL_Initialize(device=pmem)` exit 2; fallback PASS |
-| Process live write/freeze | PASS | verified 16-byte write, 3 Freeze restore ticks, rollback/gate lock |
-| D3390AD4 physical write | BLOCKED | `NOT_RUN`; DADF interim transaction만 PASS |
-| Final Release physical write | PASS | PFN `0xBC1E6`, 8-byte dirty run, read-back/reload/rollback/baseline restore |
-| Physical transaction evidence archive | PASS | `live-20260823-110826-359.zip`, SHA-256 `b8e88cb7cc78ab42f5edf0b4409b99ab4e6e60ab2761ed08f98233ee11bd0769` |
-| Scoped demonstration GIF | PASS | 17-frame 1280×720 interim-write + D339 read-only evidence |
-| Final hash-bound v2 evidence | PASS | 17-frame GIF/log/raw pages/artifact hashes, strict validator exit 0 |
+| Repository layout | PASS | `python .\src\tools\verify_layout.py` |
+| Portable build/tests | PASS | `core-debug` build, CTest 9/9 |
+| Source-complete validation | PASS | `validate_release.py --source-complete` |
+| Windows Release build/tests | PASS | clean MSVC Release build, CTest 9/9 |
+| WDK drivers | PASS | KDbgDriver/KDbgProbe 1.1.0.0, Inf2Cat 0 errors/0 warnings, symbol/contract checks |
+| Main/symbol packages | PASS | strict package/symbol validator and exact epoch hashes |
+| Windows 11 required-core | LIVE PASS | build 26200, ABI 6, exact package/source binding, Probe transaction and cleanup |
+| Physical transaction | LIVE PASS | PFN 2117631, offset `0x100`, 8-byte apply, full 4 KiB read-back/reload, 4 KiB rollback, final gate locked |
+| GUI workflow | `CAPTURED_UNREVIEWED` | automatic checks PASS; 24 captures/20 scenes, cleanup/checkpoint restore/final Off |
+| Source-bound presentation readability | FAIL | 1024 capture에서 scene 03 grid 부재, scene 20 diff row clipping, text wrapping 확인 |
+| Source-bound MP4 compositor | PASS (automatic) | 9,759,713 bytes, 405 frames, 40.5 s, 24 captures/20 scenes |
+| Source-bound MP4 human review | FAIL | 공식 source-bound evidence는 `evidence_pass=false` 유지 |
+| Presentation-only overlay | PASS | 24 captures/20 scenes, scene 20 exact cue와 widened crops, cleanup/restore/Off |
+| Final presentation MP4 | PASS (automatic + human) | 9,974,541 bytes, 1920x1080, 10 fps, 405/405 frames, 40.5 s |
+| Lifecycle/reboot | LIVE PASS | 2 cycles, 10 stop/start operations, 4 reboot boundaries, clean final inventory |
+| Long-run soak | LIVE PASS | 1800 s, 61 reports x 8 reads = 488 scheduled reads; midpoint write/read/reload/rollback PASS |
+| Performance suite | PASS (mock-only) | 7 independent process runs; live-driver 성능 주장 아님 |
+| VM cleanup | PASS | exact checkpoint restored; VM final state Off |
+| Production signing | BLOCKED (external) | production signer, TSA and returned signed drivers absent |
+| Commercial operations proof | PENDING (external) | support/security route notification and acknowledgement absent |
+| Optional MemProcFS pmem | UNVERIFIED (optional) | base product uses the built-in reverse mapper/PTView path |
 
-## 완료 산출물
+## 현재 Windows 11 증거
 
-- Windows Debug/Release `KDBG.exe` and bridge
-- WDK Debug/Release `KDbgDriver` and `KDbgProbe` SYS/INF/CAT/PDB
-- validated exact Release main/symbol package, SPDX and manifests; immutable final ZIP SHA `91042aab...`
-- same-VM ABI6 physical evidence at `out/evidence/live-20260823-110826-359/` and matching ZIP
-- D339 read-only manifest `out/evidence/candidate-d3390ad4-advanced-live.json`
-- scoped demo `out/evidence/KDBG-1.0.0-demonstration.gif`
-- authoritative final binding `out/evidence/final-live-manifest.json`
-- release digest set `out/evidence/RELEASE-HASHES.txt`
-- current Windows benchmark JSON and D339 full-window GUI screenshots under `out/evidence`
-- latest integrated result `out/evidence/final-91042aab-unblock-result.json`
-- exact-package DPI captures `out/evidence/dpi-final-91042aab/`
-- validated v2 `out/evidence/final-91042aab-live-evidence-v2.json` and `.gif`
+### Required-core
 
-## 현재 안전 및 증거 경계
+- Run: `out/win11-validation/product-1-1-0-rc1-test1-20260918/runs/run-20260918T091747Z-21a27820/`
+- Host summary SHA-256:
+  `c6bb846f56db8679758dab486195916e952298ae0a0416929372da44d716e50b`
+- Guest evidence ZIP: 26 entries, SHA-256
+  `0457ba5352e5b9005bbada1b366684b8d120f662b83c26a24758ad95aab8f6a9`
+- Result: success/guest validation true, Windows 11 Pro build 26200, ABI 6,
+  PFN 2117631, offset `0x100` 8-byte apply, full-page read-back/reload, 4 KiB
+  rollback, final gate locked, uninstall cleanup, exact checkpoint restore and
+  final VM Off.
 
-```text
-VM: Windows-VM (existing)
-Checkpoint: confirmed
-Administrator: confirmed
-Test-signing: confirmed
-Same continuously running VM: PASS
-Interim package device/ABI6 transaction: PASS
-D3390AD4 advanced read-only live: PASS
-D3390AD4 physical write: historical NOT_RUN (not used for final claim)
-Final Release deploy/hash/device/ABI/read/invalid IOCTL/stop-remove: PASS
-Final Release physical/process write, Freeze, Verifier and v2: PASS
-Optional MemProcFS backend: BLOCKED; built-in reverse mapper/PTView fallback: PASS
-```
+### GUI 및 영상
 
-## 최종 재검증 명령
+- GUI run: `out/win11-gui-product-1-1-0-rc1-test1-20260918/run-20260918T092129Z-f14f5f7a/`
+- Host summary SHA-256:
+  `f5fd51ef18c319c37feb5adb997582e56cd2efe9b03a1d6ea3213237f6815d0b`
+- Guest capture archive SHA-256:
+  `6104933593259fb074466ba8d21a5fffd7e47803b2bfec71ce206e5c0a4ce252`
+- Captures binding SHA-256:
+  `bd254d7a98230db0199051085453b09ea33405f3efe57a9ded42b8a3bebb6d42`
+- Capture result: success, `CAPTURED_UNREVIEWED`, 24 captures/20 scenes,
+  cleanup/checkpoint restore/final Off.
+- MP4: `out/demo-product-1-1-0-rc1-test1-20260918/KDBG-demo.mp4`
+- MP4 SHA-256: `c368dde54d19f46fedd32895f319223221538c006fcf4626277665b8fe5aad3d`
+- MP4 size/runtime: 9,759,713 bytes; 405 frames; 40.5 seconds.
+- Compositor report SHA-256:
+  `5b92b9086cd2a503f46fd309f4fd20099644aa17e453385d5f3a053a9714fdd0`
+- Automatic compositor validation passed. Independent human presentation review
+  failed for the layout defects listed above; `evidence_pass` remains false.
+
+Presentation-only overlay와 최종 영상:
+
+- Run: `out/polished-1024-minimal/runs/run-20260918T102055Z-6c85cee7/`
+- Host summary SHA-256:
+  `e579e3fb5351e7a9f8c6b7652e37859916f2430ad23048cb08e1f95bbc38e104`
+- Guest archive SHA-256:
+  `32945bd31a181ff05d55e9e0d1db6a7c2800941baaaa4225a38b1631fc0cf6ce`
+- Captures binding SHA-256:
+  `fffb17d8d0aba0b3ef3179379d97a6be3703d510e75352ae96cba02a264e3038`
+- Result: 24 captures/20 scenes, cleanup/checkpoint restore/final Off, scene 20
+  exact cue와 widened crops 확인.
+- Final video:
+  `out/demo-product-1-1-0-rc1-test1-polished-20260918/KDBG-demo-final2.mp4`
+- Final video SHA-256:
+  `4cd5a4f71e7baabc758c1097814cca9fc3371f6dc460ef0483faef5b2263d454`
+- Size/format: 9,974,541 bytes; 1920x1080; 10 fps; 405/405 frames; 40.5 seconds.
+- Report SHA-256:
+  `e13ddce3aa9cffec601f94f3ee928a5d4ec06e23e96b4757ea4edb3def9a31b7`
+- Automatic validation and independent presentation-only human review: PASS.
+  이 판정은 공식 source-bound evidence promotion이 아니다.
+
+### Extended lifecycle, soak 및 benchmark
+
+- Run: `out/win11-validation/product-1-1-0-rc1-test1-20260918/extended-runs/extended-20260918T092819Z-66c07a32/`
+- Host summary SHA-256:
+  `12570c4cdf41536d9a3be97461a0e58c043c5ba470baee948a14e8f1909c56ee`
+- Extended evidence ZIP SHA-256:
+  `f4c80a7c375a426bdd853e24118b623152cfbd556e56c146d20e3ded2896bc9c`
+- Current/previous package SHA-256:
+  `596ccdf0a65818591e87b28737115da3066328ede42583ef95bc83d8f3d74413` /
+  `6fe3a73c1b98bd871bf8c4673e659a1cda4bddbcd9faf69c2921487b26a380dd`
+- Lifecycle: 2 cycles, 10 stop/start operations, 4 completed reboot boundaries.
+- Soak: 1800 seconds, 61 reports, 488 scheduled reads, midpoint verified
+  write/read/reload/rollback, final gate locked.
+- Benchmark: 7 mock-only process runs, summary success true. These timings test
+  deterministic product algorithms and do not claim live-driver performance.
+- Cleanup: guest validation true, checkpoint restored and VM Off.
+
+## Historical 1.0.0 evidence
+
+Windows 10 build 19044의 path-mapped exact epoch와 reviewed v4 evidence, 그리고
+이전에 완료한 1.0.0 Windows 11 engineering epochs는 보존한다. 그 결과는 각 과거
+package/source hash에만 결속되며 위 1.1.0 PASS의 대체 근거로 재사용하지 않는다.
+
+## 재현 명령
 
 ```powershell
-python .\src\tools\validate_release.py --windows-package .\out\package\KDBG-1.0.0-win-x64 --live-evidence .\out\evidence\final-91042aab-live-evidence-v2.json
+python .\src\tools\verify_layout.py
+Push-Location .\src
+cmake --preset core-debug
+cmake --build --preset core-debug --parallel
+ctest --preset core-debug --output-on-failure
+Pop-Location
+python .\src\tools\validate_release.py --source-complete
 ```
 
-Runtime ZIP은 actual live evidence가 결합된 immutable `91042aab...` artifact이므로
-evidence-only tooling/doc 변경 때문에 재패키징하지 않는다. 필수 제품화 gate는 PASS다.
-남은 제한은 optional MemProcFS `pmem` backend와 production signing뿐이다.
+Windows/live gate는 별도다. 위 portable 명령만으로 Windows build나 live VM PASS를
+주장하지 않으며, 그 근거는 exact 1.1.0 epoch의 Windows 및 VM 증거에 기록한다.

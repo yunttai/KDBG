@@ -1,16 +1,16 @@
 # PRD — KDBG
 
-- 문서 버전: 2.0
-- 기준일: 2026-08-15
-- 제출 마감: 2026-08-23 23:59 KST
-- 대상 플랫폼: Windows 10/11 x64 전용 실습 VM
-- 제품 형태: 관리자 권한 Win32/DX11 GUI + 테스트 서명 WDM 드라이버 2개
+- 문서 버전: 3.0
+- 기준일: 2026-09-17
+- 제품 목표: DEF CON 제안·라이브 데모 및 상용화 후보
+- 대상 플랫폼: Windows 10 build 19041+/Windows 11 x64 controlled target VM
+- 제품 형태: Win32/DX11 GUI + WDM 드라이버 2개 + 격리형 분석 bridge
 
 ## 1. 제품 정의
 
-KDBG는 PFN(Page Frame Number)을 입력해 실제 물리 페이지를 읽고, Hex Editor에서 로컬로 수정한 뒤, 충돌 검사와 전체 페이지 read-back 검증을 거쳐 변경을 적용하는 Windows 메모리 연구 도구다.
+KDBG는 PFN, 프로세스 VA, PTE, 페이지 테이블, 커널 모듈과 심볼을 하나의 탐색 모델로 연결하는 고성능 Windows x64 커널 메모리 디버깅·편집 워크벤치다. 물리 페이지와 프로세스 메모리의 읽기·검색·귀속 분석을 수행하고, 편집은 충돌 검사, 전체 read-back과 rollback을 포함한 명시적 트랜잭션으로 처리한다.
 
-필수 과제 흐름은 다음과 같다.
+핵심 편집 흐름은 다음과 같다.
 
 ```text
 Probe 또는 사용자가 PFN 확보
@@ -25,11 +25,15 @@ Probe 또는 사용자가 PFN 확보
   → 독립 재조회 또는 rollback
 ```
 
-KDBG는 같은 GUI에서 프로세스 메모리 검색, 주소 목록, 검증형 Freeze, pointer scan, disassembly, snapshot diff, PFN 소유 정보, 페이지 테이블 변환을 제공한다.
+KDBG는 같은 GUI에서 고속 프로세스 메모리 검색, 주소 목록, 검증형 Freeze, pointer scan, user/kernel disassembly, snapshot diff, PFN 소유 정보, 페이지 테이블 변환과 커널 모듈/로컬 심볼 탐색을 제공한다.
+
+발표의 기술 논지는 다음 한 문장으로 고정한다.
+
+> Windows x64의 물리 페이지를 PFN에서 PID/VA/PTE/심볼까지 역으로 추적하고, 외부 변경을 감지하는 검증형 트랜잭션으로 편집 결과를 재현한다.
 
 ## 2. 목표
 
-### G-01 슈퍼패스 필수 조건
+### G-01 트랜잭션형 커널 메모리 편집
 
 - GUI에서 PFN 입력
 - 대상 물리 페이지 Read
@@ -37,15 +41,29 @@ KDBG는 같은 GUI에서 프로세스 메모리 검색, 주소 목록, 검증형
 - 실제 물리 메모리 Write
 - Write 직후 read-back 및 재조회 결과 표시
 
-### G-02 가산점
+### G-02 커널 컨텍스트 복원
 
 - PFN을 매핑한 PID, 프로세스명, VA, PTE 주소 표시
 - PML5/PML4/PDPT/PD/PT 단계와 VA → PA 변환 시각화
+- 커널 모듈, 주소, 로컬 심볼과 x64 instruction을 상호 이동
 
-### G-03 고도화
+### G-03 고속 대규모 분석
 
 - Cheat Engine 계열의 First/Next Scan, 주소 목록, verified Freeze, pointer scan, disassembly, memory snapshot/diff를 독립 구현
-- 모든 장시간 검색은 취소 가능하고 결과 수·깊이·메모리 크기에 상한을 둔다.
+- First Scan throughput, Next Scan candidates/s, pointer edges/s, snapshot GiB/s와 취소 지연을 반복 측정한다.
+- 모든 장시간 검색은 취소 가능하고 결과 수·깊이·메모리 크기에 명시적 예산을 둔다.
+
+### G-04 DEF CON 데모 재현성
+
+- exact package hash, OS build, driver/ABI version, VM snapshot ID와 모든 raw page hash를 기록한다.
+- cold start부터 PFN 귀속 분석, 심볼/디스어셈블리, 편집, read-back, 독립 reload와 rollback을 중단 없는 한 세션으로 재현한다.
+- 주장하는 성능은 동일 장비 반복 실행의 median/p95와 데이터 크기를 함께 공개한다.
+
+### G-05 출시 후보 완성도
+
+- 설치, update/repair, start/stop/remove와 실패 rollback이 멱등적이어야 한다.
+- main/symbol package, SBOM, attribution, version metadata와 SHA-256 manifest를 제공한다.
+- GUI나 서비스 실패를 성공으로 표시하지 않고 진단에 다음 복구 행동을 포함한다.
 
 ## 3. 명시적 비목표
 
@@ -54,7 +72,7 @@ KDBG는 같은 GUI에서 프로세스 메모리 검색, 주소 목록, 검증형
 - 은닉, 안티치트 우회, 프로세스 주입
 - 임의 커널 가상주소 쓰기
 - 원격 대상 또는 본인이 관리하지 않는 시스템 접근
-- 커널 디버거의 breakpoint/single-step 완전 재구현
+- 현재 3.0 범위에서 trap 기반 breakpoint/register/single-step 실행 제어를 구현했다고 주장하는 것
 - MemProcFS 전체 기능 재구현
 
 ## 4. 기능 요구사항
@@ -107,6 +125,11 @@ KDBG는 같은 GUI에서 프로세스 메모리 검색, 주소 목록, 검증형
 - GUI에서 Probe VA, PA, PFN, generation, CRC32를 조회하고 PFN 입력란을 자동 채운다.
 - Reset/Fill control을 제공한다.
 - 제출 영상의 기본 Write 대상은 Probe page다.
+- Packaged `tools/kdbg_process_fixture.exe`는 별도의 deterministic,
+  page-aligned, `VirtualLock`된 4096-byte user mapping과 run nonce,
+  process-start identity, generation/CRC를 제공한다.
+- Process write/Freeze, ownership, PTView와 process-vs-physical 검증은 정확히
+  그 fixture PID/VA를 사용하며 Probe PFN/VA를 재사용하지 않는다.
 
 ### FR-008 프로세스 선택·메모리 맵·Hex browser
 
@@ -180,6 +203,32 @@ KDBG는 같은 GUI에서 프로세스 메모리 검색, 주소 목록, 검증형
 - LA57 여부, 각 level index, entry PA/value, PFN, P/RW/US/A/PS-or-D/NX를 표시한다.
 - 4 KiB, 2 MiB, 1 GiB leaf를 처리한다.
 
+### FR-016 Kernel Explorer
+
+- Windows가 보고하는 loaded kernel module을 base, size, path와 함께 bounded catalog로 표시한다.
+- 사용자가 지정한 로컬 symbol path/PDB만 명시적으로 로드하고 주소↔symbol 변환 결과와 실패 원인을 표시한다.
+- 선택한 module/symbol/address의 kernel virtual bytes를 기존 backend로 읽고 Zydis x64 disassembly를 표시한다.
+- kernel address, page-table walk, 최종 PA/PFN과 physical editor 사이를 복사·이동할 수 있다.
+- backend 미연결, short read, symbol 부재를 서로 다른 상태로 표시한다.
+
+### FR-017 성능·회귀 하네스
+
+- mock benchmark는 알고리즘 비교용이며 live-driver 성능 주장과 분리한다.
+- 각 benchmark는 데이터 크기, 반복 수, warm-up, median, p95, throughput과 peak memory를 JSON으로 출력한다.
+- 같은 machine/build/configuration에서 최적화 전후를 비교하고 정확성 hash가 다르면 성능 결과를 폐기한다.
+- live harness는 IOCTL 수, requested/completed bytes, scan regions, cancellation latency와 GUI frame stall을 기록한다.
+- packaged `kdbg_live_verify.exe`는 기본 read-only이며, write mode에서는 disposable
+  VM·snapshot ID·현재 Probe PFN 확인을 모두 요구하고 8-byte one-shot Apply,
+  full-page read-back, independent reload, full-page rollback, 최종 lock과 session
+  counter를 `kdbg.live-verify.v1` JSON으로 기록한다.
+
+### FR-018 제품 수명주기
+
+- install/update/repair/restart/remove는 두 서비스와 해당 binary path를 하나의 복구 가능한 작업으로 취급한다.
+- package publish는 directory, ZIP, symbols와 sidecar 전체를 원자적으로 교체하거나 이전 set을 복원한다.
+- readiness는 service state, device presence, 실제 backend ABI와 Probe fixture 검증을 구분해 표시한다.
+- 주소 목록과 watch persistence는 이전 버전을 읽고 현재 버전으로 다시 저장할 수 있다.
+
 ## 5. 비기능 요구사항
 
 ### NFR-001 안전과 정확성
@@ -187,13 +236,16 @@ KDBG는 같은 GUI에서 프로세스 메모리 검색, 주소 목록, 검증형
 - 관리자/SYSTEM device ACL, 단일 controller PID, per-handle write gate, acknowledge magic, 최대 전송 크기를 적용한다.
 - 모든 read/write는 requested/completed byte count를 검사한다.
 - 모든 destructive GUI 동작은 명시적 PFN 또는 PID 확인을 요구한다.
-- Probe page가 아닌 물리 페이지 Write는 실습 VM에서만 수행하며 제출 시연에는 사용하지 않는다.
+- 발표의 복구 가능한 기본 대상은 Probe page다. 고급 시연은 dedicated process
+  fixture의 현재 VA를 PTView로 변환해 얻은 exact 4 KiB PFN만 사용한다.
 
 ### NFR-002 반응성
 
 - First/Next Scan, Pointer Scan, Snapshot은 `std::jthread`/stop token 기반으로 실행한다.
 - 결과가 큰 표는 `ImGuiListClipper`를 사용한다.
 - 짧은 4 KiB IOCTL과 단일 VA translation은 현재 UI command에서 직접 수행하되 중복 클릭을 만들지 않는다.
+- read/scan hot path에는 사용자 확인 UI를 넣지 않으며, 장시간 작업은 render thread를 차단하지 않는다.
+- 성능 개선은 cap, cancellation, byte-count와 결과 의미를 변경해서 달성하지 않는다.
 
 ### NFR-003 이식 경계
 
@@ -217,11 +269,29 @@ KDBG는 같은 GUI에서 프로세스 메모리 검색, 주소 목록, 검증형
 ### Windows-build-verified
 
 - `KDBG.exe`, bridge, 두 WDK driver가 실제 Windows에서 빌드됨
-- package manifest 검증 통과
+- package manifest 검증과 모든 EXE/SYS↔PDB RSDS GUID+age 결속 통과
 
 ### Live-VM-verified
 
 - Probe PFN의 Read/Edit/Write/full read-back/independent reload/rollback 증거가 존재함
-- PFN ownership과 page walk가 화면에 표시됨
+- dedicated process fixture의 PFN ownership과 complete x64 page walk가 표시되고
+  process/physical 4096-byte read가 일치함
+- `kdbg.live-evidence.v4`가 fixture INFO/image, Kernel Explorer module/PDB/read/
+  disassembly proof와 exact package/symbol hashes를 결속함
+- 실제 reviewer/time/range/note/redaction 결정을 담은 20-scene review JSON이 영상 hash에 결속됨
+
+### DEF-CON-candidate
+
+- 현재 source, MSVC/WDK Release, package와 live evidence가 같은 revision/hash에 묶임
+- 30분 연속 세션에서 install/start, kernel context 탐색, scan, transaction, rollback과 cleanup을 재현
+- 반복 benchmark의 raw JSON과 측정 방법을 공개하고 성능 주장마다 median/p95를 제시
+- 발표 abstract, novelty statement, architecture/threat diagrams, 5분 backup video와 redacted failure demo를 준비
+- breakpoint/register/single-step이 없으면 제품을 `kernel memory debugger/editor`로 정확히 표기
+
+### Commercial-release-candidate
+
+- production driver signing, 설치 UX, update channel, support/privacy/license 문서는 별도 외부 release gate로 완료
+- clean Windows guest에서 install/reboot/update/uninstall을 반복하고 남은 service/device/file이 없어야 함
+- symbols, SBOM, notices, crash diagnostics와 rollback 가능한 이전 package를 함께 제공
 
 Linux에서 Source-complete를 검증해도 Windows-build-verified 또는 Live-VM-verified로 간주하지 않는다.
