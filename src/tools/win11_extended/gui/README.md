@@ -27,6 +27,10 @@ is visible. Each capture is followed by the inverse splitter move; this changes
 presentation geometry only and does not alter product data or write-gate state.
 `Test-Win11ExtendedGuiHarness.ps1` locks the before-capture/after-capture ordering
 so a later coordinate edit cannot silently reintroduce either clipping defect.
+Before the checkbox-strip locator samples pixels, it moves the pointer to the
+neutral reference point and waits 120 ms. A failed pointer move aborts capture,
+preventing hover-blue pixels from being mistaken for a checked Freeze box; the
+static harness locks this ordering ahead of bitmap creation.
 
 ## Status boundary
 

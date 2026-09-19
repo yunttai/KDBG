@@ -649,6 +649,11 @@ function Get-ReferenceCheckboxStripState(
     if ($EndY -le $StartY -or $BoxSize -lt 8 -or $BoxSize -gt 40) {
         throw 'Checkbox scan geometry is invalid.'
     }
+    $away = Get-ReferencePoint 100 350 $Geometry $CalibrationValue
+    if (-not [KdbgGuiNative]::SetCursorPos($away.X,$away.Y)) {
+        throw 'SetCursorPos failed while stabilizing a checkbox-strip assertion.'
+    }
+    Start-Sleep -Milliseconds 120
     $region = [pscustomobject]@{ x=$X; y=$StartY; width=$BoxSize; height=$EndY-$StartY }
     $bounds = ConvertTo-ReferenceRegion $region $CalibrationValue $Geometry
     $bitmap = [Drawing.Bitmap]::new(

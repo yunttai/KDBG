@@ -433,6 +433,32 @@ $bootstrapText = Get-Content -LiteralPath (Join-Path $root 'interactive-bootstra
 $uiActionText = Get-Content -LiteralPath (Join-Path $root 'ui-action.ps1') -Raw
 $uiTaskText = Get-Content -LiteralPath (Join-Path $root 'ui-task.ps1') -Raw
 $autoLogonCleanupText = Get-Content -LiteralPath (Join-Path $root 'Clear-Win11AutoLogonAfterExplorer.ps1') -Raw
+$checkboxStripFunction = [regex]::Match(
+    $uiActionText,
+    '(?ms)^function Get-ReferenceCheckboxStripState\(.*?(?=^function Invoke-UncheckedReferenceCheckboxUntilChecked\()')
+if (-not $checkboxStripFunction.Success) {
+    throw 'Checkbox-strip locator function is missing.'
+}
+$checkboxStripText = $checkboxStripFunction.Value
+$checkboxStripAway = $checkboxStripText.IndexOf(
+    '$away = Get-ReferencePoint 100 350 $Geometry $CalibrationValue',
+    [StringComparison]::Ordinal)
+$checkboxStripFailClosed = $checkboxStripText.IndexOf(
+    'if (-not [KdbgGuiNative]::SetCursorPos($away.X,$away.Y))',
+    [StringComparison]::Ordinal)
+$checkboxStripSettle = $checkboxStripText.IndexOf(
+    'Start-Sleep -Milliseconds 120',
+    [StringComparison]::Ordinal)
+$checkboxStripCapture = $checkboxStripText.IndexOf(
+    '$bitmap = [Drawing.Bitmap]::new(',
+    [StringComparison]::Ordinal)
+if ($checkboxStripAway -lt 0 -or $checkboxStripFailClosed -le $checkboxStripAway -or
+    $checkboxStripSettle -le $checkboxStripFailClosed -or
+    $checkboxStripCapture -le $checkboxStripSettle -or
+    -not $checkboxStripText.Contains(
+        "throw 'SetCursorPos failed while stabilizing a checkbox-strip assertion.'")) {
+    throw 'Checkbox-strip capture must fail closed after moving to the neutral reference point and settling for 120 ms.'
+}
 foreach ($token in $planTokens) {
     $literal = '${' + $token + '}'
     if (-not $uiActionText.Contains("'$literal' =")) {
@@ -594,6 +620,7 @@ $result = [ordered]@{
         readiness_actions=@($allActions | Where-Object type -eq 'wait_window_responsive').Count
         capture_actions=@($allActions | Where-Object type -eq 'capture').Count
         source_bound_readability_contracts=$readabilityContracts.Count
+        checkbox_strip_hover_stabilization=$true
         token_count=$planTokens.Count
         planned_duration_ms=$plannedDuration
         client_height=[int]$calibration.client.height
