@@ -1,81 +1,88 @@
 # KDBG 1.1.0 release checklist
 
-Status date: 2026-09-18 KST. A gate is PASS only when the current workspace has
+Status date: 2026-09-19 KST. A gate is PASS only when the current workspace has
 the command result and required artifact. Historical or external results do not
 promote the current gate.
 
 Epoch boundary: 1.1.0 is the current release target on branch
-`feature/kdbg-1.1.0`. The unsigned build epoch is
-`product-1.1.0-rc1-final-20260918`; the VM-test-signed derivative is
-`product-1.1.0-rc1-test1-20260918`. Historical 1.0.0 hashes and
+`feature/kdbg-1.1.0`; the RC4 product-source commit is
+`4b376bb0d61eab232af8a2f7f29033238b911022`. The unsigned build epoch is
+`product-1.1.0-rc4-final-20260919`; the VM-test-signed derivative is
+`product-1.1.0-rc4-test1-20260919`. Historical 1.0.0 hashes and
 `product-rc1/test2` paths below remain evidence only for their named immutable
 epochs and do not promote a 1.1.0 gate.
 
 | Gate | PASS requirement | Current state |
 |---|---|---|
-| Source-complete | layout, core build/test, source validator | **PASS** — layout, core build, CTest 9/9 and source validator passed; source snapshot `8f9a0474…f6a9`, scope `bd2c93da…8932` |
-| Windows-build-verified | MSVC Release GUI/bridge plus WDK signing inputs, validated main package and hashes | **PASS (UNSIGNED PRODUCT EPOCH)** — main `3698e533…36f`, symbols `0b6dadf7…849`; this is not production trust |
-| Live-device-run-report | exact packaged drivers, controlled Probe transaction and final lock | **PASS (VM TEST TRUST)** — required-core run `run-20260918T091747Z-21a27820`, summary `c6bb846f…e50b`, archive `0457ba53…f6a9` |
-| Live-VM-verified | ownership/PTView/Kernel Explorer and lifecycle/soak | **PASS for automated VM/lifecycle gates; formal GUI evidence review FAIL** — extended run `extended-20260918T092819Z-66c07a32` passed, while the official source-bound GUI run remains `evidence_pass=false` |
-| Presentation-video-quality | video-only artifact, scene/capture counts and independent readability review | **PASS (PRESENTATION-ONLY)** — overlay run and final MP4 passed automatic and independent human review; this does not alter the formal GUI evidence flags or prove submission |
+| Source-complete | layout, core build/test, source validator | **PASS** — layout, core build, CTest 9/9 and source validator passed; source `966c51f2…0f92`, scope `bd2c93da…8932` |
+| Windows-build-verified | MSVC Release GUI/bridge plus WDK signing inputs, validated main package and hashes | **PASS (UNSIGNED PRODUCT EPOCH)** — main `4dd98b12…34d9`, symbols `1f042e5e…ac68`; this is not production trust |
+| Live-device-run-report | exact packaged drivers, controlled Probe transaction and final lock | **PASS (VM TEST TRUST)** — `run-20260919T015729Z-8445dddb`, summary `4ad612d9…57b5`, archive `39c31476…57da` |
+| Live-VM-verified | required-core plus optional extended/lifecycle/soak | **PARTIAL** — RC4 required-core PASS; optional extended/lifecycle/soak **NOT RUN**; historical RC1 result not rebound |
+| GUI capture evidence | host/capture/archive integrity plus formal human review | **INTEGRITY PASS / FORMAL REVIEW INCOMPLETE** — `run-20260919T015850Z-1cfb0381`; `CAPTURED_UNREVIEWED`, `evidence_pass=false`, `human_review_complete=false` |
+| Presentation-video-quality | redacted video-only artifact and independent readability review | **PASS (AUTOMATIC + INDEPENDENT PRESENTATION REVIEW)** — public-v4 passed; v2/v3 superseded; no formal promotion |
+| Source freeze | annotated RC tag bound to exact source commit | **PASS (PUBLISHED RC TAG)** — `v1.1.0-rc4` is published to `origin` at `4b376bb0d61eab232af8a2f7f29033238b911022` |
+| Production signing/release | trusted returned artifacts and stable tag/release | **BLOCKED** — staged inputs only; no production signer/HSM/TSA, returned signed artifacts, stable `v1.1.0`, or public release |
 
 ## Current 1.1.0 exact evidence
 
 - Unsigned main ZIP SHA-256:
-  `3698e5333957bec112bb39c372ae933a623af86bbc12e310c2f1bddc7bdce36f`.
+  `4dd98b120a725d1804078a394c4d659cdb059a568a38a78643a936ce5f1f34d9`.
 - Symbols ZIP SHA-256:
-  `0b6dadf7e4d1f8cfe7a77200cb6c76e01b01ec1a270ed3c4f5ae25c6ffe8f849`.
+  `1f042e5e7a51cb1e2428b6ddb3c955c277de4993a264444e242fe469d104ac68`.
 - Source snapshot/scope SHA-256:
-  `8f9a04740cc576e97a56776b017da7fc0c8d344289677b9be8d579f9d4edc184` /
+  `966c51f26c9e4da27491a4c00b8989c0eb8360ea3b85d8e9513adf1915ee0f92` /
   `bd2c93dad7604e84534515a00437e8198fa565a654fa665b6cbf235585b98932`.
+- Benchmark executable SHA-256:
+  `7999ed886e5b8710f48cd8d08405e6aa8d52608cc4672b0980b7c696fcdef63f`.
 - VM-test-signed package SHA-256:
-  `596ccdf0a65818591e87b28737115da3066328ede42583ef95bc83d8f3d74413`;
+  `7f7c179738eb670ca79d6c41bc9c46c445c1ffd31811c46f39bbbdcad3df45d5`;
   test certificate `bd7de7eb5e0dd305604d5f3dc617c13d268f844dbe541677f6eb4b7f166058b1`,
   signer thumbprint `ba34b393521d722ba01df87afccc6f3feb760b2c`.
 - Required-core Windows 11 build 26200 run
-  `run-20260918T091747Z-21a27820`: ABI 6, Probe PFN, eight-byte one-shot apply,
+  `run-20260919T015729Z-8445dddb`: ABI 6, Probe PFN, eight-byte one-shot apply,
   full-page read-back, 4096-byte rollback, final lock, cleanup, checkpoint
   restore and final VM Off all passed. Summary/archive SHA-256:
-  `c6bb846f56db8679758dab486195916e952298ae0a0416929372da44d716e50b` /
-  `0457ba5352e5b9005bbada1b366684b8d120f662b83c26a24758ad95aab8f6a9`.
-- Extended run: summary
-  `12570c4cdf41536d9a3be97461a0e58c043c5ba470baee948a14e8f1909c56ee`,
-  archive `f4c80a7c375a426bdd853e24118b623152cfbd556e56c146d20e3ded2896bc9c`;
-  two cycles,
-  ten stop/start transitions, four reboots, 1800-second soak, 488 reads,
-  midpoint transaction and seven benchmark runs passed, followed by cleanup,
-  checkpoint restore and final VM Off.
-- GUI run `run-20260918T092129Z-f14f5f7a` was captured automatically as
-  `CAPTURED_UNREVIEWED`: summary
-  `f5fd51ef18c319c37feb5adb997582e56cd2efe9b03a1d6ea3213237f6815d0b`,
-  archive `6104933593259fb074466ba8d21a5fffd7e47803b2bfec71ce206e5c0a4ce252`,
-  captures `bd254d7a98230db0199051085453b09ea33405f3efe57a9ded42b8a3bebb6d42`,
-  24 captures/20 scenes. Human review is **FAIL**:
-  the 1024 layout clips scene 03's grid and scene 20's diff row and wraps
-  columns. `evidence_pass=false`; these formal source-bound flags remain
-  unchanged.
-- Presentation-only overlay run
-  `out/polished-1024-minimal/runs/run-20260918T102055Z-6c85cee7` passed its
-  automated gate and independent human presentation review. Summary/guest/
-  captures SHA-256:
-  `e579e3fb5351e7a9f8c6b7652e37859916f2430ad23048cb08e1f95bbc38e104` /
-  `32945bd31a181ff05d55e9e0d1db6a7c2800941baaaa4225a38b1631fc0cf6ce` /
-  `fffb17d8d0aba0b3ef3179379d97a6be3703d510e75352ae96cba02a264e3038`.
-  It contains 24 captures/20 scenes and finished with cleanup, checkpoint
-  restore and VM Off. The scene 20 evidence-bound cue and scene 10/11 crops
-  resolve the earlier visual blockers.
-- Final video-only artifact (no deck/GIF):
-  `out/demo-product-1-1-0-rc1-test1-polished-20260918/KDBG-demo-final2.mp4`,
-  SHA-256
-  `4cd5a4f71e7baabc758c1097814cca9fc3371f6dc460ef0483faef5b2263d454`,
-  9,974,541 bytes, 1920x1080, 10 fps, 40.5 seconds, 405/405 frames. The
-  report SHA-256 is
-  `e13ddce3aa9cffec601f94f3ee928a5d4ec06e23e96b4757ea4edb3def9a31b7`.
+  `4ad612d9298d902066a95c47a64c213454ce229e2ebf23ea153b8e0a702f57b5` /
+  `39c31476928084337d402b6f8b772388c1cfb321c216f3ea4a7ea2d5460857da`.
+- RC4 optional extended/lifecycle/soak: **NOT RUN**. Any RC1 result is
+  historical only.
+- GUI run `run-20260919T015850Z-1cfb0381`: host/capture/cleanup/checkpoint and
+  archive/hash integrity PASS; 24 frames, 20 scenes, 21 assertions, 229 actions.
+  Summary/guest/captures SHA-256:
+  `ded51b6fc1a71f670e00e709b53987416823f400c6d9e7010b2c7e55dc642cb1` /
+  `c877e2b3695faf6489f0ff3fa517a97eb0cc6f0f334a0a4a4bad900f14446cf4` /
+  `abfe37fe1694fe8e35229c306663dde0cc4ff688d1a1fa80139f74c8ea9b3695`.
+  Formal status remains `CAPTURED_UNREVIEWED`, `evidence_pass=false`, and
+  `human_review_complete=false`.
+- Initial RC4 MP4: compositor PASS, independent public-suitability FAIL because
+  private paths and weak crops remained; internal-only.
+- Public v2 failed independent review because the taskbar remained visible;
+  public v2/v3 are superseded.
+- Presentation-only public-v4 candidate:
+  `out/demo-product-1-1-0-rc4-test1-public-v4-20260919/KDBG-1.1.0-demo-public-v4.mp4`,
+  SHA-256 `43eda62e57607d36517c4bf139094cae8ef786dd7a8e0ea688154f3787475260`,
+  9,553,416 bytes, 1920x1080, 10 fps, 405 frames, 40.5 seconds. Automatic
+  compositor and independent presentation review PASS. Review covered 405/405
+  frames, 20 scenes, 24 segments, and 19 boundaries; no rendered path, username,
+  taskbar, notification, or unrelated process was visible and core claims were
+  readable. Report/scenes/contact-sheet SHA-256 values are
+  `406054011b2e47dc144631e17e63d920acb715e4076c303556a852fd1009bd88` /
+  `9e4a0543f4aaa61f44a39674e737b212df20474b8f063f1b44aa99d6817dcd04` /
+  `fa8597a86ae39318e4cd52f2eea0e135623fa77ccf07956ca983702fed59258b`.
+  Raw `frames/` are excluded from the public bundle because they contain private
+  paths or the taskbar. Final video-only delivery copy
+  `out/release-media/KDBG-1.1.0-demo-public.mp4` has the same SHA/bytes, and its
+  directory contains only that MP4.
+- Production signing staging: 11 inputs under
+  `out/production-signing/product-1.1.0-rc4-final-20260919-prepared`, request
+  `3f94c26060bc437460b22ced778c52f1f70165e49a7ac57f0979c1a347f64001`;
+  `signing_performed=false`, `network_submission_performed=false`.
 
-Production signer/TSA output, returned production-driver verification,
-monitored support/security intake acknowledgement, formal source-bound GUI
-human review, submission deadline/recipient and actual submission remain
-unproved.
+Production signer/private key/HSM or service, RFC 3161 TSA, returned signed
+artifact verification, monitored route acknowledgement, formal GUI review,
+stable `v1.1.0` tag, and public release remain unproved. The published annotated
+`v1.1.0-rc4` source-freeze tag is not a stable production release. DEF CON
+submission is explicitly excluded from this checklist scope.
 
 ## Historical 1.0.0 completion inventory (not a 1.1.0 PASS)
 

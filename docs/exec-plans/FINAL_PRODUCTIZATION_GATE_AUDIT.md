@@ -1,5 +1,11 @@
 # KDBG 1.1.0 productization gate audit
 
+> **Historical / superseded:** 이 문서는 RC1 시점의 감사 기록으로 보존한다.
+> 현재 판정은 `docs/exec-plans/STATUS.md`의 RC4 status를 따른다.
+> RC4 public v4 영상은 presentation review PASS이고 `origin`에 게시된
+> `v1.1.0-rc4`는 source-freeze tag다. Formal GUI evidence는 `CAPTURED_UNREVIEWED`,
+> `evidence_pass=false`, `human_review_complete=false`이며 stable release는 차단됐다.
+
 Date: 2026-09-18 KST
 
 Scope: documentation, integration judgement and existing immutable `out/`

@@ -40,79 +40,79 @@ PRD, architecture, implementation status, test plan, threat model, UX, source ad
 - clean-VM preflight and pre-KDBG guest-failure diagnostics under
   `out/test-artifacts`
 
-## KDBG 1.1.0 release candidate
+## KDBG 1.1.0 RC4 release candidate
 
-The current unsigned build epoch is
-`out/release-epochs/product-1.1.0-rc1-final-20260918/`. Its Windows Release
-build, CTest 9/9, driver build, package validation and source provenance checks
-passed. Exact identities are:
+The current source-bound unsigned epoch is
+`out/release-epochs/product-1.1.0-rc4-final-20260919/`, built from Git commit
+`4b376bb0d61eab232af8a2f7f29033238b911022`. Its source, Windows Release,
+CTest 9/9, driver, package, and provenance checks passed. Exact identities are:
 
 | Artifact | SHA-256 | Additional identity |
 |---|---|---|
-| `KDBG-1.1.0-win-x64.zip` | `3698e5333957bec112bb39c372ae933a623af86bbc12e310c2f1bddc7bdce36f` | 3,724,808 bytes |
-| `KDBG-1.1.0-win-x64-symbols.zip` | `0b6dadf7e4d1f8cfe7a77200cb6c76e01b01ec1a270ed3c4f5ae25c6ffe8f849` | 20,710,820 bytes |
-| canonical source snapshot | `8f9a04740cc576e97a56776b017da7fc0c8d344289677b9be8d579f9d4edc184` | 275 files |
+| `KDBG-1.1.0-win-x64.zip` | `4dd98b120a725d1804078a394c4d659cdb059a568a38a78643a936ce5f1f34d9` | 3,724,846 bytes |
+| `KDBG-1.1.0-win-x64-symbols.zip` | `1f042e5e7a51cb1e2428b6ddb3c955c277de4993a264444e242fe469d104ac68` | 20,563,309 bytes |
+| canonical source snapshot | `966c51f26c9e4da27491a4c00b8989c0eb8360ea3b85d8e9513adf1915ee0f92` | 275 files |
 | source scope | `bd2c93dad7604e84534515a00437e8198fa565a654fa665b6cbf235585b98932` | `kdbg.product-source.v1` |
-| `kdbg_benchmarks.exe` | `72348dff8a0a1623fd922fa316d3bf898a60f54b49bdc34c58a115924c25d4cf` | unsigned epoch |
+| `kdbg_benchmarks.exe` | `7999ed886e5b8710f48cd8d08405e6aa8d52608cc4672b0980b7c696fcdef63f` | unsigned epoch |
 
 The VM-only test-signed derivative is
-`out/release-epochs/product-1.1.0-rc1-test1-20260918/`. Its main ZIP SHA-256 is
-`596ccdf0a65818591e87b28737115da3066328ede42583ef95bc83d8f3d74413`.
-The disposable-VM certificate SHA-256 is
+`out/release-epochs/product-1.1.0-rc4-test1-20260919/`; its main ZIP SHA-256 is
+`7f7c179738eb670ca79d6c41bc9c46c445c1ffd31811c46f39bbbdcad3df45d5`.
+The disposable-VM certificate SHA-256 remains
 `bd7de7eb5e0dd305604d5f3dc617c13d268f844dbe541677f6eb4b7f166058b1`
-and signer thumbprint is `ba34b393521d722ba01df87afccc6f3feb760b2c`. This is
+with signer thumbprint `ba34b393521d722ba01df87afccc6f3feb760b2c`. This is
 test trust only, not a production signature.
 
-Current Windows 11 evidence bound to that derivative is:
+Current Windows 11 evidence bound to that exact derivative is:
 
-- required-core run
-  `out/win11-validation/product-1-1-0-rc1-test1-20260918/runs/run-20260918T091747Z-21a27820/`:
-  PASS; host summary `c6bb846f56db8679758dab486195916e952298ae0a0416929372da44d716e50b`;
-  guest archive `0457ba5352e5b9005bbada1b366684b8d120f662b83c26a24758ad95aab8f6a9`.
-- extended lifecycle/soak run
-  `out/win11-validation/product-1-1-0-rc1-test1-20260918/extended-runs/extended-20260918T092819Z-66c07a32/`:
-  PASS; summary `12570c4cdf41536d9a3be97461a0e58c043c5ba470baee948a14e8f1909c56ee`;
-  extended evidence archive
-  `f4c80a7c375a426bdd853e24118b623152cfbd556e56c146d20e3ded2896bc9c`.
-- GUI capture run
-  `out/win11-gui-product-1-1-0-rc1-test1-20260918/run-20260918T092129Z-f14f5f7a/`:
-  automation success with `CAPTURED_UNREVIEWED`, 24 captures and 20 scenes;
-  summary `f5fd51ef18c319c37feb5adb997582e56cd2efe9b03a1d6ea3213237f6815d0b`,
-  guest archive `6104933593259fb074466ba8d21a5fffd7e47803b2bfec71ce206e5c0a4ce252`,
-  and captures digest `bd254d7a98230db0199051085453b09ea33405f3efe57a9ded42b8a3bebb6d42`.
+- required-core run `run-20260919T015729Z-8445dddb`: PASS; host summary
+  `4ad612d9298d902066a95c47a64c213454ce229e2ebf23ea153b8e0a702f57b5`;
+  guest archive `39c31476928084337d402b6f8b772388c1cfb321c216f3ea4a7ea2d5460857da`;
+  exact checkpoint restored and VM final state Off.
+- GUI run `run-20260919T015850Z-1cfb0381`: host execution, capture, cleanup,
+  checkpoint restore, and independent archive/hash integrity audit PASS; 24
+  frames, 20 scenes, 21 assertions, and 229 actions; summary
+  `ded51b6fc1a71f670e00e709b53987416823f400c6d9e7010b2c7e55dc642cb1`,
+  guest evidence `c877e2b3695faf6489f0ff3fa517a97eb0cc6f0f334a0a4a4bad900f14446cf4`,
+  captures `abfe37fe1694fe8e35229c306663dde0cc4ff688d1a1fa80139f74c8ea9b3695`.
+  Its formal state remains `CAPTURED_UNREVIEWED`, `evidence_pass=false`, and
+  `human_review_complete=false`; integrity PASS is not formal visual approval.
+- RC4 optional extended/lifecycle/soak validation was **NOT RUN**. Any RC1
+  extended result retained elsewhere is historical only and is not rebound.
 
-The intermediate source-bound MP4 composition check passed for
-`out/demo-product-1-1-0-rc1-test1-20260918/KDBG-demo.mp4`: SHA-256
-`c368dde54d19f46fedd32895f319223221538c006fcf4626277665b8fe5aad3d`,
-9,759,713 bytes, 40.5 seconds, 405 frames, 24 captures and 20 scenes. Its
-report SHA-256 is
-`5b92b9086cd2a503f46fd309f4fd20099644aa17e453385d5f3a053a9714fdd0`.
-The required human visual review **failed** for release/presentation use because
-the 1024-wide capture clipped or omitted critical content (scene 03 has no grid,
-scene 20 clips the diff row, and text wraps). Therefore `evidence_pass=false`:
-the MP4 exists and passes mechanical composition checks, but final submission
-evidence is not complete. No slide deck or GIF is part of the current target.
+The initial RC4 MP4 exists and passed the mechanical compositor, but independent
+public-suitability review failed because private paths and weak crops remained;
+it is internal-only and is not a release/presentation PASS. Public v2 also
+failed independent review because the taskbar remained visible; v2/v3 are
+superseded. The current redacted presentation-only v4 artifact is
+`out/demo-product-1-1-0-rc4-test1-public-v4-20260919/KDBG-1.1.0-demo-public-v4.mp4`:
+SHA-256 `43eda62e57607d36517c4bf139094cae8ef786dd7a8e0ea688154f3787475260`,
+9,553,416 bytes, 1920x1080, 10 fps, 405 frames, and 40.5 seconds. The automatic
+compositor and independent presentation review passed. Review covered 405/405
+frames, 20 scenes, 24 segments, and 19 boundaries; no rendered path, username,
+taskbar, notification, or unrelated process was visible, and the core claims
+were readable. Exact review bindings are report
+`406054011b2e47dc144631e17e63d920acb715e4076c303556a852fd1009bd88`,
+scenes `9e4a0543f4aaa61f44a39674e737b212df20474b8f063f1b44aa99d6817dcd04`,
+and contact sheet
+`fa8597a86ae39318e4cd52f2eea0e135623fa77ccf07956ca983702fed59258b`.
+The video-only delivery copy is
+`out/release-media/KDBG-1.1.0-demo-public.mp4` with the same SHA-256 and byte
+count; that directory contains only the MP4. Raw `frames/` remain excluded from
+the public bundle because they contain private paths or the taskbar. This
+presentation PASS does not promote the formal GUI evidence flags.
 
-A separate presentation-only overlay run is available at
-`out/polished-1024-minimal/runs/run-20260918T102055Z-6c85cee7/`. It completed
-24 captures/20 scenes with cleanup, checkpoint restore and final VM Off. Its
-summary, guest archive and captures digests are:
-
-- `e579e3fb5351e7a9f8c6b7652e37859916f2430ad23048cb08e1f95bbc38e104`
-- `32945bd31a181ff05d55e9e0d1db6a7c2800941baaaa4225a38b1631fc0cf6ce`
-- `fffb17d8d0aba0b3ef3179379d97a6be3703d510e75352ae96cba02a264e3038`
-
-The current presentation video is
-`out/demo-product-1-1-0-rc1-test1-polished-20260918/KDBG-demo-final2.mp4`:
-SHA-256 `4cd5a4f71e7baabc758c1097814cca9fc3371f6dc460ef0483faef5b2263d454`,
-9,974,541 bytes, 1920×1080, 10 fps, 40.5 seconds and 405/405 frames. Its
-report SHA-256 is
-`e13ddce3aa9cffec601f94f3ee928a5d4ec06e23e96b4757ea4edb3def9a31b7`.
-Automatic composition and an independent presentation-only human review both
-passed. This polished overlay/video replaces the lower-quality `c368dde5…ad3d`
-MP4 for presentation use only. It is not source-bound formal evidence and does
-not promote the official GUI run, `evidence_pass`, production signing or
-commercial-release gates.
+Production signing inputs are staged at
+`out/production-signing/product-1.1.0-rc4-final-20260919-prepared/`: 11 exact
+inputs, request SHA-256
+`3f94c26060bc437460b22ced778c52f1f70165e49a7ac57f0979c1a347f64001`,
+`signing_performed=false`, and `network_submission_performed=false`. No
+production certificate/private key, HSM or signer service, or RFC 3161 TSA is
+available in this workspace. Annotated source-freeze tag `v1.1.0-rc4` is
+published to `origin` at commit `4b376bb0d61eab232af8a2f7f29033238b911022`; stable tag
+`v1.1.0` and release publication remain blocked until returned
+production-signed artifacts are verified. DEF CON submission is explicitly
+outside this release-work scope.
 
 ## Historical 1.0.0 evidence
 

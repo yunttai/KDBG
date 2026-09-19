@@ -1,5 +1,11 @@
 # Active plan — disposable-VM live validation
 
+> **Historical / superseded:** 아래 계획은 RC1 시점 기록이다. 현재 Windows 11
+> RC4 판정과 evidence boundary는 `docs/exec-plans/STATUS.md`를 따른다.
+> RC4 public v4 영상은 presentation review PASS이고 `origin`에 게시된
+> `v1.1.0-rc4`는 source-freeze tag다. Formal GUI evidence는 `CAPTURED_UNREVIEWED`,
+> `evidence_pass=false`, `human_review_complete=false`이며 stable release는 차단됐다.
+
 Current target: KDBG 1.1.0 on `feature/kdbg-1.1.0`. Exact 1.1.0 build,
 required-core and extended lifecycle/soak gates are complete under disposable-
 VM test trust. The formal source-bound GUI capture remains human-review FAIL

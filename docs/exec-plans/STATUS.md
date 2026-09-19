@@ -1,151 +1,111 @@
 # KDBG execution status
 
-기준 시각: 2026-09-18 KST
+기준 시각: 2026-09-19 KST
 
 ## 결론
 
-`feature/kdbg-1.1.0`의 unsigned epoch `product-1.1.0-rc1-final-20260918`은
-source/build/package gate를 통과했다. 동일 소스의 VM 전용 test-signed derivative
-`product-1.1.0-rc1-test1-20260918`은 Windows 11 required-core와 extended
-lifecycle/reboot/30분 soak gate를 통과했다.
+`feature/kdbg-1.1.0`의 RC4 source/build/package와 Windows 11 required-core는
+검증됐다. 공식 GUI run도 host/capture/integrity 자동 검증을 통과했지만 사람 검토
+승격은 아직 없으므로 상태는 반드시 `CAPTURED_UNREVIEWED`,
+`evidence_pass=false`, `human_review_complete=false`로 유지한다.
 
-공식 source-bound GUI run의 자동 compositor MP4도 구조·해상도·프레임·재생시간
-검사를 통과했다.
-슬라이드와 GIF는 만들지 않았다. 다만 독립적인 사람 검토에서는 1024-pixel guest
-capture의 발표 가독성이 부족했다. scene 03은 grid가 보이지 않고, scene 20의 diff
-row가 잘리며, 일부 문구가 과도하게 wrapping된다. 따라서 GUI harness의 공식 상태는
-`CAPTURED_UNREVIEWED`이고, 이 캡처와 MP4를 DEF CON 제출용 `evidence_pass`로 승격하지
-않는다.
+RC4 optional extended/lifecycle/soak는 실행하지 않았다. RC1에서 수행한 extended
+결과는 historical evidence일 뿐 RC4에 재사용하지 않는다. Production signing은
+정확한 입력 11개를 준비했지만 외부 signer/certificate/private key/HSM/TSA가 없어
+수행하지 않았다. 따라서 안정 태그와 공개 release는 차단 상태다. DEF CON 제출은
+이번 작업 범위에서 명시적으로 제외한다.
 
-이와 별개로 presentation-only overlay run
-`out/polished-1024-minimal/runs/run-20260918T102055Z-6c85cee7`은 scene 20 exact
-cue와 widened crops로 이전 시각 blocker를 해결했다. 이 run으로 구성한 최종
-presentation video `KDBG-demo-final2.mp4`는 automatic validation과 독립적인
-presentation-only human review를 모두 PASS했다. 이 성공은 발표 영상의 품질 판정이며,
-공식 source-bound GUI evidence의 `CAPTURED_UNREVIEWED`/`evidence_pass=false`를
-변경하거나 승격하지 않는다.
-
-공개 상용 배포 승격에는 외부 production signer/TSA가 반환한 정식 서명 드라이버와
-지원·보안 연락 채널의 실제 notification/acknowledgement도 필요하다. VM 전용 test
-certificate 결과를 production publisher trust로 주장하지 않는다.
-
-## 1.1.0 identity
+## RC4 identity
 
 | 항목 | 값 |
 |---|---|
-| Unsigned epoch | `product-1.1.0-rc1-final-20260918` |
-| Main ZIP SHA-256 | `3698e5333957bec112bb39c372ae933a623af86bbc12e310c2f1bddc7bdce36f` |
-| Symbols ZIP SHA-256 | `0b6dadf7e4d1f8cfe7a77200cb6c76e01b01ec1a270ed3c4f5ae25c6ffe8f849` |
-| Source snapshot SHA-256 | `8f9a04740cc576e97a56776b017da7fc0c8d344289677b9be8d579f9d4edc184` |
+| RC4 product-source commit / tag target | `4b376bb0d61eab232af8a2f7f29033238b911022` |
+| Unsigned epoch | `product-1.1.0-rc4-final-20260919` |
+| Main ZIP SHA-256 | `4dd98b120a725d1804078a394c4d659cdb059a568a38a78643a936ce5f1f34d9` |
+| Symbols ZIP SHA-256 | `1f042e5e7a51cb1e2428b6ddb3c955c277de4993a264444e242fe469d104ac68` |
+| Source snapshot SHA-256 | `966c51f26c9e4da27491a4c00b8989c0eb8360ea3b85d8e9513adf1915ee0f92` |
 | Source scope SHA-256 | `bd2c93dad7604e84534515a00437e8198fa565a654fa665b6cbf235585b98932` |
-| Benchmark executable SHA-256 | `72348dff8a0a1623fd922fa316d3bf898a60f54b49bdc34c58a115924c25d4cf` |
-| VM-only derivative | `product-1.1.0-rc1-test1-20260918` |
-| VM-only package SHA-256 | `596ccdf0a65818591e87b28737115da3066328ede42583ef95bc83d8f3d74413` |
-| Test certificate SHA-256 | `bd7de7eb5e0dd305604d5f3dc617c13d268f844dbe541677f6eb4b7f166058b1` |
-| Test signer thumbprint | `ba34b393521d722ba01df87afccc6f3feb760b2c` |
+| VM-only derivative | `product-1.1.0-rc4-test1-20260919` |
+| VM-only package SHA-256 | `7f7c179738eb670ca79d6c41bc9c46c445c1ffd31811c46f39bbbdcad3df45d5` |
 
 ## Gate 현황
 
-| Gate | 상태 | 실행 근거 |
+| Gate | RC4 상태 | 근거/경계 |
 |---|---|---|
-| Repository layout | PASS | `python .\src\tools\verify_layout.py` |
-| Portable build/tests | PASS | `core-debug` build, CTest 9/9 |
-| Source-complete validation | PASS | `validate_release.py --source-complete` |
-| Windows Release build/tests | PASS | clean MSVC Release build, CTest 9/9 |
-| WDK drivers | PASS | KDbgDriver/KDbgProbe 1.1.0.0, Inf2Cat 0 errors/0 warnings, symbol/contract checks |
-| Main/symbol packages | PASS | strict package/symbol validator and exact epoch hashes |
-| Windows 11 required-core | LIVE PASS | build 26200, ABI 6, exact package/source binding, Probe transaction and cleanup |
-| Physical transaction | LIVE PASS | PFN 2117631, offset `0x100`, 8-byte apply, full 4 KiB read-back/reload, 4 KiB rollback, final gate locked |
-| GUI workflow | `CAPTURED_UNREVIEWED` | automatic checks PASS; 24 captures/20 scenes, cleanup/checkpoint restore/final Off |
-| Source-bound presentation readability | FAIL | 1024 capture에서 scene 03 grid 부재, scene 20 diff row clipping, text wrapping 확인 |
-| Source-bound MP4 compositor | PASS (automatic) | 9,759,713 bytes, 405 frames, 40.5 s, 24 captures/20 scenes |
-| Source-bound MP4 human review | FAIL | 공식 source-bound evidence는 `evidence_pass=false` 유지 |
-| Presentation-only overlay | PASS | 24 captures/20 scenes, scene 20 exact cue와 widened crops, cleanup/restore/Off |
-| Final presentation MP4 | PASS (automatic + human) | 9,974,541 bytes, 1920x1080, 10 fps, 405/405 frames, 40.5 s |
-| Lifecycle/reboot | LIVE PASS | 2 cycles, 10 stop/start operations, 4 reboot boundaries, clean final inventory |
-| Long-run soak | LIVE PASS | 1800 s, 61 reports x 8 reads = 488 scheduled reads; midpoint write/read/reload/rollback PASS |
-| Performance suite | PASS (mock-only) | 7 independent process runs; live-driver 성능 주장 아님 |
-| VM cleanup | PASS | exact checkpoint restored; VM final state Off |
-| Production signing | BLOCKED (external) | production signer, TSA and returned signed drivers absent |
-| Commercial operations proof | PENDING (external) | support/security route notification and acknowledgement absent |
-| Optional MemProcFS pmem | UNVERIFIED (optional) | base product uses the built-in reverse mapper/PTView path |
+| Source-complete | PASS | layout, core build, CTest 9/9, source validator |
+| Windows-build-verified | PASS | unsigned main/symbol/source epoch와 strict package 검증 |
+| Windows 11 required-core | LIVE PASS | exact RC4 test derivative, Probe transaction, cleanup, checkpoint restore, VM Off |
+| GUI host/capture/integrity | PASS | 24 frames, 20 scenes, 21 assertions, 229 actions |
+| Formal GUI evidence | `CAPTURED_UNREVIEWED` | `evidence_pass=false`; `human_review_complete=false` |
+| RC4 optional extended/lifecycle/soak | NOT RUN | RC1 extended 결과는 historical only |
+| Initial RC4 MP4 public suitability | FAIL | 내부 경로 노출 및 일부 crop/readability 문제 |
+| Public v4 presentation video | PASS (automatic + independent review) | presentation-only; formal evidence를 승격하지 않음 |
+| Production signing | BLOCKED (external) | 입력 준비만 완료; signing/network submission 미수행 |
+| Source-freeze tag | PASS (published RC tag) | annotated `v1.1.0-rc4` on `origin` at `4b376bb0d61eab232af8a2f7f29033238b911022` |
+| Stable `v1.1.0` / public release | BLOCKED | production-signed 반환물과 timestamp 부재 |
 
-## 현재 Windows 11 증거
+## Windows 11 RC4 증거
 
 ### Required-core
 
-- Run: `out/win11-validation/product-1-1-0-rc1-test1-20260918/runs/run-20260918T091747Z-21a27820/`
-- Host summary SHA-256:
-  `c6bb846f56db8679758dab486195916e952298ae0a0416929372da44d716e50b`
-- Guest evidence ZIP: 26 entries, SHA-256
-  `0457ba5352e5b9005bbada1b366684b8d120f662b83c26a24758ad95aab8f6a9`
-- Result: success/guest validation true, Windows 11 Pro build 26200, ABI 6,
-  PFN 2117631, offset `0x100` 8-byte apply, full-page read-back/reload, 4 KiB
-  rollback, final gate locked, uninstall cleanup, exact checkpoint restore and
-  final VM Off.
-
-### GUI 및 영상
-
-- GUI run: `out/win11-gui-product-1-1-0-rc1-test1-20260918/run-20260918T092129Z-f14f5f7a/`
-- Host summary SHA-256:
-  `f5fd51ef18c319c37feb5adb997582e56cd2efe9b03a1d6ea3213237f6815d0b`
-- Guest capture archive SHA-256:
-  `6104933593259fb074466ba8d21a5fffd7e47803b2bfec71ce206e5c0a4ce252`
-- Captures binding SHA-256:
-  `bd254d7a98230db0199051085453b09ea33405f3efe57a9ded42b8a3bebb6d42`
-- Capture result: success, `CAPTURED_UNREVIEWED`, 24 captures/20 scenes,
-  cleanup/checkpoint restore/final Off.
-- MP4: `out/demo-product-1-1-0-rc1-test1-20260918/KDBG-demo.mp4`
-- MP4 SHA-256: `c368dde54d19f46fedd32895f319223221538c006fcf4626277665b8fe5aad3d`
-- MP4 size/runtime: 9,759,713 bytes; 405 frames; 40.5 seconds.
-- Compositor report SHA-256:
-  `5b92b9086cd2a503f46fd309f4fd20099644aa17e453385d5f3a053a9714fdd0`
-- Automatic compositor validation passed. Independent human presentation review
-  failed for the layout defects listed above; `evidence_pass` remains false.
-
-Presentation-only overlay와 최종 영상:
-
-- Run: `out/polished-1024-minimal/runs/run-20260918T102055Z-6c85cee7/`
-- Host summary SHA-256:
-  `e579e3fb5351e7a9f8c6b7652e37859916f2430ad23048cb08e1f95bbc38e104`
+- Run: `out/win11-validation/product-1-1-0-rc4-test1-20260919/runs/run-20260919T015729Z-8445dddb/`
 - Guest archive SHA-256:
-  `32945bd31a181ff05d55e9e0d1db6a7c2800941baaaa4225a38b1631fc0cf6ce`
-- Captures binding SHA-256:
-  `fffb17d8d0aba0b3ef3179379d97a6be3703d510e75352ae96cba02a264e3038`
-- Result: 24 captures/20 scenes, cleanup/checkpoint restore/final Off, scene 20
-  exact cue와 widened crops 확인.
-- Final video:
-  `out/demo-product-1-1-0-rc1-test1-polished-20260918/KDBG-demo-final2.mp4`
-- Final video SHA-256:
-  `4cd5a4f71e7baabc758c1097814cca9fc3371f6dc460ef0483faef5b2263d454`
-- Size/format: 9,974,541 bytes; 1920x1080; 10 fps; 405/405 frames; 40.5 seconds.
-- Report SHA-256:
-  `e13ddce3aa9cffec601f94f3ee928a5d4ec06e23e96b4757ea4edb3def9a31b7`
-- Automatic validation and independent presentation-only human review: PASS.
-  이 판정은 공식 source-bound evidence promotion이 아니다.
+  `39c31476928084337d402b6f8b772388c1cfb321c216f3ea4a7ea2d5460857da`
+- Result: exact derivative install/load, Probe PFN physical transaction,
+  read-back/rollback/final lock, guest validation, cleanup, exact checkpoint
+  restore, VM final Off PASS.
+- RC4 extended/lifecycle/soak: **NOT RUN**.
 
-### Extended lifecycle, soak 및 benchmark
+### GUI
 
-- Run: `out/win11-validation/product-1-1-0-rc1-test1-20260918/extended-runs/extended-20260918T092819Z-66c07a32/`
-- Host summary SHA-256:
-  `12570c4cdf41536d9a3be97461a0e58c043c5ba470baee948a14e8f1909c56ee`
-- Extended evidence ZIP SHA-256:
-  `f4c80a7c375a426bdd853e24118b623152cfbd556e56c146d20e3ded2896bc9c`
-- Current/previous package SHA-256:
-  `596ccdf0a65818591e87b28737115da3066328ede42583ef95bc83d8f3d74413` /
-  `6fe3a73c1b98bd871bf8c4673e659a1cda4bddbcd9faf69c2921487b26a380dd`
-- Lifecycle: 2 cycles, 10 stop/start operations, 4 completed reboot boundaries.
-- Soak: 1800 seconds, 61 reports, 488 scheduled reads, midpoint verified
-  write/read/reload/rollback, final gate locked.
-- Benchmark: 7 mock-only process runs, summary success true. These timings test
-  deterministic product algorithms and do not claim live-driver performance.
-- Cleanup: guest validation true, checkpoint restored and VM Off.
+- Run: `out/win11-gui-product-1-1-0-rc4-test1-20260919/run-20260919T015850Z-1cfb0381/`
+- Guest evidence SHA-256:
+  `c877e2b3695faf6489f0ff3fa517a97eb0cc6f0f334a0a4a4bad900f14446cf4`
+- Captures archive SHA-256:
+  `abfe37fe1694fe8e35229c306663dde0cc4ff688d1a1fa80139f74c8ea9b3695`
+- Result: host/capture/integrity PASS; 24 frames, 20 scenes, 21 assertions,
+  229 actions; cleanup/checkpoint restore/final Off PASS.
+- Formal boundary: `CAPTURED_UNREVIEWED`, `evidence_pass=false`,
+  `human_review_complete=false`.
 
-## Historical 1.0.0 evidence
+### Presentation-only video
 
-Windows 10 build 19044의 path-mapped exact epoch와 reviewed v4 evidence, 그리고
-이전에 완료한 1.0.0 Windows 11 engineering epochs는 보존한다. 그 결과는 각 과거
-package/source hash에만 결속되며 위 1.1.0 PASS의 대체 근거로 재사용하지 않는다.
+- Initial MP4: public suitability **FAIL**; 공개용 최종본으로 사용하지 않는다.
+- Public v2 independent review: **FAIL** (taskbar 노출). Public v2/v3는
+  superseded다.
+- Final presentation-only video:
+  `out/demo-product-1-1-0-rc4-test1-public-v4-20260919/KDBG-1.1.0-demo-public-v4.mp4`
+- SHA-256:
+  `43eda62e57607d36517c4bf139094cae8ef786dd7a8e0ea688154f3787475260`
+- Size/format: 9,553,416 bytes; 1920x1080; 10 fps; 405/405 frames;
+  40.5 seconds.
+- Automatic compositor and independent presentation review: **PASS**.
+- Review coverage: 20 scenes, 24 segments, 19 boundaries. Rendered
+  path/username/taskbar/notification/unrelated process가 없고 core claims가 읽힌다.
+- Video-only delivery copy:
+  `out/release-media/KDBG-1.1.0-demo-public.mp4`; 같은 SHA-256/크기이며 해당
+  delivery directory에는 MP4만 있다. Raw frames는 공개 배포에서 제외한다.
+- 이 영상은 presentation-only이며 공식 GUI evidence 상태를 변경하지 않는다.
+
+## Production signing 및 release 경계
+
+- Prepared inputs:
+  `out/production-signing/product-1.1.0-rc4-final-20260919-prepared/`
+- Signing request SHA-256:
+  `3f94c26060bc437460b22ced778c52f1f70165e49a7ac57f0979c1a347f64001`
+- Exact inputs: 11.
+- `signing_performed=false`; `network_submission_performed=false`.
+- Production signer/certificate/private key/HSM과 HTTPS RFC3161 TSA가 없다.
+- Annotated source-freeze tag `v1.1.0-rc4`는 `origin`의
+  `4b376bb0d61eab232af8a2f7f29033238b911022`에 게시됐다.
+- Production-signed 반환물 검증 전에는 stable `v1.1.0` tag나 public release를
+  만들지 않는다.
+
+## Historical evidence boundary
+
+RC1 extended lifecycle/reboot/30-minute soak와 그 benchmark는 해당 RC1 identity에만
+결속된다. 1.0.0 Windows 10/11 evidence도 각 historical package/source hash에만
+결속되며 RC4 PASS의 대체 근거가 아니다.
 
 ## 재현 명령
 
@@ -159,5 +119,5 @@ Pop-Location
 python .\src\tools\validate_release.py --source-complete
 ```
 
-Windows/live gate는 별도다. 위 portable 명령만으로 Windows build나 live VM PASS를
-주장하지 않으며, 그 근거는 exact 1.1.0 epoch의 Windows 및 VM 증거에 기록한다.
+Portable 명령만으로 Windows build나 live VM PASS를 주장하지 않는다. Windows/live
+판정은 위 exact RC4 identity와 evidence에만 결속한다.

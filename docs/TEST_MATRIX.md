@@ -2,25 +2,26 @@
 
 ## KDBG 1.1.0 binding status
 
-The exact 1.1.0 source, Windows build/package, required-core and extended
-live-VM gates are PASS. The source-bound GUI capture and MP4 composition
-automation passed, but formal human visual review failed because critical
-1024-wide layout content is omitted or clipped. Final formal evidence therefore
-remains incomplete with `evidence_pass=false`. A separate polished overlay and
-1080p MP4 passed presentation-only automatic and independent human review; it
-does not promote formal evidence. Historical 1.0.0 rows remain historical.
+The RC4 product-source boundary is commit `4b376bb0d61eab232af8a2f7f29033238b911022`,
+unsigned epoch `product-1.1.0-rc4-final-20260919`, and VM-only derivative
+`product-1.1.0-rc4-test1-20260919`. Source, Windows build/package, and exact
+required-core gates are PASS. GUI host/capture/archive integrity passed, but
+formal review remains `CAPTURED_UNREVIEWED`, `evidence_pass=false`, and
+`human_review_complete=false`. RC4 extended/lifecycle/soak was not run.
+Production signing and stable release are blocked. DEF CON submission is out of
+scope. Historical rows remain bound only to their named epochs.
 
 | Current 1.1.0 gate | Status | Exact evidence |
 |---|---|---|
-| Source | PASS | source `8f9a04740cc576e97a56776b017da7fc0c8d344289677b9be8d579f9d4edc184`; scope `bd2c93dad7604e84534515a00437e8198fa565a654fa665b6cbf235585b98932`; core CTest 9/9; source validator PASS |
-| Windows build/package | PASS | main `3698e5333957bec112bb39c372ae933a623af86bbc12e310c2f1bddc7bdce36f`; symbols `0b6dadf7e4d1f8cfe7a77200cb6c76e01b01ec1a270ed3c4f5ae25c6ffe8f849`; benchmark `72348dff8a0a1623fd922fa316d3bf898a60f54b49bdc34c58a115924c25d4cf` |
-| Required-core Win11 | PASS | `run-20260918T091747Z-21a27820`; summary `c6bb846f56db8679758dab486195916e952298ae0a0416929372da44d716e50b`; archive `0457ba5352e5b9005bbada1b366684b8d120f662b83c26a24758ad95aab8f6a9` |
-| Extended Win11 | PASS | `extended-20260918T092819Z-66c07a32`; summary `12570c4cdf41536d9a3be97461a0e58c043c5ba470baee948a14e8f1909c56ee`; archive `f4c80a7c375a426bdd853e24118b623152cfbd556e56c146d20e3ded2896bc9c` |
-| GUI automation | PASS / unreviewed | `run-20260918T092129Z-f14f5f7a`; 24 captures/20 scenes; `CAPTURED_UNREVIEWED` |
-| Source-bound intermediate MP4 | MECHANICAL PASS | `c368dde54d19f46fedd32895f319223221538c006fcf4626277665b8fe5aad3d`; 9,759,713 bytes; 40.5 s; 405 frames; report `5b92b9086cd2a503f46fd309f4fd20099644aa17e453385d5f3a053a9714fdd0` |
-| Formal human visual/submission review | FAIL | scene 03 no grid; scene 20 clipped diff row; wrapping; `evidence_pass=false` |
-| Presentation-only overlay | PASS | `run-20260918T102055Z-6c85cee7`; 24 captures/20 scenes; summary `e579e3fb5351e7a9f8c6b7652e37859916f2430ad23048cb08e1f95bbc38e104`; guest `32945bd31a181ff05d55e9e0d1db6a7c2800941baaaa4225a38b1631fc0cf6ce`; captures `fffb17d8d0aba0b3ef3179379d97a6be3703d510e75352ae96cba02a264e3038`; cleanup/restore/final Off |
-| Presentation final2 MP4 | AUTO + HUMAN PASS (presentation-only) | `4cd5a4f71e7baabc758c1097814cca9fc3371f6dc460ef0483faef5b2263d454`; 9,974,541 bytes; 1920×1080; 10 fps; 40.5 s; 405/405 frames; report `e13ddce3aa9cffec601f94f3ee928a5d4ec06e23e96b4757ea4edb3def9a31b7`; no formal promotion |
+| Source | PASS | source `966c51f26c9e4da27491a4c00b8989c0eb8360ea3b85d8e9513adf1915ee0f92`; scope `bd2c93dad7604e84534515a00437e8198fa565a654fa665b6cbf235585b98932`; core CTest 9/9; source validator PASS |
+| Windows build/package | PASS | main `4dd98b120a725d1804078a394c4d659cdb059a568a38a78643a936ce5f1f34d9`; symbols `1f042e5e7a51cb1e2428b6ddb3c955c277de4993a264444e242fe469d104ac68`; benchmark `7999ed886e5b8710f48cd8d08405e6aa8d52608cc4672b0980b7c696fcdef63f` |
+| Required-core Win11 | PASS | `run-20260919T015729Z-8445dddb`; summary `4ad612d9298d902066a95c47a64c213454ce229e2ebf23ea153b8e0a702f57b5`; archive `39c31476928084337d402b6f8b772388c1cfb321c216f3ea4a7ea2d5460857da` |
+| Extended/lifecycle/soak Win11 | NOT RUN | no RC4 result; RC1 extended evidence is historical only |
+| GUI automation/integrity | PASS / unreviewed | `run-20260919T015850Z-1cfb0381`; 24 frames/20 scenes/21 assertions/229 actions; guest `c877e2b3…46cf4`; captures `abfe37fe…b3695`; `CAPTURED_UNREVIEWED` |
+| Formal GUI review | NOT COMPLETE | `evidence_pass=false`; `human_review_complete=false` |
+| Initial RC4 MP4 | AUTO PASS / PUBLIC FAIL | mechanical compositor passed; independent review found private paths and weak crops; internal-only |
+| Presentation public-v4 MP4 | PASS (automatic + independent presentation review) | `43eda62e57607d36517c4bf139094cae8ef786dd7a8e0ea688154f3787475260`; 9,553,416 bytes; 1920x1080/10 fps/405 frames/40.5 s; 20 scenes/24 segments/19 boundaries reviewed; no rendered path/username/taskbar/notification/unrelated process; raw frames excluded; no formal promotion |
+| Production signing | BLOCKED | 11 inputs staged, request `3f94c260…4001`; not signed/not submitted; signer/HSM/TSA absent |
 
 | Area | Portable | Windows build | Live VM |
 |---|---|---|---|
@@ -100,20 +101,20 @@ and `out/evidence/RELEASE-HASHES.txt`; both are absent from this workspace.
 | PORT-LIFE-02 | portable mock | 50 backend reconnects start locked | automated |
 | PORT-LIFE-03 | portable mock | 10 apply/verify/reload/rollback cycles restore baseline | automated |
 | PORT-MIG-01 | portable fixtures | legacy load is idempotent and Freeze-disarmed | PASS — deterministic migration suite |
-| WIN-LIFE-01 | disposable Windows VM | clean install/reboot/startup locked | CURRENT WINDOWS 10 PASS — installed-reboot attempt-02, final gate locked, exact snapshot restored |
-| WIN-LIFE-02 | disposable Windows VM | 10 service cycles without stale handle or bugcheck | CURRENT WINDOWS 10 PASS — public-symbols-r1 lifecycle-soak 10/10 |
-| WIN-CRASH-01 | disposable Windows VM | forced GUI exit releases controller and locks gate | CURRENT WINDOWS 10 PASS — failure surfaced, cleanup and subsequent readiness recovered |
-| WIN-UPD-01 | disposable Windows VM | previous package update/rollback leaves no stale binary | CURRENT WINDOWS 10 PASS — distinct candidate transition; published N-1 remains future-release gate |
-| WIN-READY-01 | disposable Windows VM | Bring Online loads Probe and reaches consistent ready state | CURRENT WINDOWS 10 PASS — cal35 readiness and exact runtime identity |
-| WIN-READY-02 | disposable Windows VM | lifecycle cancel/progress has no stale running state | CURRENT WINDOWS 10 PASS — lifecycle/reboot/cleanup artifacts |
+| WIN-LIFE-01 | disposable Windows VM | clean install/reboot/startup locked | HISTORICAL WINDOWS 10 PASS — installed-reboot attempt-02, final gate locked, exact snapshot restored |
+| WIN-LIFE-02 | disposable Windows VM | 10 service cycles without stale handle or bugcheck | HISTORICAL WINDOWS 10 PASS — public-symbols-r1 lifecycle-soak 10/10 |
+| WIN-CRASH-01 | disposable Windows VM | forced GUI exit releases controller and locks gate | HISTORICAL WINDOWS 10 PASS — failure surfaced, cleanup and subsequent readiness recovered |
+| WIN-UPD-01 | disposable Windows VM | previous package update/rollback leaves no stale binary | HISTORICAL WINDOWS 10 PASS — distinct candidate transition; published N-1 remains future-release gate |
+| WIN-READY-01 | disposable Windows VM | Bring Online loads Probe and reaches consistent ready state | HISTORICAL WINDOWS 10 PASS — cal35 readiness and exact runtime identity |
+| WIN-READY-02 | disposable Windows VM | lifecycle cancel/progress has no stale running state | HISTORICAL WINDOWS 10 PASS — lifecycle/reboot/cleanup artifacts |
 | WIN-PROBE-01 | disposable Windows VM | Probe failure stays disconnected and fail-closed | PASS — negative portable/package coverage; cal35 positive exact Probe path PASS |
 | WIN-CAL35-01 | Windows 10 build 19044 snapshot VM | exact Probe transaction + fixture write/Freeze + ownership/PTView/Kernel Explorer | PASS — `exact-analysis-v4/calibration-35`, 24 captures, two exports, cleanup/restore |
 | WIN-MEDIA-01 | human-reviewed final assembly | 1600x900 GIF, 24 frames/20 scenes, manifest/archive/parsed+escaped+nested privacy checks | PASS — v4 `fc0afb4b…9823`, final archive `438881e7…a18e3` |
-| WIN11-CORE-01 | disposable Windows 11 Pro x64 build 26200 VM | current exact package install/load, ABI 6, Probe write/read-back/reload/rollback, cleanup, checkpoint restore, final Off | 1.1.0 PASS — `run-20260918T091747Z-21a27820`; package `596ccdf0…4413`; PFN `2117631`; offset `0x100`; 8-byte apply; 4096-byte rollback; exact checkpoint restored and VM Off |
-| WIN11-EXT-01 | disposable Windows 11 x64 VM | repeated reboot/lifecycle, full process Freeze/ownership/PTView/Kernel Explorer matrix and long-run performance | 1.1.0 PASS — `extended-20260918T092819Z-66c07a32`; 2 cycles, 10 stop/start, 4 reboot, 1800-second soak, 488 reads, midpoint transaction, 7 benchmarks, cleanup/restore/final Off |
-| WIN11-GUI-01 | disposable Windows 11 x64 VM | 24 captures/20 ordered scenes with cleanup/restore/final Off | AUTOMATION PASS / `CAPTURED_UNREVIEWED` — `run-20260918T092129Z-f14f5f7a`; human visual review FAIL |
-| WIN11-MEDIA-01 | source-bound MP4 composition and formal human review | 40.5-second/405-frame MP4, exact hash/report, critical content visible | MECHANICAL PASS, FORMAL HUMAN FAIL — intermediate MP4 `c368dde5…ad3d`; scene 03 grid missing, scene 20 diff row clipped, wrapping; `evidence_pass=false` |
-| WIN11-PRESENT-01 | presentation-only overlay and final 1080p MP4 | 24/20 overlay capture, cleanup/restore/off, 1920×1080/10 fps/405-frame output, independent human review | PASS FOR PRESENTATION ONLY — run `run-20260918T102055Z-6c85cee7`, MP4 `4cd5a4f7…d454`; does not replace source-bound formal evidence |
+| WIN11-CORE-01 | disposable Windows 11 Pro x64 build 26200 VM | current exact package install/load, ABI 6, Probe write/read-back/reload/rollback, cleanup, checkpoint restore, final Off | RC4 PASS — `run-20260919T015729Z-8445dddb`; package `7f7c1797…45d5`; archive `39c31476…57da`; exact checkpoint restored and VM Off |
+| WIN11-EXT-01 | disposable Windows 11 x64 VM | repeated reboot/lifecycle, full process Freeze/ownership/PTView/Kernel Explorer matrix and long-run performance | RC4 NOT RUN — historical RC1 extended result is not rebound |
+| WIN11-GUI-01 | disposable Windows 11 x64 VM | 24 frames/20 ordered scenes with cleanup/restore/final Off | HOST/CAPTURE/INTEGRITY PASS / `CAPTURED_UNREVIEWED` — `run-20260919T015850Z-1cfb0381`; 21 assertions/229 actions; formal flags remain false |
+| WIN11-MEDIA-01 | source-bound MP4 composition and formal human review | exact MP4 hash/report, critical content visible, private paths removed | INITIAL MP4 AUTO PASS / PUBLIC FAIL; formal review not complete; `evidence_pass=false` |
+| WIN11-PRESENT-01 | presentation-only redacted MP4 | automatic composition plus independent visual review | PASS FOR PRESENTATION ONLY — public-v4 MP4 `43eda62e…5260`, report `40605401…bd88`, scenes `9e4a0543…cd04`, contact sheet `fa8597a8…58b`; 405/405 frames reviewed; raw frames excluded; does not replace formal evidence |
 
 The Windows 11 required-core PASS uses disposable-VM test trust. It is not evidence
 of production signing, trusted timestamping, or customer-machine production trust.

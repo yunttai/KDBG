@@ -1,12 +1,13 @@
 # KDBG 테스트 계획
 
-Current release target: **1.1.0**. Exact 1.1.0 source/package, Windows build,
-live and extended-run evidence has been checked. The official source-bound GUI
-capture and MP4 passed automatic integrity checks but failed independent human
-presentation review and remain `evidence_pass=false`. A separate presentation-only
-overlay and final MP4 passed both automatic and independent human review without
-promoting the formal source-bound evidence. Named 1.0.0 and
-`product-rc1/test2` results below are historical evidence only.
+Current release target: **1.1.0 RC4**, commit
+`4b376bb0d61eab232af8a2f7f29033238b911022`. Exact source/package, Windows
+build, and required-core evidence has been checked. GUI host/capture/archive
+integrity passed, but formal review remains `CAPTURED_UNREVIEWED`,
+`evidence_pass=false`, and `human_review_complete=false`. RC4 optional
+extended/lifecycle/soak was not run. Production signing and stable release are
+blocked. Named 1.0.0 and RC1 results below are historical only. DEF CON
+submission is outside this plan's scope.
 
 ## 1. Gate 분리
 
@@ -20,36 +21,55 @@ promoting the formal source-bound evidence. Named 1.0.0 and
 
 ### Current 1.1.0 evidence boundary
 
-Unsigned epoch `product-1.1.0-rc1-final-20260918` passed source, clean Windows
+Unsigned epoch `product-1.1.0-rc4-final-20260919` passed source, clean Windows
 Release, WDK driver, strict main/symbol package and CTest 9/9 gates. Exact
 main/symbol/source/scope SHA-256 values are:
 
-- `3698e5333957bec112bb39c372ae933a623af86bbc12e310c2f1bddc7bdce36f`
-- `0b6dadf7e4d1f8cfe7a77200cb6c76e01b01ec1a270ed3c4f5ae25c6ffe8f849`
-- `8f9a04740cc576e97a56776b017da7fc0c8d344289677b9be8d579f9d4edc184`
+- `4dd98b120a725d1804078a394c4d659cdb059a568a38a78643a936ce5f1f34d9`
+- `1f042e5e7a51cb1e2428b6ddb3c955c277de4993a264444e242fe469d104ac68`
+- `966c51f26c9e4da27491a4c00b8989c0eb8360ea3b85d8e9513adf1915ee0f92`
 - `bd2c93dad7604e84534515a00437e8198fa565a654fa665b6cbf235585b98932`
 
-VM-only derivative `product-1.1.0-rc1-test1-20260918`, package SHA-256
-`596ccdf0a65818591e87b28737115da3066328ede42583ef95bc83d8f3d74413`,
-is bound to required-core run `run-20260918T091747Z-21a27820` and extended run
-`extended-20260918T092819Z-66c07a32`. Both passed cleanup, exact checkpoint
-restore and final VM Off. Test trust is not production signing/TSA evidence.
+VM-only derivative `product-1.1.0-rc4-test1-20260919`, package SHA-256
+`7f7c179738eb670ca79d6c41bc9c46c445c1ffd31811c46f39bbbdcad3df45d5`,
+is bound to required-core run `run-20260919T015729Z-8445dddb`. It passed
+cleanup, exact checkpoint restore, and final VM Off. RC4 optional extended,
+lifecycle, and soak validation was not run. Test trust is not production
+signing/TSA evidence.
 
-GUI run `run-20260918T092129Z-f14f5f7a` produced 24 captures/20 scenes and
-automatic state `CAPTURED_UNREVIEWED`. MP4 SHA-256 is
-`c368dde54d19f46fedd32895f319223221538c006fcf4626277665b8fe5aad3d`.
-Independent human review failed the 1024 layout: scene 03 grid is absent, scene
-20 clips the diff row and text wrapping reduces readability. This failed run is
-not promoted as formal source-bound evidence.
+GUI run `run-20260919T015850Z-1cfb0381` passed host execution, capture, cleanup,
+checkpoint restore, and independent archive/hash integrity audit with 24 frames,
+20 scenes, 21 assertions, and 229 actions. Guest evidence/captures SHA-256 are
+`c877e2b3695faf6489f0ff3fa517a97eb0cc6f0f334a0a4a4bad900f14446cf4` /
+`abfe37fe1694fe8e35229c306663dde0cc4ff688d1a1fa80139f74c8ea9b3695`.
+Formal review is not complete; the state and flags remain unchanged.
 
-Separate presentation-only run `run-20260918T102055Z-6c85cee7` passed 24
-captures/20 scenes, cleanup/checkpoint restore/final Off. Scene 20 exact cue and
-widened crops resolved the visual blockers. Final video
-`out/demo-product-1-1-0-rc1-test1-polished-20260918/KDBG-demo-final2.mp4` passed
-automatic validation and independent presentation-only human review. Video/report
-SHA-256 values are
-`4cd5a4f71e7baabc758c1097814cca9fc3371f6dc460ef0483faef5b2263d454` /
-`e13ddce3aa9cffec601f94f3ee928a5d4ec06e23e96b4757ea4edb3def9a31b7`.
+The initial RC4 MP4 passed mechanical composition but failed independent public
+suitability review because private paths and weak crops remained. Public v2
+failed independent review because the taskbar remained visible; v2/v3 are
+superseded. The redacted presentation-only public-v4 artifact at
+`out/demo-product-1-1-0-rc4-test1-public-v4-20260919/KDBG-1.1.0-demo-public-v4.mp4`
+has SHA-256
+`43eda62e57607d36517c4bf139094cae8ef786dd7a8e0ea688154f3787475260`
+and is 9,553,416 bytes, 1920x1080, 10 fps, 405 frames, and 40.5 seconds. Its
+automatic compositor and independent presentation review passed. Review covered
+405/405 frames, 20 scenes, 24 segments, and 19 boundaries; no rendered path,
+username, taskbar, notification, or unrelated process was visible, and core
+claims were readable. Report/scenes/contact-sheet SHA-256 values are
+`406054011b2e47dc144631e17e63d920acb715e4076c303556a852fd1009bd88` /
+`9e4a0543f4aaa61f44a39674e737b212df20474b8f063f1b44aa99d6817dcd04` /
+`fa8597a86ae39318e4cd52f2eea0e135623fa77ccf07956ca983702fed59258b`.
+Raw `frames/` remain excluded from the public bundle. Final video-only delivery
+copy `out/release-media/KDBG-1.1.0-demo-public.mp4` has the same SHA/bytes and is
+the only file in that directory. None of these videos promotes the formal
+source-bound flags.
+
+Production signing staging contains 11 exact inputs with request SHA-256
+`3f94c26060bc437460b22ced778c52f1f70165e49a7ac57f0979c1a347f64001`.
+Signing and network submission were not performed; the production signer/HSM,
+TSA, returned signed artifacts, stable `v1.1.0` tag, and public release remain
+blocked. Annotated source-freeze tag `v1.1.0-rc4` is published to `origin` at
+the recorded commit but is not a stable production release.
 
 ### Historical 1.0.0 candidate 증거 경계
 
@@ -217,13 +237,13 @@ clean build했고, Inf2Cat 오류/경고 0 및 Release PE/PDB 2/2 정합성을 �
 Release package pair는 검증됐고 user-mode 바이너리는 static MSVC runtime으로
 clean Windows 10 build 19044에서 별도 VC++ Redistributable 없이 package diagnostics와
 packaged CLI startup을 통과했다. Test-signed drivers의 exact VM load와 cal35 live
-workflow도 Windows 10에서 PASS다. Windows 11 required-core install/load와 Probe
+workflow도 Windows 10에서 PASS다. RC4 Windows 11 required-core install/load와 Probe
 transaction은 build 26200에서 PASS했지만, disposable-VM test trust는 production
-signing/TSA를 증명하지 않는다. Current Windows 11 extended
-lifecycle/reboot/soak gate도 exact 1.1.0 derivative에 결속해 PASS했다.
-공식 source-bound GUI/media automatic gate는 통과했지만 해당 run의 human review는
-FAIL이므로 두 판정을 합치지 않는다. 별도 presentation-only overlay/final MP4의
-human PASS 역시 공식 source-bound `evidence_pass`를 승격하지 않는다.
+signing/TSA를 증명하지 않는다. RC4 Windows 11 extended lifecycle/reboot/soak
+gate는 **NOT RUN**이며, historical RC1 extended PASS를 RC4에 재결속하지 않는다.
+RC4 공식 GUI run은 host/capture/integrity를 통과했지만 formal 상태는
+`CAPTURED_UNREVIEWED`다. 별도 presentation-only public-v4의 automatic/independent
+review PASS 역시 공식 source-bound `evidence_pass`를 승격하지 않는다.
 
 Windows-only fallback 회귀는 완전한 `out/wdk-nuget` cache에서 `-Offline` clean
 build를 실행하고, cache package 하나의 byte/hash를 바꾼 복사본과 package가 빠진
@@ -277,13 +297,13 @@ LOCKED임을 기록했다.
     ordered 20-scene millisecond range/observed/note를 포함하고 v4 validator가
     누락·재정렬·범위 초과·placeholder를 거부하는지 확인한다.
 
-Current 1.1.0 required-core run `run-20260918T091747Z-21a27820`은 Windows 11
-Pro x64 build 26200, ABI 6, PFN 2117631, offset `0x100` 8-byte apply, full 4 KiB
+Current 1.1.0 RC4 required-core run `run-20260919T015729Z-8445dddb`은
+Windows 11 Pro x64 build 26200, ABI 6, one-shot apply, full 4 KiB
 read-back/reload, 4 KiB rollback, final gate locked, cleanup, exact checkpoint
 restore와 final VM Off를 PASS했다. Host summary SHA-256은
-`c6bb846f56db8679758dab486195916e952298ae0a0416929372da44d716e50b`,
-26-entry guest archive SHA-256은
-`0457ba5352e5b9005bbada1b366684b8d120f662b83c26a24758ad95aab8f6a9`다.
+`4ad612d9298d902066a95c47a64c213454ce229e2ebf23ea153b8e0a702f57b5`,
+guest archive SHA-256은
+`39c31476928084337d402b6f8b772388c1cfb321c216f3ea4a7ea2d5460857da`다.
 
 Historical 1.0.0 steps 1–12와 step 13의 자동 구조/범위/placeholder 검사는 PASS했다. Pre-human
 candidate는 72 entries, SHA-256 `eb465a4e…f16c`로 보존했다. 이후 repository owner가
@@ -301,8 +321,10 @@ install/load, ABI 6, exact Probe 8-byte apply, full-page read-back, independent
 reload, rollback, final lock, uninstall cleanup, exact checkpoint restore와 final
 VM Off를 확인했다. 이 required-core run 자체는 interactive GUI/media, repeated
 reboot/lifecycle, full process Freeze/ownership/PTView/Kernel Explorer matrix와
-long-run performance를 포함하지 않았다. 해당 범위의 current 1.1.0 fresh rebind는
-아래 GUI 및 extended 결과에 별도로 기록한다.
+long-run performance를 포함하지 않았다. 이 historical 1.0.0 required-core와
+별도 RC1 GUI/extended 결과는 각각 이름이 붙은 과거 epoch에만 결속된다. 현재 RC4
+extended는 **NOT RUN**이며, current RC4 GUI run은 아래 RC4 관찰 기록처럼
+`CAPTURED_UNREVIEWED`다.
 
 위 source snapshot hash는 tested ZIP에 내장된 302-file identity다. 이후
 harness/document 변경이 반영된 현재 checkout identity로 승격하지 않으며,
@@ -331,25 +353,27 @@ cancellation, 8 MiB output cap, non-zero exit propagation이 PASS했다. Optiona
 MemProcFS의 missing DLL/export negative diagnostics도 PASS지만 실제 `pmem`
 initialization과 query는 UNVERIFIED다.
 
-Current 1.1.0 GUI run `run-20260918T092129Z-f14f5f7a`는 automatic success,
-`CAPTURED_UNREVIEWED`, 24 captures/20 scenes, cleanup/checkpoint restore/final Off를
-기록했다. Host summary, guest archive, captures binding SHA-256은 각각
-`f5fd51ef18c319c37feb5adb997582e56cd2efe9b03a1d6ea3213237f6815d0b`,
-`6104933593259fb074466ba8d21a5fffd7e47803b2bfec71ce206e5c0a4ce252`,
-`bd254d7a98230db0199051085453b09ea33405f3efe57a9ded42b8a3bebb6d42`다.
-MP4 automatic compositor도 PASS했지만 독립 사람 검토는 scene 03/20과 text
-wrapping 문제로 FAIL했다. `evidence_pass`는 false로 유지한다.
+Current 1.1.0 RC4 GUI run `run-20260919T015850Z-1cfb0381`은 host execution,
+capture, cleanup, checkpoint restore와 independent archive/hash integrity를
+PASS했다. 24 frames/20 scenes/21 assertions/229 actions이며 host summary,
+guest evidence, captures SHA-256은 각각
+`ded51b6fc1a71f670e00e709b53987416823f400c6d9e7010b2c7e55dc642cb1`,
+`c877e2b3695faf6489f0ff3fa517a97eb0cc6f0f334a0a4a4bad900f14446cf4`,
+`abfe37fe1694fe8e35229c306663dde0cc4ff688d1a1fa80139f74c8ea9b3695`다.
+공식 상태는 `CAPTURED_UNREVIEWED`, `evidence_pass=false`,
+`human_review_complete=false`로 유지한다.
 
-Presentation-only overlay run
-`out/polished-1024-minimal/runs/run-20260918T102055Z-6c85cee7`은 scene 20 exact
-cue와 widened crops를 적용해 24 captures/20 scenes, cleanup/checkpoint
-restore/final Off를 PASS했다. Host summary/guest archive/captures SHA-256은
-`e579e3fb5351e7a9f8c6b7652e37859916f2430ad23048cb08e1f95bbc38e104` /
-`32945bd31a181ff05d55e9e0d1db6a7c2800941baaaa4225a38b1631fc0cf6ce` /
-`fffb17d8d0aba0b3ef3179379d97a6be3703d510e75352ae96cba02a264e3038`다.
-최종 presentation video는 9,974,541 bytes, 1920x1080, 10 fps, 405/405
-frames, 40.5 seconds이고 automatic validation과 독립 presentation-only human
-review를 PASS했다. 이 결과는 공식 source-bound evidence 승격이 아니다.
+Initial RC4 MP4는 automatic compositor를 PASS했지만 private path와 crop
+문제로 public-suitability review를 FAIL해 internal-only다. Public v2는 taskbar
+노출로 independent review FAIL이며 v2/v3는 superseded다. Presentation-only
+public-v4 artifact는 9,553,416 bytes, 1920x1080, 10 fps, 405 frames, 40.5
+seconds, SHA-256
+`43eda62e57607d36517c4bf139094cae8ef786dd7a8e0ea688154f3787475260`이고
+automatic compositor와 independent presentation review를 PASS했다. 405/405
+frames, 20 scenes, 24 segments, 19 boundaries를 검토했고 rendered path,
+username, taskbar, notification, unrelated process는 보이지 않았으며 core
+claim은 읽을 수 있었다. Private path/taskbar가 남은 raw `frames/`는 public
+bundle에서 제외한다. 이 결과는 공식 source-bound evidence 승격이 아니다.
 
 ## 8. 안정성 반복 목표
 
@@ -362,13 +386,9 @@ review를 PASS했다. 이 결과는 공식 source-bound evidence 승격이 아�
 
 문제가 생기면 Gate를 실패 상태로 유지하고 VM snapshot으로 복원한다.
 
-Current 1.1.0 extended run `extended-20260918T092819Z-66c07a32`은 2 cycles,
-10 stop/start operations, 4 reboot boundaries, 1800-second soak, 61 reports x
-8 reads = 488 scheduled reads, midpoint verified write/rollback, 7 mock-only
-benchmark processes, guest validation, checkpoint restore와 final VM Off를
-PASS했다. Host summary/evidence archive SHA-256은
-`12570c4cdf41536d9a3be97461a0e58c043c5ba470baee948a14e8f1909c56ee` /
-`f4c80a7c375a426bdd853e24118b623152cfbd556e56c146d20e3ded2896bc9c`다.
+Current 1.1.0 RC4 optional extended/lifecycle/soak run은 **NOT RUN**이다.
+RC1에서 기록한 cycle/reboot/soak 결과는 historical evidence일 뿐 RC4에
+승계하지 않는다.
 
 ## 9. 제품화 lifecycle, crash recovery와 update
 

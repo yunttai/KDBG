@@ -1,5 +1,11 @@
 # Active plan — KDBG 1.1.0 VM-lab productization
 
+> **Historical / superseded:** 아래 계획은 RC1 시점 기록이다. 현재 실행·release
+> 판정은 `docs/exec-plans/STATUS.md`의 RC4 status가 우선한다.
+> RC4 public v4 영상은 presentation review PASS이고 `origin`에 게시된
+> `v1.1.0-rc4`는 source-freeze tag다. Formal GUI evidence는 `CAPTURED_UNREVIEWED`,
+> `evidence_pass=false`, `human_review_complete=false`이며 stable release는 차단됐다.
+
 - 책임: `kdbg_supervisor`
 - 현재 단계: `feature/kdbg-1.1.0` exact build/package/live rebind 및
   presentation-only 최종 영상 품질 검수 완료; formal GUI evidence review는

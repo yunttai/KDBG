@@ -1,8 +1,78 @@
 # KDBG 요구사항 추적표
 
-기준: 2026-09-18 현재 working tree
+기준: 2026-09-19 RC4, product-source commit
+`4b376bb0d61eab232af8a2f7f29033238b911022`
 
-## KDBG 1.1.0 release binding
+## KDBG 1.1.0 RC4 release binding (authoritative)
+
+| Gate | RC4 state |
+|---|---|
+| Source-complete | PASS — layout, core build/CTest 9/9, source validator |
+| Windows-build-verified | PASS — exact unsigned main/symbol/source package |
+| Live-device/runtime | PASS — exact RC4 VM derivative required-core |
+| RC4 extended lifecycle/soak/full feature | NOT RUN — RC1 result는 historical only |
+| GUI host/capture/integrity | PASS — 24 frames, 20 scenes, 21 assertions, 229 actions |
+| Formal GUI evidence | `CAPTURED_UNREVIEWED`; `evidence_pass=false`; `human_review_complete=false` |
+| Initial MP4 public suitability | FAIL — internal path/crop/readability blocker |
+| Public v4 presentation media | PASS (automatic + independent review); formal evidence 승격 아님 |
+| Production signing | BLOCKED — inputs staged; signing/network submission not performed |
+| Source-freeze tag | PASS (published RC tag) — annotated `v1.1.0-rc4` on `origin` at the RC4 product-source commit |
+| Stable `v1.1.0` / public release | BLOCKED — production-signed returned artifacts/TSA absent |
+
+Exact main/symbol/source/scope SHA-256:
+
+- `4dd98b120a725d1804078a394c4d659cdb059a568a38a78643a936ce5f1f34d9`
+- `1f042e5e7a51cb1e2428b6ddb3c955c277de4993a264444e242fe469d104ac68`
+- `966c51f26c9e4da27491a4c00b8989c0eb8360ea3b85d8e9513adf1915ee0f92`
+- `bd2c93dad7604e84534515a00437e8198fa565a654fa665b6cbf235585b98932`
+
+VM-only derivative `product-1.1.0-rc4-test1-20260919` package SHA-256은
+`7f7c179738eb670ca79d6c41bc9c46c445c1ffd31811c46f39bbbdcad3df45d5`다.
+
+| 요구사항 | RC4 exact evidence | 상태/경계 |
+|---|---|---|
+| FR-001, FR-007 | required-core `run-20260919T015729Z-8445dddb`; exact derivative install/load, ABI/Probe workflow | LIVE PASS |
+| FR-002, FR-003 | Probe PFN discovery와 exact 4096-byte physical read | LIVE PASS |
+| FR-004 | GUI run `run-20260919T015850Z-1cfb0381`; hex edit/diff scene capture | AUTOMATION/INTEGRITY PASS; HUMAN REVIEW PENDING |
+| FR-005 | one-shot unlock/apply/full-page read-back match | LIVE PASS |
+| FR-006 | independent reload/rollback/final lock | LIVE PASS |
+| FR-008–FR-013 | exact GUI workflow의 process scan, address Freeze, pointer, disassembly, snapshot scenes | AUTOMATION/INTEGRITY PASS; formal GUI evidence 미승격 |
+| FR-014, FR-015 | process/VA ownership과 page-table visualization scenes | AUTOMATION/INTEGRITY PASS; formal GUI evidence 미승격 |
+| FR-016 | Kernel Explorer scenes | AUTOMATION/INTEGRITY PASS; formal GUI evidence 미승격 |
+| FR-017 | source/build tests와 GUI action log | SOURCE/WINDOWS PASS; RC4 extended/soak NOT RUN |
+| FR-018 | required-core install/load/cleanup/checkpoint restore/final Off | LIVE PASS |
+| NFR-001 | one-shot gate, read-back/rollback, final locked state | SOURCE/LIVE PASS |
+| NFR-002 | deterministic source/build tests and finite GUI automation | PASS; RC4 long-run soak NOT RUN |
+| NFR-003 | isolated bridge/source boundary | SOURCE PASS; optional MemProcFS pmem UNVERIFIED |
+| NFR-004 | RC4 status, implementation status, traceability and exact hashes | SOURCE PASS |
+| Production trust | signing request SHA `3f94c26060bc437460b22ced778c52f1f70165e49a7ac57f0979c1a347f64001`, 11 inputs | BLOCKED; `signing_performed=false`, `network_submission_performed=false` |
+
+Required-core guest archive SHA-256은
+`39c31476928084337d402b6f8b772388c1cfb321c216f3ea4a7ea2d5460857da`다.
+GUI guest evidence/captures SHA-256은
+`c877e2b3695faf6489f0ff3fa517a97eb0cc6f0f334a0a4a4bad900f14446cf4` /
+`abfe37fe1694fe8e35229c306663dde0cc4ff688d1a1fa80139f74c8ea9b3695`다.
+
+Public v2는 independent review에서 taskbar 노출로 FAIL했고 v2/v3는 superseded다.
+최종 presentation-only public v4는
+`out/demo-product-1-1-0-rc4-test1-public-v4-20260919/KDBG-1.1.0-demo-public-v4.mp4`,
+SHA-256
+`43eda62e57607d36517c4bf139094cae8ef786dd7a8e0ea688154f3787475260`,
+9,553,416 bytes, 1920x1080, 10 fps, 405/405 frames, 40.5 seconds다. Automatic
+compositor와 independent presentation review가 모두 PASS했다. 20 scenes/24
+segments/19 boundaries에서 rendered path/username/taskbar/notification/unrelated
+process가 없고 core claims가 읽힌다. Video-only delivery copy
+`out/release-media/KDBG-1.1.0-demo-public.mp4`는 같은 SHA-256/크기이며 해당
+directory에는 MP4만 있다. Raw frames는 공개에서 제외한다. 공식 GUI evidence를
+승격하지 않는다. DEF CON 제출은 이번 범위에서 제외한다.
+
+Annotated source-freeze tag `v1.1.0-rc4`는 `origin`의
+`4b376bb0d61eab232af8a2f7f29033238b911022`에 게시됐다. Stable `v1.1.0` tag와
+public release는 production signing 전까지 차단한다.
+
+## Historical RC1 KDBG 1.1.0 release binding (superseded)
+
+아래 RC1 판정은 해당 exact identity의 이력이며 현재 RC4 판정이 아니다.
 
 | Gate | Current 1.1.0 state |
 |---|---|
@@ -64,7 +134,7 @@ optional extended/full-v4 GUI 범위의 승격이 아니다.
 | Commercial operations | packaged security/support/privacy/MIT-EULA/update-rollback/vulnerability/release-note contract | required-file and required-marker validator plus deterministic positive/negative tests | SOURCE/PACKAGE CONTRACT PASS; monitored intake and production trust BLOCKED |
 | Live evidence | hash-bound required-core, extended lifecycle/soak, GUI capture and MP4 report | validators check apply/rollback, runtime/package identity, cleanup, ordered scenes and final lock | 1.1.0 required-core and extended runs PASS; GUI automation and MP4 composition PASS; human visual review FAIL, so final evidence/submission is incomplete |
 
-## Current 1.1.0 Windows 11 mapping
+## Historical RC1 1.1.0 Windows 11 mapping (superseded)
 
 The required-core run is
 `out/win11-validation/product-1-1-0-rc1-test1-20260918/runs/run-20260918T091747Z-21a27820`.

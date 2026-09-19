@@ -1,83 +1,79 @@
 # KDBG 1.1.0 validation report
 
-Status date: 2026-09-18 KST
+Status date: 2026-09-19 KST
 
-The 1.1.0 source, Windows build/package, required-core and extended live-VM
-gates have exact hash-bound PASS evidence. GUI capture automation and MP4
-composition also passed, but the required human visual review failed because
-the 1024-wide capture omits or clips critical content. Therefore final
-submission evidence remains incomplete and `evidence_pass=false`. Historical
-1.0.0 evidence below remains bound only to its explicitly named epoch. A
-separate polished 1080p presentation video passed automatic and independent
-human review, but it is presentation-only and does not promote the formal gate.
+This report's current boundary is Git commit
+`4b376bb0d61eab232af8a2f7f29033238b911022`, unsigned epoch
+`product-1.1.0-rc4-final-20260919`, and VM-only test derivative
+`product-1.1.0-rc4-test1-20260919`. Source, Windows build/package, and exact
+Windows 11 required-core validation have hash-bound PASS evidence. The RC4 GUI
+run passed host execution, capture, cleanup, and independent archive/hash
+integrity audit, but its formal state remains `CAPTURED_UNREVIEWED` with
+`evidence_pass=false` and `human_review_complete=false`.
 
-Epoch boundary: frozen main/symbol ZIPs `7f6b0fd9…b265a`/`d8715bf7…c96f`
-remain immutable. Their Windows 10 exact-final automated live, process
-conflict/no-apply/recovery, cleanup and snapshot restore passed. The frozen symbol
-archive is not public because its PDBs contain private compiler paths. The previous
-path-mapped exact epoch `b6832712…e47f` completed Windows 10 build 19044 cal35 live
-and final v4, and remains immutable. The historical unsigned product candidate
-epoch was `product-rc1-20260918`; its exact main/symbol ZIP identity is recorded
-in epoch-local sidecars and its source identity in packaged
-`BUILD-METADATA.json`. Its Windows Release build, CTest 9/9 and package
-validator PASS; that evidence is not rebound to 1.1.0. Its VM-only
-test-signed derivative, `product-rc1-win11-test2-20260918`, is bound to source
-snapshot `98700c7c…51eca` and has a successful Windows 11 required-core live run.
-That result is not production publisher trust and does not promote the optional
-extended/full-v4 or interactive GUI scope.
-
-Provenance caveat: the PASS is bound to exact ZIP
-`41f90e2bd76386513d197ae8d77382238a14549e63608dd39eb2d2b4e2c92934` and the
-302-file source snapshot identity `98700c7c…51eca` recorded by its evidence.
-After subsequent harness/documentation changes, the current checkout hashes to
-`ab0ef795…` under the same algorithm, and the original 302-file canonical source
-manifest was not preserved. This report therefore does not claim that the current
-checkout independently reproduces `98700c7c…51eca`.
+RC4 optional extended/lifecycle/soak validation was **NOT RUN**. Any RC1
+extended PASS retained below is historical only and is not rebound to RC4. The
+initial RC4 MP4 passed mechanical composition but failed public-suitability
+review due to visible private paths and weak crops. Public v2 then failed
+independent review because the taskbar remained visible; v2/v3 are superseded.
+The redacted public-v4 MP4 passed the automatic compositor and independent
+presentation review. Review covered all 405 frames, 20 scenes, 24 segments, and
+19 boundaries; no rendered path, username, taskbar, notification, or unrelated
+process was visible, and core claims were readable. Raw frames remain excluded
+from the public bundle because they contain private paths or the taskbar.
+Production signing inputs are staged, but no production signing or network
+submission occurred. Annotated source-freeze tag `v1.1.0-rc4` is published to
+`origin` at the recorded commit; stable tag `v1.1.0` and public release remain blocked. DEF
+CON submission is explicitly outside this work scope.
 
 ## 1.1.0 gate summary
 
 | Gate | State | Evidence in this workspace |
 |---|---|---|
-| Source-complete | PASS | layout, core build/CTest 9/9 and `validate_release.py --source-complete` PASS; source `8f9a0474…c184`, scope `bd2c93da…8932` |
-| MSVC Release user-mode | PASS | exact `product-1.1.0-rc1-final-20260918` Windows Release build and CTest 9/9 |
+| Source-complete | PASS | layout, core build/CTest 9/9 and `validate_release.py --source-complete` PASS; source `966c51f2…0f92`, scope `bd2c93da…8932` |
+| MSVC Release user-mode | PASS | exact `product-1.1.0-rc4-final-20260919` Windows Release build and CTest 9/9 |
 | Sanitizers | BLOCKED (toolchain) | current MinGW distribution cannot link `-lasan` or `-lubsan` |
-| Windows-build-verified | PASS | main `3698e533…e36f`, symbols `0b6dadf7…f849`, benchmark `72348dff…d4cf`; package/symbol validation PASS |
+| Windows-build-verified | PASS | main `4dd98b12…34d9`, symbols `1f042e5e…ac68`, benchmark `7999ed88…f63f`; package/symbol validation PASS |
 | Previous path-mapped exact package | PACKAGE/LIVE PASS (Windows 10) | cal35/final v4 remain bound to `b6832712…e47f`; no current-candidate rebind |
 | Commercial operations documents | PASS / operational proof pending | support/security routes configured; notification and acknowledgement evidence missing |
-| Production signing | INPUT READY / BLOCKED | 11 inputs prepared; production signer, TSA and returned signed drivers absent |
+| Production signing | INPUT READY / BLOCKED | 11 exact inputs, request `3f94c260…4001`; `signing_performed=false`, `network_submission_performed=false`; production signer/HSM/TSA and returned signed artifacts absent |
 | Clean-VM package preflight | PASS (previous b683 exact package) | Windows 10 Pro build 19044: archive/hash validation, native Setup install, installed diagnostics/start and static-runtime execution PASS |
 | Native Setup UX | LIVE PASS (previous b683 exact package) | Install/Repair/Update/Uninstall UI, exact roots, installed reboot, persistent purge, clean reboot inventory and snapshot restore PASS |
 | Runtime telemetry | LIVE PASS (previous b683 exact package) | opt-in fixed-local JSON recorded a successful First/Next GUI sequence, nonzero completed bytes and frames, privacy flags false and writer errors 0; raw evidence carries exact counters |
 | Clean-VM lifecycle/reboot | PASS (script lifecycle scope) | VMware snapshot VM: prior 10-cycle run plus exact C4 two-cycle/four-reboot run with seven readiness reports and clean service/device/registry/CIM/package inventory |
-| Live-device-run-report | PASS | required-core `run-20260918T091747Z-21a27820`; package `596ccdf0…4413`, summary `c6bb846f…e50b`, archive `0457ba53…f6a9` |
-| Live-VM-verified | PASS | required-core plus `extended-20260918T092819Z-66c07a32`; two cycles, 10 stop/start, four reboot, 1800-second soak, 488 reads, midpoint transaction, seven benchmarks |
-| GUI capture automation | PASS / `CAPTURED_UNREVIEWED` | `run-20260918T092129Z-f14f5f7a`; 24 captures/20 scenes, cleanup/checkpoint restore/final Off |
-| Submission media | FAIL (formal human visual review) | source-bound intermediate MP4 automatic PASS (`c368dde5…ad3d`, 40.5 s, 405 frames), but scene 03 has no grid, scene 20 clips the diff row and wrapping obscures content; `evidence_pass=false`; no deck/GIF |
-| Presentation media | PASS (presentation-only) | overlay run `run-20260918T102055Z-6c85cee7`; final2 MP4 `4cd5a4f7…d454`, 1920×1080/10 fps/40.5 s/405 frames; automatic and independent human review PASS; no formal promotion |
-| Commercial release | BLOCKED | production signer/TSA/returned drivers and route notification/ack evidence remain incomplete; the VM-only test certificate is not production trust |
+| Live-device-run-report | PASS | required-core `run-20260919T015729Z-8445dddb`; package `7f7c1797…45d5`, summary `4ad612d9…57b5`, archive `39c31476…57da` |
+| Live-VM-verified | PARTIAL | RC4 required-core PASS; optional extended/lifecycle/soak **NOT RUN**; historical RC1 extended result is not rebound |
+| GUI capture automation | INTEGRITY PASS / `CAPTURED_UNREVIEWED` | `run-20260919T015850Z-1cfb0381`; 24 frames/20 scenes/21 assertions/229 actions, cleanup/checkpoint restore/final Off; formal flags remain false |
+| Initial RC4 media | FAIL (public suitability) | automatic compositor PASS, but independent review found private paths and weak crops; internal-only |
+| Presentation media | PASS (automatic + independent presentation review) | public-v4 MP4 `43eda62e…5260`, 9,553,416 bytes, 1920x1080/10 fps/405 frames/40.5 s; 20 scenes/24 segments/19 boundaries reviewed; raw frames excluded; no formal promotion |
+| Source freeze | PASS (published RC tag) | annotated `v1.1.0-rc4` is published to `origin` at `4b376bb0d61eab232af8a2f7f29033238b911022` |
+| Commercial release | BLOCKED | production signer/private key/HSM or service, RFC 3161 TSA, returned signed artifacts, stable `v1.1.0`, and release publication remain absent |
 
 Historical PASS evidence is never silently rebound to the current candidate.
-The GUI/media FAIL is a release-presentation failure, not a failure of the
-required-core physical transaction or extended lifecycle run.
+The media/review boundary does not invalidate the RC4 required-core physical
+transaction, but it also cannot substitute for RC4 extended or formal visual
+review.
 
 ### Exact 1.1.0 identities and live observations
 
 | Artifact/run | Exact result |
 |---|---|
-| Unsigned epoch | `out/release-epochs/product-1.1.0-rc1-final-20260918/` |
-| Main ZIP | `3698e5333957bec112bb39c372ae933a623af86bbc12e310c2f1bddc7bdce36f` (3,724,808 bytes) |
-| Symbols ZIP | `0b6dadf7e4d1f8cfe7a77200cb6c76e01b01ec1a270ed3c4f5ae25c6ffe8f849` (20,710,820 bytes) |
-| Source / scope | `8f9a04740cc576e97a56776b017da7fc0c8d344289677b9be8d579f9d4edc184` / `bd2c93dad7604e84534515a00437e8198fa565a654fa665b6cbf235585b98932` |
-| Benchmark executable | `72348dff8a0a1623fd922fa316d3bf898a60f54b49bdc34c58a115924c25d4cf` |
-| VM test package | `596ccdf0a65818591e87b28737115da3066328ede42583ef95bc83d8f3d74413` |
+| Git commit | `4b376bb0d61eab232af8a2f7f29033238b911022` |
+| Unsigned epoch | `out/release-epochs/product-1.1.0-rc4-final-20260919/` |
+| Main ZIP | `4dd98b120a725d1804078a394c4d659cdb059a568a38a78643a936ce5f1f34d9` (3,724,846 bytes) |
+| Symbols ZIP | `1f042e5e7a51cb1e2428b6ddb3c955c277de4993a264444e242fe469d104ac68` (20,563,309 bytes) |
+| Source / scope | `966c51f26c9e4da27491a4c00b8989c0eb8360ea3b85d8e9513adf1915ee0f92` / `bd2c93dad7604e84534515a00437e8198fa565a654fa665b6cbf235585b98932` |
+| Benchmark executable | `7999ed886e5b8710f48cd8d08405e6aa8d52608cc4672b0980b7c696fcdef63f` |
+| VM test package | `7f7c179738eb670ca79d6c41bc9c46c445c1ffd31811c46f39bbbdcad3df45d5` |
 | VM test certificate/signer | `bd7de7eb5e0dd305604d5f3dc617c13d268f844dbe541677f6eb4b7f166058b1` / `ba34b393521d722ba01df87afccc6f3feb760b2c` |
-| Required-core | Windows 11 build 26200, ABI 6, PFN `2117631`, offset `0x100`, 8-byte apply, full 4096-byte read-back/reload/rollback, final gate locked, cleanup/restore/final Off |
-| Required-core summary/archive | `c6bb846f56db8679758dab486195916e952298ae0a0416929372da44d716e50b` / `0457ba5352e5b9005bbada1b366684b8d120f662b83c26a24758ad95aab8f6a9` |
-| Extended summary/archive | `12570c4cdf41536d9a3be97461a0e58c043c5ba470baee948a14e8f1909c56ee` / `f4c80a7c375a426bdd853e24118b623152cfbd556e56c146d20e3ded2896bc9c` |
-| GUI summary/archive/captures | `f5fd51ef18c319c37feb5adb997582e56cd2efe9b03a1d6ea3213237f6815d0b` / `6104933593259fb074466ba8d21a5fffd7e47803b2bfec71ce206e5c0a4ce252` / `bd254d7a98230db0199051085453b09ea33405f3efe57a9ded42b8a3bebb6d42` |
-| Source-bound intermediate MP4/report | `c368dde54d19f46fedd32895f319223221538c006fcf4626277665b8fe5aad3d` / `5b92b9086cd2a503f46fd309f4fd20099644aa17e453385d5f3a053a9714fdd0` |
-| Presentation-only overlay summary/archive/captures | `e579e3fb5351e7a9f8c6b7652e37859916f2430ad23048cb08e1f95bbc38e104` / `32945bd31a181ff05d55e9e0d1db6a7c2800941baaaa4225a38b1631fc0cf6ce` / `fffb17d8d0aba0b3ef3179379d97a6be3703d510e75352ae96cba02a264e3038` |
-| Presentation final2 MP4/report | `4cd5a4f71e7baabc758c1097814cca9fc3371f6dc460ef0483faef5b2263d454` / `e13ddce3aa9cffec601f94f3ee928a5d4ec06e23e96b4757ea4edb3def9a31b7` |
+| Required-core | `run-20260919T015729Z-8445dddb`; ABI 6, one-shot apply/full read-back/reload/rollback/final lock, cleanup/restore/final Off |
+| Required-core summary/archive | `4ad612d9298d902066a95c47a64c213454ce229e2ebf23ea153b8e0a702f57b5` / `39c31476928084337d402b6f8b772388c1cfb321c216f3ea4a7ea2d5460857da` |
+| RC4 extended/lifecycle/soak | **NOT RUN** |
+| GUI summary/archive/captures | `ded51b6fc1a71f670e00e709b53987416823f400c6d9e7010b2c7e55dc642cb1` / `c877e2b3695faf6489f0ff3fa517a97eb0cc6f0f334a0a4a4bad900f14446cf4` / `abfe37fe1694fe8e35229c306663dde0cc4ff688d1a1fa80139f74c8ea9b3695` |
+| Presentation public-v4 MP4 | `43eda62e57607d36517c4bf139094cae8ef786dd7a8e0ea688154f3787475260` (9,553,416 bytes; 1920x1080/10 fps/405 frames/40.5 s; automatic + independent presentation review PASS) |
+| Presentation report/scenes/contact sheet | `406054011b2e47dc144631e17e63d920acb715e4076c303556a852fd1009bd88` / `9e4a0543f4aaa61f44a39674e737b212df20474b8f063f1b44aa99d6817dcd04` / `fa8597a86ae39318e4cd52f2eea0e135623fa77ccf07956ca983702fed59258b` |
+| Video-only delivery copy | `out/release-media/KDBG-1.1.0-demo-public.mp4`; same MP4 SHA/bytes; directory contains only this MP4 |
+| Production-signing request | `3f94c26060bc437460b22ced778c52f1f70165e49a7ac57f0979c1a347f64001`; 11 inputs; not signed/not submitted |
 
 Multiple superseded ZIPs were exercised through the native Setup UI. `487bd9cb…745f5`
 exposed a staged-root mismatch before service registration. `d294c547…d32b` completed
@@ -118,23 +114,22 @@ Main/symbol package validation PASS
 Release validation PASS: source-complete
 Windows-build-verified PASS: exact main/symbol/source identities recorded
 Windows 11 required-core PASS: ABI 6, one-shot apply/read-back/reload/rollback/final lock
-Windows 11 extended PASS: two cycles, 10 stop/start, four reboot, 1800-second soak
-GUI capture automation PASS: CAPTURED_UNREVIEWED, 24 captures/20 scenes
-Source-bound intermediate MP4 composition PASS: 40.5 seconds, 405 frames
-Human visual review FAIL: critical 1024-wide layout content omitted/clipped; evidence_pass=false
-Presentation-only overlay PASS: 24 captures/20 scenes, cleanup/restore/final Off
-Presentation final2 MP4 PASS: 1920x1080, 10 fps, 40.5 seconds, 405/405 frames
-Presentation-only independent human review PASS; formal evidence not promoted
+Windows 11 optional RC4 extended/lifecycle/soak NOT RUN
+GUI host/capture/integrity PASS: CAPTURED_UNREVIEWED, 24 frames/20 scenes/21 assertions/229 actions
+Formal GUI review not complete: evidence_pass=false, human_review_complete=false
+Initial RC4 MP4 public-suitability review FAIL: private paths and weak crops
+Presentation public-v4 MP4 automatic + independent presentation review PASS
+Production signing NOT PERFORMED; stable v1.1.0 tag/release blocked
 ```
 
 The sanitizer preset compiled owned sources but could not link because this
 MinGW installation has no ASan/UBSan runtime libraries. No machine-wide WDK is
 installed; the locked NuGet fallback instead produced both current drivers and
 catalogs. The paired package validator passed. Current Windows 11 evidence
-proves disposable-VM test-signature trust, actual load, the Probe physical
-transaction and covered extended workflows; it does not claim production
+proves disposable-VM test-signature trust, actual load, and the Probe physical
+transaction. It does not prove RC4 optional extended workflows or production
 publisher trust. The later final-v4 discussion is historical 1.0.0 evidence and
-does not override the current 1.1.0 human visual-review failure.
+does not override the current RC4 gate states.
 
 ## Historical 1.0.0 mock performance snapshot
 
@@ -246,13 +241,11 @@ installer rerun; stop/remove refuse a same-named service registered to another
 package. Start rolls back only services started by the failed attempt.
 Uninstall retains extracted binaries and `%LOCALAPPDATA%\KDBG`.
 
-Package-only diagnostics and CLI startup were exercised in the clean guest. The
-current VMware evidence independently proves install/start, device/ABI open, the
-Probe physical transaction, ten service cycles, reboot recovery, forced GUI-exit
-cleanup, distinct signed-driver repair/update/rollback/forward-update, explicit
-package/user-data purge, no stale service registration and snapshot restoration.
-The current dedicated process fixture also proves verified write and three Freeze
-restorations followed by baseline restoration.
+Historical VMware evidence independently proves install/start, device/ABI open,
+the Probe physical transaction, ten service cycles, reboot recovery, forced
+GUI-exit cleanup, update/rollback, purge, and snapshot restoration for its named
+epoch. RC4 independently rebinds only the required-core and GUI-capture scopes
+listed above; RC4 extended lifecycle/soak was not run.
 
 Current packaging negative checks:
 
@@ -323,12 +316,14 @@ Neither historical result is a 1.1.0 rebind.
 
 ## Known unverified items
 
-- Production publisher/signature trust; 11 inputs are prepared but signer/TSA/returned drivers are absent
+- Production publisher/signature trust; 11 inputs are prepared but signer/private key/HSM or service, TSA, and returned signed artifacts are absent
 - Optional MemProcFS acquisition backend
-- A replacement source-bound GUI capture and MP4 that pass the required formal
-  human visual review; the polished presentation-only pass does not change
-  `evidence_pass=false`
+- Formal human review of the RC4 source-bound GUI evidence; automation and
+  integrity passed, but `evidence_pass=false` and `human_review_complete=false`
+- RC4 optional extended/lifecycle/soak validation
 - Configured commercial support/security routes lack notification/acknowledgement evidence
+- Stable `v1.1.0` tag and public release publication; published `v1.1.0-rc4`
+  source-freeze tag exists but is not a production release
 
 The packaged `new_live_evidence.ps1`/validator mismatch was fixed in the historical
 `product-rc1-20260918` source. The prior Windows 10 final archive retains its original

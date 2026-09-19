@@ -1,8 +1,73 @@
 # KDBG 구현 상태
 
-기준: 2026-09-18 KST
+기준: 2026-09-19 KST
 
-## 1.1.0 현재 판정
+## RC4 현재 판정 (authoritative)
+
+RC4 product-source commit은
+`4b376bb0d61eab232af8a2f7f29033238b911022`이다. Unsigned epoch
+`product-1.1.0-rc4-final-20260919`과 VM-only derivative
+`product-1.1.0-rc4-test1-20260919`에 RC4 검증을 결속한다.
+
+| 영역 | RC4 상태 | 완료 조건/경계 |
+|---|---|---|
+| Source-complete | PASS | layout, core build, CTest 9/9, source validator |
+| Windows-build-verified | PASS | exact unsigned main/symbol/source package 검증 |
+| Windows 11 required-core | LIVE PASS | exact test derivative, Probe transaction, cleanup, checkpoint restore, VM Off |
+| GUI automation/integrity | PASS | 24 frames, 20 scenes, 21 assertions, 229 actions |
+| Formal GUI evidence | `CAPTURED_UNREVIEWED` | `evidence_pass=false`; `human_review_complete=false` |
+| RC4 extended/lifecycle/soak | NOT RUN | RC1 extended 결과는 historical only |
+| Initial RC4 MP4 | PUBLIC FAIL | internal path와 crop/readability blocker |
+| Public v4 presentation video | PASS (automatic + independent review) | presentation-only; formal evidence 승격 아님 |
+| Production trust | BLOCKED EXTERNAL | signer/cert/private key/HSM/TSA와 signed 반환물 부재 |
+| Source-freeze tag | PASS (published RC tag) | annotated `v1.1.0-rc4` on `origin` at the RC4 product-source commit |
+| Stable `v1.1.0` / public release | BLOCKED | production signing 검증 전 생성하지 않음 |
+
+Exact main/symbol/source/scope SHA-256은 다음과 같다.
+
+- `4dd98b120a725d1804078a394c4d659cdb059a568a38a78643a936ce5f1f34d9`
+- `1f042e5e7a51cb1e2428b6ddb3c955c277de4993a264444e242fe469d104ac68`
+- `966c51f26c9e4da27491a4c00b8989c0eb8360ea3b85d8e9513adf1915ee0f92`
+- `bd2c93dad7604e84534515a00437e8198fa565a654fa665b6cbf235585b98932`
+
+VM-only package SHA-256은
+`7f7c179738eb670ca79d6c41bc9c46c445c1ffd31811c46f39bbbdcad3df45d5`다.
+Required-core `run-20260919T015729Z-8445dddb`의 guest archive SHA-256은
+`39c31476928084337d402b6f8b772388c1cfb321c216f3ea4a7ea2d5460857da`다.
+
+GUI `run-20260919T015850Z-1cfb0381`은 host/capture/integrity를 통과했고,
+guest evidence/captures SHA-256은
+`c877e2b3695faf6489f0ff3fa517a97eb0cc6f0f334a0a4a4bad900f14446cf4` /
+`abfe37fe1694fe8e35229c306663dde0cc4ff688d1a1fa80139f74c8ea9b3695`다.
+이 자동 PASS는 human review를 뜻하지 않는다.
+
+Production signing input 11개는
+`out/production-signing/product-1.1.0-rc4-final-20260919-prepared`에 준비됐고,
+request SHA-256은
+`3f94c26060bc437460b22ced778c52f1f70165e49a7ac57f0979c1a347f64001`다.
+`signing_performed=false`, `network_submission_performed=false`다.
+
+Public v2는 independent review에서 taskbar 노출로 FAIL했고 v2/v3는 superseded다.
+최종 presentation-only public v4는
+`out/demo-product-1-1-0-rc4-test1-public-v4-20260919/KDBG-1.1.0-demo-public-v4.mp4`,
+SHA-256
+`43eda62e57607d36517c4bf139094cae8ef786dd7a8e0ea688154f3787475260`,
+9,553,416 bytes다. 1920x1080, 10 fps, 405/405 frames, 40.5 seconds이며
+automatic compositor와 independent presentation review가 모두 PASS했다. 검토는
+20 scenes/24 segments/19 boundaries를 포함하며 rendered
+path/username/taskbar/notification/unrelated process가 없고 core claims가 읽힌다.
+Video-only delivery copy
+`out/release-media/KDBG-1.1.0-demo-public.mp4`도 같은 SHA-256/크기이며 해당
+directory에는 MP4만 있다. Raw frames는 공개에서 제외한다. 이 결과는 공식 GUI
+evidence를 승격하지 않는다. DEF CON 제출은 이 상태 갱신 범위에서 제외한다.
+
+Annotated source-freeze tag `v1.1.0-rc4`는 `origin`의
+`4b376bb0d61eab232af8a2f7f29033238b911022`에 게시됐다. Stable `v1.1.0` tag와
+public release는 production signing 전까지 차단한다.
+
+## Historical RC1 1.1.0 판정 (superseded)
+
+아래 RC1 판정은 당시 exact identity의 이력이며 현재 RC4 판정이 아니다.
 
 `feature/kdbg-1.1.0`이 현재 release branch다. Unsigned epoch
 `product-1.1.0-rc1-final-20260918`과 VM-only test-signed derivative
@@ -145,12 +210,15 @@ parse와 main/symbol package strict validation을 통과했다. `R:\`/`K:\`는 �
 test-signing and disposable-VM/snapshot contract는 유지했다. 새로운 우회, signing
 bypass, vulnerable-driver load, stealth, arbitrary kernel-virtual write는 없다.
 
-## 1.1.0에 아직 필요한 실제 제품 gate
+## RC4 stable release에 아직 필요한 실제 제품 gate
 
-1. Production publisher/driver certificate와 TSA를 적용하고 반환된 바이너리 및
-   trusted timestamp를 검증한다.
+1. Production publisher/driver signer, certificate/private key 또는 HSM과 HTTPS
+   RFC3161 TSA를 적용하고 반환된 바이너리 및 trusted timestamp를 검증한다.
 2. monitored support/security intake route를 실제 운영 상태로 전환하고
    notification/acknowledgement를 보존한다.
+
+첫 번째 gate 전에는 stable `v1.1.0` tag/public release를 만들지 않는다. RC4
+`signing_performed=false`, `network_submission_performed=false`를 유지한다.
 
 현재 extended run의 N-1 transition은 보존된 1.0.0 previous candidate를 사용해
 PASS했다. 공개 배포처에서 다시 받은 published 1.0.0 artifact에 대한 별도 검증을
