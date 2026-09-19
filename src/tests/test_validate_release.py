@@ -13,6 +13,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import zipfile
 import zlib
 from pathlib import Path
 from unittest import mock
@@ -178,6 +179,15 @@ def valid_write_report() -> dict[str, object]:
         },
         "errors": [],
     }
+
+
+def valid_write_report_abi7() -> dict[str, object]:
+    report = copy.deepcopy(valid_write_report())
+    report["backend"]["abi_version"] = 7  # type: ignore[index]
+    report["backend"]["supports_physical_page_compare_write"] = True  # type: ignore[index]
+    report["session_after_apply"] = session(11, 4096, 14)
+    report["session_final"] = session(12, 4096, 16)
+    return report
 
 
 def file_sha256(path: Path) -> str:
@@ -356,7 +366,7 @@ def build_flat_symbol_comparison_root(
 
 
 def build_analysis_metadata(
-    evidence_dir: Path, package: Path, symbols: Path,
+    evidence_dir: Path, package: Path, symbols: Path, abi_version: int = 6,
 ) -> Path:
     process_page = bytes((index * 7 + 3) & 0xFF for index in range(4096))
     process_page_path = evidence_dir / "process-read.bin"
@@ -411,7 +421,7 @@ def build_analysis_metadata(
     analysis = {
         "schema": "kdbg-analysis-live-evidence-v1",
         "captured_utc": "2026-09-16T00:15:00Z",
-        "driver_abi_version": 6,
+        "driver_abi_version": abi_version,
         "process": {
             "pid": owner_pid,
             "process_start_id": 0x123456789ABCDEF,
@@ -556,7 +566,9 @@ def build_analysis_metadata(
     return path
 
 
-def build_live_bundle(root: Path) -> tuple[Path, Path, Path]:
+def build_live_bundle(
+    root: Path, abi_version: int = 6,
+) -> tuple[Path, Path, Path]:
     package = root / VALIDATOR.PACKAGE_NAME
     symbols = root / VALIDATOR.SYMBOLS_NAME
     evidence_dir = root / "evidence"
@@ -614,7 +626,8 @@ def build_live_bundle(root: Path) -> tuple[Path, Path, Path]:
 
     baseline_crc = zlib.crc32(baseline) & 0xFFFFFFFF
     expected_crc = zlib.crc32(expected) & 0xFFFFFFFF
-    report = valid_write_report()
+    report = (valid_write_report_abi7()
+              if abi_version == 7 else valid_write_report())
     runtime_identity = report["runtime_identity"]
     runtime_identity["verifier"]["sha256"] = file_sha256(  # type: ignore[index]
         package / "tools/kdbg_live_verify.exe")
@@ -638,7 +651,7 @@ def build_live_bundle(root: Path) -> tuple[Path, Path, Path]:
         "schema": "kdbg-physical-live-evidence-v1",
         "timestamp_utc": "2026-09-16T00:00:00.000Z",
         "page_size": 4096,
-        "driver_abi_version": 6,
+        "driver_abi_version": abi_version,
         "pfn": "0x100",
         "physical_address": "0x100000",
         "edit_offset": 0x100,
@@ -676,7 +689,8 @@ def build_live_bundle(root: Path) -> tuple[Path, Path, Path]:
         }
     gui_path = evidence_dir / "metadata.json"
     gui_path.write_text(json.dumps(gui_metadata), encoding="utf-8")
-    analysis_path = build_analysis_metadata(evidence_dir, package, symbols)
+    analysis_path = build_analysis_metadata(
+        evidence_dir, package, symbols, abi_version)
     (evidence_dir / "commands.log").write_text("fixture command log\n", encoding="utf-8")
     (evidence_dir / "demo.gif").write_bytes(valid_test_gif())
     scene_review = {
@@ -706,7 +720,7 @@ def build_live_bundle(root: Path) -> tuple[Path, Path, Path]:
         "timestamp_utc": "2026-09-16T00:20:00.000Z",
         "os_build": 26100,
         "package_version": "1.1.0",
-        "abi_version": 6,
+        "abi_version": abi_version,
         "pfn": "0x100",
         "physical_address": "0x100000",
         "page_size": 4096,
@@ -768,6 +782,392 @@ def build_live_bundle(root: Path) -> tuple[Path, Path, Path]:
     return evidence_path, package, symbols
 
 
+def build_baremetal_bundle(root: Path) -> tuple[Path, Path]:
+    package = root / "package"
+    evidence_dir = root / "baremetal-evidence"
+    (package / "drivers").mkdir(parents=True)
+    evidence_dir.mkdir()
+    source_hash = "ab" * 32
+    manifest = package / "SHA256SUMS.txt"
+    manifest.write_text("00" * 32 + "  fixture.bin\n", encoding="utf-8")
+    (package / "BUILD-METADATA.json").write_text(json.dumps({
+        "source_snapshot_sha256": source_hash,
+    }), encoding="utf-8")
+    for name in ("KDbgDriver.cat", "KDbgProbe.cat"):
+        (package / "drivers" / name).write_bytes((name + "-signed").encode())
+
+    baseline = bytearray((index * 13 + 7) & 0xFF for index in range(4096))
+    expected = bytearray(baseline)
+    for index, mask in enumerate(VALIDATOR.PROBE_EDIT_MASK):
+        expected[VALIDATOR.PROBE_EDIT_OFFSET + index] ^= mask
+    page_payloads = {
+        "baseline": bytes(baseline),
+        "preflight": bytes(baseline),
+        "expected_after": bytes(expected),
+        "readback": bytes(expected),
+        "independent_reload": bytes(expected),
+        "rollback": bytes(baseline),
+    }
+    artifact_paths: dict[str, Path] = {}
+    for name, payload in page_payloads.items():
+        artifact_paths[name] = evidence_dir / f"{name}.bin"
+        artifact_paths[name].write_bytes(payload)
+
+    runtime_identity = "11" * 32
+    boot_before = "22" * 32
+    pfn = 0x12345
+    cleanup_report = {
+        "schema": "kdbg.win11-baremetal-cleanup-report.v1",
+        "success": True,
+        "runtime_host_machine_identity_sha256": runtime_identity,
+        "boot_id_sha256": boot_before,
+        "final_gate_locked": True,
+        "services": {"KDBG": "absent", "KDBGProbe": "absent"},
+        "devices": {"KDBG": "absent", "KDBGProbe": "absent"},
+        "errors": [],
+    }
+    for name, value in (
+        ("cleanup_report", cleanup_report),
+    ):
+        artifact_paths[name] = evidence_dir / f"{name}.json"
+        artifact_paths[name].write_text(json.dumps(value), encoding="utf-8")
+    artifact_paths["package_archive"] = evidence_dir / "KDBG-package.zip"
+    with zipfile.ZipFile(
+        artifact_paths["package_archive"], "w", zipfile.ZIP_DEFLATED
+    ) as bundle:
+        for package_file in sorted(path for path in package.rglob("*") if path.is_file()):
+            relative = package_file.relative_to(package).as_posix()
+            bundle.write(package_file, f"{VALIDATOR.PACKAGE_NAME}/{relative}")
+    package_hash = file_sha256(artifact_paths["package_archive"])
+    signer_thumbprint = "44" * 20
+    signer_certificate_hash = "55" * 32
+    signature_report = {
+        "schema": "kdbg.win11-baremetal-signature-report.v1",
+        "verified": True,
+        "status": "Valid",
+        "verification_command": "Get-AuthenticodeSignature",
+        "exit_code": 0,
+        "package_sha256": package_hash,
+        "signer_thumbprint": signer_thumbprint,
+        "signer_certificate_sha256": signer_certificate_hash,
+        "catalogs": [
+            {
+                "package_relative_path": f"drivers/{name}",
+                "sha256": file_sha256(package / "drivers" / name),
+            }
+            for name in ("KDbgDriver.cat", "KDbgProbe.cat")
+        ],
+    }
+    artifact_paths["signature_report"] = evidence_dir / "signature_report.json"
+    artifact_paths["signature_report"].write_text(
+        json.dumps(signature_report), encoding="utf-8")
+    comparison_names = [
+        ("baseline_vs_preflight", "baseline", "preflight"),
+        ("expected_vs_write_readback", "expected_after", "readback"),
+        ("expected_vs_independent_reload", "expected_after", "independent_reload"),
+        ("baseline_vs_rollback_readback", "baseline", "rollback"),
+    ]
+    live_report = {
+        "schema": "kdbg.live-verify.v2",
+        "mode": "baremetal-probe-write-rollback",
+        "success": True,
+        "cancelled": False,
+        "operator_confirmed_disposable_vm": False,
+        "snapshot_id": "",
+        "errors": [],
+        "baremetal_contract": {
+            "target_profile": "LocalHost",
+            "probe_identity_fresh_at_rollback": True,
+            "rollback_suppressed_stale_identity": False,
+        },
+        "backend": {
+            "name": "KDbgDriver",
+            "abi_version": 7,
+            "connected": True,
+            "write_enabled": False,
+            "is_mock": False,
+            "supports_physical_page_compare_write": True,
+        },
+        "probe_before": probe(0x11111111),
+        "probe_after_write": probe(0x22222222),
+        "probe_after_rollback": probe(0x11111111),
+        "write_cleanup": {
+            "edit_offset": VALIDATOR.PROBE_EDIT_OFFSET,
+            "edit_length": 8,
+            "apply_requested_bytes": 8,
+            "user_dirty_bytes": 8,
+            "apply_driver_transferred_bytes": 4096,
+            "rollback_requested_bytes": 4096,
+            "rollback_driver_transferred_bytes": 4096,
+            "rollback_attempted": True,
+            "rollback_verified": True,
+            "final_relock_attempted": True,
+            "final_gate_locked": True,
+        },
+        "raw_page_artifacts": [
+            {
+                "role": name,
+                "file_name": artifact_paths[name].name,
+                "sha256": file_sha256(artifact_paths[name]),
+                "byte_count": 4096,
+                "written": True,
+            }
+            for name in page_payloads
+        ],
+        "comparisons": [
+            comparison(
+                name,
+                zlib.crc32(artifact_paths[expected_name].read_bytes()) & 0xFFFFFFFF,
+                zlib.crc32(artifact_paths[actual_name].read_bytes()) & 0xFFFFFFFF,
+            )
+            for name, expected_name, actual_name in comparison_names
+        ],
+    }
+    for name in ("probe_before", "probe_after_write", "probe_after_rollback"):
+        live_report[name]["pfn"] = pfn
+        live_report[name]["physical_address"] = pfn << 12
+    artifact_paths["live_run_report"] = evidence_dir / "live-run.json"
+    artifact_paths["live_run_report"].write_text(
+        json.dumps(live_report), encoding="utf-8")
+    artifacts = {
+        name: {
+            "file": path.name,
+            "sha256": file_sha256(path),
+            "bytes": path.stat().st_size,
+        }
+        for name, path in artifact_paths.items()
+    }
+    evidence = {
+        "schema": VALIDATOR.BAREMETAL_EVIDENCE_SCHEMA,
+        "lane": "bare-metal-runtime-host",
+        "success": True,
+        "dry_run": False,
+        "completed_utc": "2026-09-19T00:10:00Z",
+        "roles": {
+            "runtime_host": {
+                "role": "runtime_host",
+                "machine_identity_sha256": runtime_identity,
+                "boot_id_before_sha256": boot_before,
+                "os_name": "Windows",
+                "os_build": 26100,
+                "architecture": "x64",
+                "execution_context": "bare-metal",
+                "is_virtual_machine": False,
+                "hypervisor_present": True,
+            },
+            "orchestrator_host": {
+                "role": "orchestrator_host",
+                "machine_identity_sha256": runtime_identity,
+            },
+        },
+        "package": {
+            "package_sha256": package_hash,
+            "manifest_sha256": file_sha256(manifest),
+            "source_snapshot_sha256": source_hash,
+            "signer_thumbprint": signer_thumbprint,
+            "signer_certificate_sha256": signer_certificate_hash,
+            "signature_status": "Valid",
+        },
+        "binding": {
+            "runtime_host_machine_identity_sha256": runtime_identity,
+            "boot_id_before_sha256": boot_before,
+            "package_sha256": package_hash,
+            "source_snapshot_sha256": source_hash,
+            "signer_thumbprint": signer_thumbprint,
+        },
+        "target": {
+            "provider": "KDbgProbe",
+            "discovery": "IOCTL_KDBG_PROBE_GET_INFO",
+            "ownership": "KDbgProbe-owned contiguous page",
+            "probe_derived": True,
+            "raw_user_pfn": False,
+            "pfn": pfn,
+            "physical_address": pfn << 12,
+            "page_size": 4096,
+            "generation": 7,
+        },
+        "backend": {
+            "name": "KDbgDriver",
+            "connected": True,
+            "is_mock": False,
+            "abi_version": 7,
+            "write_enabled_final": False,
+            "capabilities": ["compare-write-page-v1"],
+        },
+        "artifacts": artifacts,
+        "transaction": {
+            "status": "passed",
+            "physical_read_4096": True,
+            "preflight_full_match": True,
+            "one_shot_unlock": True,
+            "unlock_consumed": True,
+            "dirty_bytes": 8,
+            "driver_requested_bytes": 4096,
+            "driver_transferred_bytes": 4096,
+            "full_readback_match": True,
+            "independent_reload_match": True,
+            "rollback_requested_bytes": 4096,
+            "rollback_completed_bytes": 4096,
+            "rollback_full_match": True,
+            "final_gate_locked": True,
+            "edit_offset": VALIDATOR.PROBE_EDIT_OFFSET,
+            "edit_length": 8,
+            "edit_xor_mask": VALIDATOR.PROBE_EDIT_MASK.hex(),
+            "runtime_host_machine_identity_sha256": runtime_identity,
+            "boot_id_sha256": boot_before,
+            "abi_version": 7,
+            "operation": "compare-write-page-v1",
+            "compare_bytes": 4096,
+        },
+        "cleanup": {
+            "uninstall_completed": True,
+            "services_absent": True,
+            "devices_absent": True,
+            "errors": [],
+        },
+        "errors": [],
+    }
+    evidence_path = evidence_dir / "evidence.json"
+    evidence_path.write_text(json.dumps(evidence), encoding="utf-8")
+    return evidence_path, package
+
+
+class BareMetalHostEvidenceValidatorTests(unittest.TestCase):
+    def validate_mutation(self, mutate=None) -> list[str]:
+        with tempfile.TemporaryDirectory(prefix="kdbg-baremetal-evidence-") as directory:
+            evidence_path, package = build_baremetal_bundle(Path(directory))
+            evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+            if mutate is not None:
+                mutate(evidence, evidence_path.parent)
+                evidence_path.write_text(json.dumps(evidence), encoding="utf-8")
+            errors: list[str] = []
+            VALIDATOR.validate_baremetal_host_evidence(
+                evidence_path, package, errors)
+            return errors
+
+    @staticmethod
+    def rewrite_artifact(
+        evidence: dict, directory: Path, name: str, value: dict,
+    ) -> None:
+        path = directory / evidence["artifacts"][name]["file"]
+        path.write_text(json.dumps(value), encoding="utf-8")
+        evidence["artifacts"][name]["sha256"] = file_sha256(path)
+        evidence["artifacts"][name]["bytes"] = path.stat().st_size
+
+    def test_valid_baremetal_evidence_allows_same_host_orchestrator(self) -> None:
+        self.assertEqual([], self.validate_mutation())
+
+    def test_guest_report_cannot_masquerade_as_baremetal(self) -> None:
+        def mutate(evidence: dict, _: Path) -> None:
+            evidence["guest_validation_passed"] = True
+            evidence["roles"]["runtime_host"]["execution_context"] = (
+                "virtual-machine-guest")
+            evidence["roles"]["runtime_host"]["is_virtual_machine"] = True
+
+        errors = self.validate_mutation(mutate)
+        self.assertTrue(any("cannot masquerade" in error for error in errors), errors)
+        self.assertTrue(any("bare-metal execution context" in error for error in errors), errors)
+
+    def test_runtime_machine_binding_mismatch_is_rejected(self) -> None:
+        def mutate(evidence: dict, _: Path) -> None:
+            evidence["binding"]["runtime_host_machine_identity_sha256"] = "ff" * 32
+
+        self.assertTrue(any(
+            "binding identity mismatch" in error
+            for error in self.validate_mutation(mutate)
+        ))
+
+    def test_cleanup_observation_failure_is_rejected(self) -> None:
+        def mutate(evidence: dict, directory: Path) -> None:
+            report_path = directory / evidence["artifacts"]["cleanup_report"]["file"]
+            report = json.loads(report_path.read_text(encoding="utf-8"))
+            report["services"]["KDBG"] = "running"
+            self.rewrite_artifact(evidence, directory, "cleanup_report", report)
+
+        self.assertTrue(any(
+            "cleanup observation report" in error
+            for error in self.validate_mutation(mutate)
+        ))
+
+    def test_abi_v6_or_missing_compare_write_is_rejected(self) -> None:
+        def mutate(evidence: dict, _: Path) -> None:
+            evidence["backend"]["abi_version"] = 6
+            evidence["backend"]["capabilities"] = []
+            evidence["transaction"]["abi_version"] = 6
+            evidence["transaction"]["operation"] = "legacy-write"
+
+        errors = self.validate_mutation(mutate)
+        self.assertTrue(any("ABI v7" in error for error in errors), errors)
+
+    def test_live_report_missing_compare_write_capability_is_rejected(self) -> None:
+        def mutate(evidence: dict, directory: Path) -> None:
+            report_path = directory / evidence["artifacts"]["live_run_report"]["file"]
+            report = json.loads(report_path.read_text(encoding="utf-8"))
+            del report["backend"]["supports_physical_page_compare_write"]
+            self.rewrite_artifact(
+                evidence, directory, "live_run_report", report)
+
+        self.assertTrue(any(
+            "backend is not locked ABI v7" in error
+            for error in self.validate_mutation(mutate)
+        ))
+
+    def test_package_archive_bytes_are_actually_bound(self) -> None:
+        def mutate(_: dict, directory: Path) -> None:
+            (directory / "KDBG-package.zip").write_bytes(b"different package")
+
+        self.assertTrue(any(
+            "artifact byte count mismatch: package_archive" in error or
+            "artifact hash mismatch: package_archive" in error
+            for error in self.validate_mutation(mutate)
+        ))
+
+    def test_archive_tree_mismatch_is_rejected_even_with_updated_hash(self) -> None:
+        def mutate(evidence: dict, directory: Path) -> None:
+            archive = directory / evidence["artifacts"]["package_archive"]["file"]
+            with zipfile.ZipFile(archive, "a", zipfile.ZIP_DEFLATED) as bundle:
+                bundle.writestr(f"{VALIDATOR.PACKAGE_NAME}/extra.bin", b"extra")
+            digest = file_sha256(archive)
+            evidence["artifacts"]["package_archive"]["sha256"] = digest
+            evidence["artifacts"]["package_archive"]["bytes"] = archive.stat().st_size
+            evidence["package"]["package_sha256"] = digest
+            evidence["binding"]["package_sha256"] = digest
+            signature_path = directory / evidence["artifacts"]["signature_report"]["file"]
+            signature = json.loads(signature_path.read_text(encoding="utf-8"))
+            signature["package_sha256"] = digest
+            self.rewrite_artifact(evidence, directory, "signature_report", signature)
+
+        self.assertTrue(any(
+            "archive file set does not match" in error
+            for error in self.validate_mutation(mutate)
+        ))
+
+    def test_missing_live_verifier_report_is_rejected(self) -> None:
+        def mutate(evidence: dict, directory: Path) -> None:
+            report = directory / evidence["artifacts"]["live_run_report"]["file"]
+            report.unlink()
+
+        self.assertTrue(any(
+            "artifact live_run_report" in error
+            for error in self.validate_mutation(mutate)
+        ))
+
+    def test_live_verifier_page_hash_mismatch_is_rejected(self) -> None:
+        def mutate(evidence: dict, directory: Path) -> None:
+            report_path = directory / evidence["artifacts"]["live_run_report"]["file"]
+            report = json.loads(report_path.read_text(encoding="utf-8"))
+            readback = next(
+                item for item in report["raw_page_artifacts"]
+                if item["role"] == "readback")
+            readback["sha256"] = "ff" * 32
+            self.rewrite_artifact(evidence, directory, "live_run_report", report)
+
+        self.assertTrue(any(
+            "page binding mismatch: readback" in error
+            for error in self.validate_mutation(mutate)
+        ))
+
+
 class LiveRunValidatorTests(unittest.TestCase):
     def validate(self, report: dict[str, object]) -> list[str]:
         with tempfile.TemporaryDirectory(prefix="kdbg-validator-") as directory:
@@ -789,6 +1189,26 @@ class LiveRunValidatorTests(unittest.TestCase):
 
     def test_valid_write_report(self) -> None:
         self.assertEqual([], self.validate(valid_write_report()))
+
+    def test_valid_abi7_write_report(self) -> None:
+        self.assertEqual([], self.validate(valid_write_report_abi7()))
+
+    def test_valid_abi7_live_bundle(self) -> None:
+        with tempfile.TemporaryDirectory(
+                prefix="kdbg-abi7-live-bundle-") as directory:
+            evidence, package, symbols = build_live_bundle(
+                Path(directory), abi_version=7)
+            errors: list[str] = []
+            VALIDATOR.validate_live(evidence, package, symbols, errors)
+            self.assertEqual([], errors)
+
+    def test_abi7_write_report_requires_compare_write_capability(self) -> None:
+        report = valid_write_report_abi7()
+        del report["backend"]["supports_physical_page_compare_write"]  # type: ignore[index]
+        self.assertTrue(any(
+            "exact-page compare/write capability" in error
+            for error in self.validate(report)
+        ))
 
     def test_mock_backend_is_rejected(self) -> None:
         report = valid_write_report()
@@ -1271,6 +1691,7 @@ class PackageProvenanceValidatorTests(unittest.TestCase):
         self.assertIn("KDBGSetup.exe", VALIDATOR.MAIN_REQUIRED)
         self.assertIn("tools/setup.ps1", VALIDATOR.MAIN_REQUIRED)
         self.assertIn("tools/setup_contract.psm1", VALIDATOR.MAIN_REQUIRED)
+        self.assertIn("tools/TargetProfile.psm1", VALIDATOR.MAIN_REQUIRED)
         self.assertIn("KDBGSetup.pdb", VALIDATOR.SYMBOLS_REQUIRED)
         self.assertIn(
             ("KDBGSetup.exe", "KDBGSetup.pdb"),
@@ -1280,6 +1701,12 @@ class PackageProvenanceValidatorTests(unittest.TestCase):
             "src/tools/setup/setup.ps1", VALIDATOR.SOURCE_REQUIRED)
         self.assertIn(
             "src/tests/setup_contract_tests.ps1", VALIDATOR.SOURCE_REQUIRED)
+        self.assertIn(
+            "src/tools/package/TargetProfile.psm1", VALIDATOR.SOURCE_REQUIRED)
+        self.assertIn(
+            "src/tools/win11_baremetal_validation/Invoke-Win11BareMetalValidation.ps1",
+            VALIDATOR.SOURCE_REQUIRED,
+        )
 
     def test_commercial_operations_contract_is_source_gated(self) -> None:
         for relative in (

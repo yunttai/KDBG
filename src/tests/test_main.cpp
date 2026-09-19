@@ -12,6 +12,7 @@ void RunScannerTests(kdbg::test::TestRunner& runner);
 void RunAdvancedCoreTests(kdbg::test::TestRunner& runner);
 void RunKDbgAbiLayoutTests(kdbg::test::TestRunner& runner);
 void RunKernelModuleTests(kdbg::test::TestRunner& runner);
+void RunLocalizationTests(kdbg::test::TestRunner& runner);
 void RunPerformanceTelemetryTests(kdbg::test::TestRunner& runner);
 
 int main() {
@@ -27,6 +28,7 @@ int main() {
     RunAdvancedCoreTests(runner);
     RunKDbgAbiLayoutTests(runner);
     RunKernelModuleTests(runner);
+    RunLocalizationTests(runner);
     RunPerformanceTelemetryTests(runner);
 
     std::cout << "Checks: " << runner.Checks()

@@ -2,19 +2,31 @@
 param(
     [switch]$ConfirmDedicatedVm,
     [switch]$ConfirmSnapshot,
+    [ValidateSet("DisposableVm", "LocalHost")]
+    [string]$TargetProfile,
     [ValidateSet("DistributionSource", "InstalledProduct")]
     [string]$PackageRootMode = "DistributionSource"
 )
 
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
-if (-not $ConfirmDedicatedVm -or -not $ConfirmSnapshot) {
+$ResolvedTargetProfile = if ([string]::IsNullOrWhiteSpace($TargetProfile)) {
+    if ($ConfirmDedicatedVm -and $ConfirmSnapshot) { "DisposableVm" }
+    else { "LocalHost" }
+} else { $TargetProfile }
+if ($ResolvedTargetProfile -eq "DisposableVm" -and
+    (-not $ConfirmDedicatedVm -or -not $ConfirmSnapshot)) {
     throw "Starting drivers requires -ConfirmDedicatedVm and -ConfirmSnapshot."
 }
+Import-Module (Join-Path $PSScriptRoot "TargetProfile.psm1") -Force
+$null = Assert-KdbgTargetProfile `
+    -TargetProfile $ResolvedTargetProfile `
+    -ConfirmDedicatedVm:$ConfirmDedicatedVm `
+    -ConfirmSnapshot:$ConfirmSnapshot
 $Identity = [Security.Principal.WindowsIdentity]::GetCurrent()
 $Principal = [Security.Principal.WindowsPrincipal]::new($Identity)
 if (-not $Principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-    throw "Run PowerShell as Administrator in a disposable snapshot VM."
+    throw "Run PowerShell as Administrator on the selected target."
 }
 
 & (Join-Path $PSScriptRoot "diagnose.ps1") `
@@ -66,10 +78,11 @@ try {
         $Readiness.runtime_identity.probe_service.service_type -ne 1 -or
         $Readiness.runtime_identity.probe_service.current_state -ne 4 -or
         $Readiness.runtime_identity.probe_service.running_kernel_driver -ne $true -or
-        $Readiness.backend.abi_version -ne 6 -or
+        $Readiness.backend.abi_version -ne 7 -or
+        $Readiness.backend.supports_physical_page_compare_write -ne $true -or
         $Readiness.probe_before.byte_count -ne 4096 -or
         $Readiness.write_cleanup.final_gate_locked -ne $true) {
-        throw "Packaged live verifier report did not prove runtime identity, ABI 6, exact Probe read, and a locked gate."
+        throw "Packaged live verifier report did not prove runtime identity, ABI 7, exact Probe read, and a locked gate."
     }
     Write-Host "Read-only ABI/Probe readiness report: $ReadinessReport"
 } catch {
@@ -99,5 +112,5 @@ try {
     }
     throw $StartFailure
 }
-Write-Host "KDBG and KDBGProbe are running and bound to this package."
+Write-Host "KDBG and KDBGProbe are running and bound to this package on target profile $ResolvedTargetProfile."
 exit 0

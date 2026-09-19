@@ -335,7 +335,8 @@ function Invoke-Readiness([string]$PackageRoot, [string]$Label, [int]$ReadSample
     $hashes = Get-PackageDriverHashes $PackageRoot
     if ($report.success -ne $true -or $report.mode -cne 'read-only' -or
         $report.runtime_identity.verified -ne $true -or
-        [int]$report.backend.abi_version -ne 6 -or
+        [int]$report.backend.abi_version -ne 7 -or
+        $report.backend.supports_physical_page_compare_write -ne $true -or
         [int]$report.probe_before.byte_count -ne 4096 -or
         $report.write_cleanup.final_gate_locked -ne $true -or
         [string]$report.runtime_identity.kdbg_service.binary.sha256 -cne $hashes.driver -or
@@ -482,7 +483,8 @@ function Invoke-Soak {
             if ($report.success -ne $true -or $report.mode -cne 'read-only' -or
                 $report.cancelled -ne $false -or
                 $report.backend.connected -ne $true -or $report.backend.is_mock -ne $false -or
-                [int]$report.backend.abi_version -ne 6 -or
+                [int]$report.backend.abi_version -ne 7 -or
+                $report.backend.supports_physical_page_compare_write -ne $true -or
                 [int]$report.probe_before.byte_count -ne 4096 -or
                 @($report.latency.read_samples_ms).Count -ne 8 -or
                 $report.runtime_identity.verified -ne $true -or
@@ -534,7 +536,8 @@ function Invoke-Soak {
                     $write.operator_confirmed_disposable_vm -ne $true -or
                     [string]$write.snapshot_id -cne $CheckpointId.ToString('D') -or
                     $write.backend.connected -ne $true -or $write.backend.is_mock -ne $false -or
-                    [int]$write.backend.abi_version -ne 6 -or
+                    [int]$write.backend.abi_version -ne 7 -or
+                    $write.backend.supports_physical_page_compare_write -ne $true -or
                     $write.runtime_identity.verified -ne $true -or
                     [uint64]$write.probe_before.pfn -ne $baselinePfn -or
                     [uint64]$write.probe_before.physical_address -ne $baselinePhysicalAddress -or

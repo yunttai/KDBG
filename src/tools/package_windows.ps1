@@ -928,7 +928,9 @@ $Catalogs = @("drivers/KDbgDriver.cat", "drivers/KDbgProbe.cat")
 foreach ($Name in @("app.example.json", "safety_policy.example.json")) {
     Copy-RequiredFile (Join-Path $RepoRoot "src\config\$Name") (Join-Path $StagingOutputDirectory "config\$Name")
 }
-foreach ($Name in @("install.ps1", "start.ps1", "run.ps1", "stop.ps1", "uninstall.ps1", "diagnose.ps1")) {
+foreach ($Name in @(
+    "install.ps1", "start.ps1", "run.ps1", "stop.ps1", "uninstall.ps1",
+    "diagnose.ps1", "TargetProfile.psm1")) {
     Copy-RequiredFile (Join-Path $RepoRoot "src\tools\package\$Name") (Join-Path $StagingOutputDirectory "tools\$Name")
 }
 Copy-RequiredFile (Join-Path $RepoRoot "src\tools\setup\setup.ps1") (Join-Path $StagingOutputDirectory "tools\setup.ps1")

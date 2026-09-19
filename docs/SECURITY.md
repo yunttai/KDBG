@@ -1,11 +1,13 @@
 # Security
 
-KDBG is restricted to an owned, disposable Windows x64 research VM with a
-restorable snapshot. Run driver operations as Administrator only after both
-conditions are confirmed. KDbgProbe is the default reproducible demo target.
-A non-Probe physical transaction must use the exact 4 KiB PFN produced by the
-current PTView mapping for the selected process/VA; an unknown PFN is not a
-verified editor target.
+KDBG targets the local physical RAM of the Windows x64 `runtime_host` where
+`KDBG.exe` and `KDbgDriver.sys` run. `LocalHost` is the ordinary product
+profile; the separate `DisposableVm` profile exists for regression evidence.
+Driver installation and service operations require Administrator privileges.
+KDbgProbe is the default reproducible evidence target, not a restriction on
+manual `RawPfn` editing. A RawPfn transaction uses the PFN entered by the
+operator after the driver confirms that the exact 4 KiB page is in current
+system RAM; PTView/process provenance is optional context, not a prerequisite.
 
 The driver and UI write gates are independent and default locked. Physical
 writes require typed PFN confirmation, preflight conflict detection, dirty-run
@@ -20,8 +22,7 @@ not a second write-authorization flow.
 
 Do not use signing bypasses, vulnerable-driver loaders, injection, stealth,
 anti-cheat evasion, kernel-virtual writes, or credential collection. Preserve
-failure logs, restore the snapshot after a bugcheck or mismatch, and do not
-label the live gate PASS.
+failure logs and do not label an unexecuted or failed live gate PASS.
 
 ## Vulnerability intake
 

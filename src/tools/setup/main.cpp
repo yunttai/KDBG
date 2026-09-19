@@ -15,8 +15,10 @@ constexpr wchar_t kWindowClass[] = L"KDBGSetupWindow";
 constexpr wchar_t kWindowTitle[] = L"KDBG Setup 1.1.0";
 constexpr UINT kAppendOutput = WM_APP + 1U;
 constexpr UINT kOperationFinished = WM_APP + 2U;
+constexpr int kVmProfileId = 1000;
 constexpr int kConfirmVmId = 1001;
 constexpr int kConfirmSnapshotId = 1002;
+constexpr int kLocalHostProfileId = 1003;
 constexpr int kInstallId = 1101;
 constexpr int kRepairId = 1102;
 constexpr int kUpdateId = 1103;
@@ -26,6 +28,8 @@ constexpr int kOutputId = 1201;
 struct WindowState {
     HWND window{};
     HWND output{};
+    HWND vmProfile{};
+    HWND localHostProfile{};
     HWND confirmVm{};
     HWND confirmSnapshot{};
     std::array<HWND, 4> actionButtons{};
@@ -37,6 +41,7 @@ struct WindowState {
 struct WorkerInput {
     HWND window{};
     std::wstring action;
+    std::wstring targetProfile;
 };
 
 std::wstring FormatWin32Error(const DWORD code) {
@@ -214,7 +219,11 @@ DWORD WINAPI RunOperation(void* rawInput) {
     std::wstring command = QuoteArgument(powershell.wstring()) +
         L" -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File " +
         QuoteArgument(script.wstring()) + L" -Action " + input->action +
-        L" -ConfirmDedicatedVm -ConfirmSnapshot -HostProcessId " +
+        L" -TargetProfile " + input->targetProfile;
+    if (input->targetProfile == L"DisposableVm") {
+        command += L" -ConfirmDedicatedVm -ConfirmSnapshot";
+    }
+    command += L" -HostProcessId " +
         std::to_wstring(GetCurrentProcessId());
     std::vector<wchar_t> mutableCommand(command.begin(), command.end());
     mutableCommand.push_back(L'\0');
@@ -283,8 +292,12 @@ void AppendOutput(const WindowState& state, const std::wstring_view text) {
 }
 
 void SetControlsEnabled(const WindowState& state, const BOOL enabled) {
-    EnableWindow(state.confirmVm, enabled);
-    EnableWindow(state.confirmSnapshot, enabled);
+    EnableWindow(state.vmProfile, enabled);
+    EnableWindow(state.localHostProfile, enabled);
+    const bool vmSelected = SendMessageW(
+        state.vmProfile, BM_GETCHECK, 0, 0) == BST_CHECKED;
+    EnableWindow(state.confirmVm, enabled && vmSelected);
+    EnableWindow(state.confirmSnapshot, enabled && vmSelected);
     for (const HWND button : state.actionButtons) {
         EnableWindow(button, enabled);
     }
@@ -294,8 +307,11 @@ void StartOperation(WindowState& state, std::wstring action) {
     if (state.operationRunning) {
         return;
     }
-    if (SendMessageW(state.confirmVm, BM_GETCHECK, 0, 0) != BST_CHECKED ||
-        SendMessageW(state.confirmSnapshot, BM_GETCHECK, 0, 0) != BST_CHECKED) {
+    const bool vmSelected = SendMessageW(
+        state.vmProfile, BM_GETCHECK, 0, 0) == BST_CHECKED;
+    if (vmSelected &&
+        (SendMessageW(state.confirmVm, BM_GETCHECK, 0, 0) != BST_CHECKED ||
+         SendMessageW(state.confirmSnapshot, BM_GETCHECK, 0, 0) != BST_CHECKED)) {
         MessageBoxW(state.window,
                     L"Confirm both the dedicated disposable VM and its restorable snapshot before continuing.",
                     kWindowTitle, MB_OK | MB_ICONWARNING);
@@ -308,6 +324,7 @@ void StartOperation(WindowState& state, std::wstring action) {
     auto input = std::make_unique<WorkerInput>();
     input->window = state.window;
     input->action = state.pendingAction;
+    input->targetProfile = vmSelected ? L"DisposableVm" : L"LocalHost";
     state.worker = CreateThread(nullptr, 0, RunOperation, input.get(), 0, nullptr);
     if (state.worker == nullptr) {
         AppendOutput(state,
@@ -348,13 +365,22 @@ LRESULT CALLBACK WindowProcedure(const HWND window, const UINT message,
             L"STATIC",
             L"Installs or services the hash-verified package in Program Files. Driver catalog trust is checked by the packaged transactional lifecycle.",
             SS_LEFT, 18, 44, 730, 38, window, 0);
+        owned->vmProfile = CreateControl(
+            L"BUTTON", L"Disposable VM",
+            BS_AUTORADIOBUTTON | WS_GROUP | WS_TABSTOP,
+            18, 86, 180, 24, window, kVmProfileId);
+        owned->localHostProfile = CreateControl(
+            L"BUTTON", L"Local Windows host",
+            BS_AUTORADIOBUTTON | WS_TABSTOP,
+            210, 86, 220, 24, window, kLocalHostProfileId);
+        SendMessageW(owned->localHostProfile, BM_SETCHECK, BST_CHECKED, 0);
         owned->confirmVm = CreateControl(
             L"BUTTON", L"This is the dedicated disposable KDBG VM",
-            BS_AUTOCHECKBOX | WS_TABSTOP, 18, 86, 350, 24, window,
+            BS_AUTOCHECKBOX | WS_TABSTOP, 18, 114, 350, 24, window,
             kConfirmVmId);
         owned->confirmSnapshot = CreateControl(
             L"BUTTON", L"A restorable snapshot exists",
-            BS_AUTOCHECKBOX | WS_TABSTOP, 390, 86, 310, 24, window,
+            BS_AUTOCHECKBOX | WS_TABSTOP, 390, 114, 310, 24, window,
             kConfirmSnapshotId);
         const std::array<std::pair<const wchar_t*, int>, 4> actions{{
             {L"Install", kInstallId}, {L"Repair", kRepairId},
@@ -363,7 +389,7 @@ LRESULT CALLBACK WindowProcedure(const HWND window, const UINT message,
             owned->actionButtons[index] = CreateControl(
                 L"BUTTON", actions[index].first,
                 BS_PUSHBUTTON | WS_TABSTOP,
-                18 + static_cast<int>(index) * 182, 122, 164, 32,
+                18 + static_cast<int>(index) * 182, 150, 164, 32,
                 window, actions[index].second);
         }
         owned->output = CreateControl(
@@ -371,9 +397,10 @@ LRESULT CALLBACK WindowProcedure(const HWND window, const UINT message,
             L"Ready. Package integrity and driver catalog trust are checked before mutation. User-mode publisher signing is a separate release gate.\r\nAll output, rollback details, and errors remain visible here.\r\n",
             ES_MULTILINE | ES_AUTOVSCROLL | ES_READONLY | WS_VSCROLL |
                 WS_BORDER,
-            18, 170, 730, 330, window, kOutputId);
-        for (const HWND control : std::array<HWND, 8>{
-                 heading, scope, owned->confirmVm, owned->confirmSnapshot,
+            18, 198, 730, 302, window, kOutputId);
+        for (const HWND control : std::array<HWND, 10>{
+                 heading, scope, owned->vmProfile, owned->localHostProfile,
+                 owned->confirmVm, owned->confirmSnapshot,
                  owned->actionButtons[0], owned->actionButtons[1],
                  owned->actionButtons[2], owned->actionButtons[3]}) {
             SendMessageW(control, WM_SETFONT,
@@ -381,17 +408,18 @@ LRESULT CALLBACK WindowProcedure(const HWND window, const UINT message,
         }
         SendMessageW(owned->output, WM_SETFONT,
                      reinterpret_cast<WPARAM>(font), TRUE);
+        SetControlsEnabled(*owned, TRUE);
         state = owned.release();
 
         const std::wstring commandLine = GetCommandLineW();
         if (commandLine.find(L"/uninstall") != std::wstring::npos) {
             AppendOutput(*state,
-                L"Windows Apps & Features requested uninstall. Confirm the VM and snapshot, then choose Uninstall.\r\n");
-            SetFocus(state->confirmVm);
+                L"Windows Apps & Features requested uninstall. Confirm the selected target profile, then choose Uninstall.\r\n");
+            SetFocus(state->localHostProfile);
         } else if (commandLine.find(L"/repair") != std::wstring::npos) {
             AppendOutput(*state,
-                L"Windows Apps & Features requested repair. Confirm the VM and snapshot, then choose Repair.\r\n");
-            SetFocus(state->confirmVm);
+                L"Windows Apps & Features requested repair. Confirm the selected target profile, then choose Repair.\r\n");
+            SetFocus(state->localHostProfile);
         }
         return 0;
     }
@@ -400,6 +428,10 @@ LRESULT CALLBACK WindowProcedure(const HWND window, const UINT message,
             break;
         }
         switch (LOWORD(wParam)) {
+        case kVmProfileId:
+        case kLocalHostProfileId:
+            SetControlsEnabled(*state, TRUE);
+            return 0;
         case kInstallId: StartOperation(*state, L"Install"); return 0;
         case kRepairId: StartOperation(*state, L"Repair"); return 0;
         case kUpdateId: StartOperation(*state, L"Update"); return 0;

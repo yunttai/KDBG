@@ -8,7 +8,8 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 function(kdbg_live_warnings target)
     if(MSVC)
-        target_compile_options(${target} PRIVATE /W4 /WX /permissive-)
+        target_compile_options(${target} PRIVATE /W4 /WX /permissive- /EHsc)
+        target_compile_definitions(${target} PRIVATE NOMINMAX)
     else()
         target_compile_options(${target} PRIVATE
             -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion

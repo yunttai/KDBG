@@ -1,6 +1,7 @@
 #include "app/ui/MainWindow.h"
 
 #include "app/LocalDiagnostics.h"
+#include "app/ui/Localization.h"
 #include "core/memory/ProbeEvidencePattern.h"
 #include "core/windows/DriverService.h"
 
@@ -33,6 +34,13 @@
 #endif
 
 namespace kdbg {
+using ui::CurrentUiLanguage;
+using ui::KoreanFontAvailable;
+using ui::SetUiLanguage;
+using ui::UiLabel;
+using ui::UiLanguage;
+using ui::UiText;
+
 namespace {
 
 std::filesystem::path ExecutableDirectory() {
@@ -269,6 +277,125 @@ std::string HexValue(std::uint64_t value, int width = 0) {
     return stream.str();
 }
 
+std::string WideToUtf8(std::wstring_view value) {
+#ifdef _WIN32
+    if (value.empty()) return {};
+    const int required = WideCharToMultiByte(
+        CP_UTF8, WC_ERR_INVALID_CHARS,
+        value.data(), static_cast<int>(value.size()),
+        nullptr, 0, nullptr, nullptr);
+    if (required <= 0) return {};
+    std::string utf8(static_cast<std::size_t>(required), '\0');
+    if (WideCharToMultiByte(
+            CP_UTF8, WC_ERR_INVALID_CHARS,
+            value.data(), static_cast<int>(value.size()),
+            utf8.data(), required, nullptr, nullptr) != required) {
+        return {};
+    }
+    return utf8;
+#else
+    return std::string(value.begin(), value.end());
+#endif
+}
+
+std::string RuntimeHostMachineName() {
+#ifdef _WIN32
+    std::array<wchar_t, MAX_COMPUTERNAME_LENGTH + 1U> name{};
+    DWORD length = static_cast<DWORD>(name.size());
+    if (GetComputerNameW(name.data(), &length) != FALSE && length != 0U) {
+        return WideToUtf8(std::wstring_view{name.data(), length});
+    }
+#endif
+    return "unknown-machine";
+}
+
+std::string RuntimeHostBootId() {
+#ifdef _WIN32
+    struct BootEnvironmentInformation {
+        GUID boot_identifier{};
+        ULONG firmware_type{0};
+        ULONGLONG boot_flags{0};
+    };
+    using NtQuerySystemInformationFn = LONG(NTAPI*)(
+        ULONG, PVOID, ULONG, PULONG);
+    constexpr ULONG kSystemBootEnvironmentInformation = 90U;
+    const HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
+    const auto query = ntdll == nullptr
+        ? nullptr
+        : reinterpret_cast<NtQuerySystemInformationFn>(
+            GetProcAddress(ntdll, "NtQuerySystemInformation"));
+    BootEnvironmentInformation boot{};
+    if (query != nullptr &&
+        query(
+            kSystemBootEnvironmentInformation,
+            &boot,
+            static_cast<ULONG>(sizeof(boot)),
+            nullptr) >= 0) {
+        const auto& id = boot.boot_identifier;
+        char text[64]{};
+        std::snprintf(
+            text, sizeof(text),
+            "%08lX-%04hX-%04hX-%02hhX%02hhX-%02hhX%02hhX%02hhX%02hhX%02hhX%02hhX",
+            id.Data1, id.Data2, id.Data3,
+            id.Data4[0], id.Data4[1], id.Data4[2], id.Data4[3],
+            id.Data4[4], id.Data4[5], id.Data4[6], id.Data4[7]);
+        return text;
+    }
+
+    // Fallback for a platform that does not expose the boot environment
+    // information class: bind the app session to an estimated boot epoch.
+    FILETIME now{};
+    GetSystemTimeAsFileTime(&now);
+    ULARGE_INTEGER ticks{};
+    ticks.LowPart = now.dwLowDateTime;
+    ticks.HighPart = now.dwHighDateTime;
+    constexpr std::uint64_t kTicksPerMillisecond = 10000U;
+    const auto uptime_ticks = GetTickCount64() * kTicksPerMillisecond;
+    const auto boot_ticks = ticks.QuadPart >= uptime_ticks
+        ? ticks.QuadPart - uptime_ticks
+        : 0U;
+    // Round the estimate to a second so scheduling jitter between the two
+    // clock reads cannot create a different identity inside this process.
+    constexpr std::uint64_t kTicksPerSecond = 10000000U;
+    return HexValue(boot_ticks / kTicksPerSecond, 16);
+#else
+    return "unknown-boot";
+#endif
+}
+
+std::string RuntimeHostProcessSessionId() {
+#ifdef _WIN32
+    FILETIME creation{};
+    FILETIME exit{};
+    FILETIME kernel{};
+    FILETIME user{};
+    ULARGE_INTEGER creation_ticks{};
+    if (GetProcessTimes(
+            GetCurrentProcess(), &creation, &exit, &kernel, &user) != FALSE) {
+        creation_ticks.LowPart = creation.dwLowDateTime;
+        creation_ticks.HighPart = creation.dwHighDateTime;
+    }
+    return "pid-" + std::to_string(GetCurrentProcessId()) + "-" +
+        HexValue(creation_ticks.QuadPart, 16);
+#else
+    return "unknown-process-session";
+#endif
+}
+
+std::string PhysicalTargetProvenance(const PhysicalWriteTarget& target) {
+    switch (target.kind) {
+    case PhysicalTargetKind::RawPfn:
+        return "Manual PFN entry; complete page validated against driver RAM ranges";
+    case PhysicalTargetKind::ProbeFixture:
+        return "KDbgProbe metadata bound to the loaded PFN/PA and generation";
+    case PhysicalTargetKind::ProcessMapping:
+        return "PTView writable mapping; PID " +
+            std::to_string(target.process_id.value_or(0U)) + " / VA " +
+            HexValue(target.virtual_page_address.value_or(0U), 16);
+    }
+    return "Unknown physical target provenance";
+}
+
 std::string EvidenceTimestampUtc() {
     const auto now = std::chrono::system_clock::now();
     const std::time_t time = std::chrono::system_clock::to_time_t(now);
@@ -318,6 +445,9 @@ void LogResultDiagnostic(
 
 MainWindow::MainWindow() {
     kernel_explorer_.Attach(&backend_);
+    runtime_host_machine_ = RuntimeHostMachineName();
+    runtime_host_boot_id_ = RuntimeHostBootId();
+    runtime_host_process_session_id_ = RuntimeHostProcessSessionId();
     const auto directory = ExecutableDirectory();
     const auto driver = directory / "drivers" / "KDbgDriver.sys";
     const auto probe_driver = directory / "drivers" / "KDbgProbe.sys";
@@ -338,6 +468,7 @@ MainWindow::MainWindow() {
     RefreshProcesses();
     const auto opened = backend_.Open();
     if (opened) {
+        ++runtime_backend_session_generation_;
         LogDiagnostic(DiagnosticEvent::DriverConnectSucceeded);
         operation_status_ = "KDBG driver connected. Physical and privileged process reads are available.";
         if (probe_service_running_.value_or(false)) {
@@ -385,6 +516,10 @@ MainWindow::~MainWindow() {
 }
 
 void MainWindow::Draw() {
+    if (pending_language_.has_value()) {
+        static_cast<void>(SetUiLanguage(*pending_language_));
+        pending_language_.reset();
+    }
     process_memory_browser_.Poll();
     disassembly_.Poll();
     kernel_explorer_.Poll();
@@ -423,19 +558,23 @@ void MainWindow::DrawTabbedWorkspace() {
     if (ImGui::BeginTabBar("KDBG-MainTabs", ImGuiTabBarFlags_Reorderable)) {
         const auto driver_flags = select_driver_tab_
             ? ImGuiTabItemFlags_SetSelected : ImGuiTabItemFlags_None;
-        if (ImGui::BeginTabItem("Driver", nullptr, driver_flags)) {
+        if (ImGui::BeginTabItem(
+                UiLabel("Driver", "Driver").c_str(), nullptr, driver_flags)) {
             select_driver_tab_ = false;
             DrawDriverTab();
             ImGui::EndTabItem();
         }
         const auto physical_flags = select_physical_memory_tab_
             ? ImGuiTabItemFlags_SetSelected : ImGuiTabItemFlags_None;
-        if (ImGui::BeginTabItem("Physical Memory", nullptr, physical_flags)) {
+        if (ImGui::BeginTabItem(
+                UiLabel("Physical Memory", "Physical Memory").c_str(),
+                nullptr, physical_flags)) {
             select_physical_memory_tab_ = false;
             DrawPhysicalMemoryTab();
             ImGui::EndTabItem();
         }
-        if (ImGui::BeginTabItem("Memory Map")) {
+        if (ImGui::BeginTabItem(
+                UiLabel("Memory Map", "Memory Map").c_str())) {
             DrawMemoryMapTab();
             ImGui::EndTabItem();
         }
@@ -443,41 +582,51 @@ void MainWindow::DrawTabbedWorkspace() {
             ? ImGuiTabItemFlags_SetSelected
             : ImGuiTabItemFlags_None;
         if (ImGui::BeginTabItem(
-                "Process Memory", nullptr, process_memory_flags)) {
+                UiLabel("Process Memory", "Process Memory").c_str(), nullptr,
+                process_memory_flags)) {
             select_process_memory_tab_ = false;
             DrawProcessMemoryTab();
             ImGui::EndTabItem();
         }
-        if (ImGui::BeginTabItem("Process Scanner")) {
+        if (ImGui::BeginTabItem(
+                UiLabel("Process Scanner", "Process Scanner").c_str())) {
             DrawProcessScannerTab();
             ImGui::EndTabItem();
         }
-        if (ImGui::BeginTabItem("Pointer Scanner")) {
+        if (ImGui::BeginTabItem(
+                UiLabel("Pointer Scanner", "Pointer Scanner").c_str())) {
             DrawPointerScannerTab();
             ImGui::EndTabItem();
         }
-        if (ImGui::BeginTabItem("Disassembler")) {
+        if (ImGui::BeginTabItem(
+                UiLabel("Disassembler", "Disassembler").c_str())) {
             DrawDisassemblyTab();
             ImGui::EndTabItem();
         }
-        if (ImGui::BeginTabItem("Kernel Explorer")) {
+        if (ImGui::BeginTabItem(
+                UiLabel("Kernel Explorer", "Kernel Explorer").c_str())) {
             DrawKernelExplorerTab();
             ImGui::EndTabItem();
         }
-        if (ImGui::BeginTabItem("Snapshots")) {
+        if (ImGui::BeginTabItem(
+                UiLabel("Snapshots", "Snapshots").c_str())) {
             DrawSnapshotTab();
             ImGui::EndTabItem();
         }
         const auto page_table_flags = select_page_tables_tab_
             ? ImGuiTabItemFlags_SetSelected : ImGuiTabItemFlags_None;
-        if (ImGui::BeginTabItem("Page Tables", nullptr, page_table_flags)) {
+        if (ImGui::BeginTabItem(
+                UiLabel("Page Tables", "Page Tables").c_str(), nullptr,
+                page_table_flags)) {
             select_page_tables_tab_ = false;
             DrawTranslationTab();
             ImGui::EndTabItem();
         }
         const auto ownership_flags = select_pfn_ownership_tab_
             ? ImGuiTabItemFlags_SetSelected : ImGuiTabItemFlags_None;
-        if (ImGui::BeginTabItem("PFN Ownership", nullptr, ownership_flags)) {
+        if (ImGui::BeginTabItem(
+                UiLabel("PFN Ownership", "PFN Ownership").c_str(), nullptr,
+                ownership_flags)) {
             select_pfn_ownership_tab_ = false;
             DrawPfnOwnershipTab();
             ImGui::EndTabItem();
@@ -489,18 +638,25 @@ void MainWindow::DrawTabbedWorkspace() {
         ImGui::Separator();
         ImGui::TextWrapped("%s", operation_status_.c_str());
     }
-    const bool probe_target = CurrentPageIsProbeFixture() ||
-        (physical_session_.CanRollback() &&
-         CurrentPageMatchesProbeIdentity());
     const auto process_target = CurrentPageProcessTarget();
+    const auto target_kind = physical_session_.HasPage()
+        ? physical_session_.Target().kind
+        : PhysicalTargetKind::RawPfn;
+    const auto provenance = physical_session_.HasPage()
+        ? PhysicalTargetProvenance(physical_session_.Target())
+        : std::string{"No physical page loaded"};
+    const auto runtime_host_identity = RuntimeHostIdentityLabel();
     write_modal_.Draw(
         physical_session_,
-        probe_target,
-        process_target.has_value(),
+        target_kind,
+        CurrentPageIsVerifiedWriteTarget(),
+        runtime_host_identity,
+        provenance,
         process_target.has_value() ? process_target->pid : 0,
         process_target.has_value() ? process_target->virtual_address : 0,
         probe_info_.has_value() ? probe_info_->generation : 0,
-        probe_info_.has_value() ? probe_info_->crc32 : 0);
+        probe_info_.has_value() ? probe_info_->crc32 : 0,
+        backend_.Info().write_enabled);
     DrawAboutDialog();
     ImGui::End();
 }
@@ -579,24 +735,39 @@ void MainWindow::DrawDockedWorkspace() {
             const ImGuiID bottom = ImGui::DockBuilderSplitNode(
                 remaining, ImGuiDir_Down, 0.36F, nullptr, &remaining);
 
-            ImGui::DockBuilderDockWindow("KDBG Control Center", left);
-            ImGui::DockBuilderDockWindow("Driver", left);
-            ImGui::DockBuilderDockWindow("Physical Memory", remaining);
-            ImGui::DockBuilderDockWindow("Process Memory", remaining);
-            ImGui::DockBuilderDockWindow("Memory Map", right);
-            ImGui::DockBuilderDockWindow("Page Tables", right);
-            ImGui::DockBuilderDockWindow("PFN Ownership", right);
-            ImGui::DockBuilderDockWindow("Process Scanner", bottom);
-            ImGui::DockBuilderDockWindow("Pointer Scanner", bottom);
-            ImGui::DockBuilderDockWindow("Disassembler", bottom);
-            ImGui::DockBuilderDockWindow("Kernel Explorer", bottom);
-            ImGui::DockBuilderDockWindow("Snapshots", bottom);
+            ImGui::DockBuilderDockWindow(
+                UiLabel("KDBG Control Center", "KDBG Control Center").c_str(),
+                left);
+            ImGui::DockBuilderDockWindow(
+                UiLabel("Driver", "Driver").c_str(), left);
+            ImGui::DockBuilderDockWindow(
+                UiLabel("Physical Memory", "Physical Memory").c_str(),
+                remaining);
+            ImGui::DockBuilderDockWindow(
+                UiLabel("Process Memory", "Process Memory").c_str(),
+                remaining);
+            ImGui::DockBuilderDockWindow(
+                UiLabel("Memory Map", "Memory Map").c_str(), right);
+            ImGui::DockBuilderDockWindow(
+                UiLabel("Page Tables", "Page Tables").c_str(), right);
+            ImGui::DockBuilderDockWindow(
+                UiLabel("PFN Ownership", "PFN Ownership").c_str(), right);
+            ImGui::DockBuilderDockWindow(
+                UiLabel("Process Scanner", "Process Scanner").c_str(), bottom);
+            ImGui::DockBuilderDockWindow(
+                UiLabel("Pointer Scanner", "Pointer Scanner").c_str(), bottom);
+            ImGui::DockBuilderDockWindow(
+                UiLabel("Disassembler", "Disassembler").c_str(), bottom);
+            ImGui::DockBuilderDockWindow(
+                UiLabel("Kernel Explorer", "Kernel Explorer").c_str(), bottom);
+            ImGui::DockBuilderDockWindow(
+                UiLabel("Snapshots", "Snapshots").c_str(), bottom);
             ImGui::DockBuilderFinish(dockspace_id);
         }
     }
 
     const bool control_center_visible = ImGui::Begin(
-        "KDBG Control Center", nullptr,
+        UiLabel("KDBG Control Center", "KDBG Control Center").c_str(), nullptr,
         ImGuiWindowFlags_MenuBar | ImGuiWindowFlags_NoCollapse);
     HandleShortcuts();
     if (control_center_visible) {
@@ -614,18 +785,25 @@ void MainWindow::DrawDockedWorkspace() {
     // Popups must keep rendering even when the Control Center is an inactive
     // dock tab. Otherwise a write-review request made from Physical Memory is
     // never submitted and the safety confirmation appears to do nothing.
-    const bool probe_target = CurrentPageIsProbeFixture() ||
-        (physical_session_.CanRollback() &&
-         CurrentPageMatchesProbeIdentity());
     const auto process_target = CurrentPageProcessTarget();
+    const auto target_kind = physical_session_.HasPage()
+        ? physical_session_.Target().kind
+        : PhysicalTargetKind::RawPfn;
+    const auto provenance = physical_session_.HasPage()
+        ? PhysicalTargetProvenance(physical_session_.Target())
+        : std::string{"No physical page loaded"};
+    const auto runtime_host_identity = RuntimeHostIdentityLabel();
     write_modal_.Draw(
         physical_session_,
-        probe_target,
-        process_target.has_value(),
+        target_kind,
+        CurrentPageIsVerifiedWriteTarget(),
+        runtime_host_identity,
+        provenance,
         process_target.has_value() ? process_target->pid : 0,
         process_target.has_value() ? process_target->virtual_address : 0,
         probe_info_.has_value() ? probe_info_->generation : 0,
-        probe_info_.has_value() ? probe_info_->crc32 : 0);
+        probe_info_.has_value() ? probe_info_->crc32 : 0,
+        backend_.Info().write_enabled);
     DrawAboutDialog();
 
     auto draw_pane = [](const char* name, bool* request_focus, auto&& draw) {
@@ -636,22 +814,31 @@ void MainWindow::DrawDockedWorkspace() {
         if (ImGui::Begin(name, nullptr, ImGuiWindowFlags_NoCollapse)) draw();
         ImGui::End();
     };
-    draw_pane("Driver", &select_driver_tab_, [&] { DrawDriverTab(); });
-    draw_pane("Physical Memory", &select_physical_memory_tab_,
+    draw_pane(UiLabel("Driver", "Driver").c_str(),
+        &select_driver_tab_, [&] { DrawDriverTab(); });
+    draw_pane(UiLabel("Physical Memory", "Physical Memory").c_str(),
+        &select_physical_memory_tab_,
         [&] { DrawPhysicalMemoryTab(); });
-    draw_pane("Memory Map", nullptr, [&] { DrawMemoryMapTab(); });
-    draw_pane("Process Memory", &select_process_memory_tab_,
+    draw_pane(UiLabel("Memory Map", "Memory Map").c_str(), nullptr,
+        [&] { DrawMemoryMapTab(); });
+    draw_pane(UiLabel("Process Memory", "Process Memory").c_str(),
+        &select_process_memory_tab_,
         [&] { DrawProcessMemoryTab(); });
-    draw_pane("Process Scanner", nullptr,
+    draw_pane(UiLabel("Process Scanner", "Process Scanner").c_str(), nullptr,
         [&] { DrawProcessScannerTab(); });
-    draw_pane("Pointer Scanner", nullptr,
+    draw_pane(UiLabel("Pointer Scanner", "Pointer Scanner").c_str(), nullptr,
         [&] { DrawPointerScannerTab(); });
-    draw_pane("Disassembler", nullptr, [&] { DrawDisassemblyTab(); });
-    draw_pane("Kernel Explorer", nullptr, [&] { DrawKernelExplorerTab(); });
-    draw_pane("Snapshots", nullptr, [&] { DrawSnapshotTab(); });
-    draw_pane("Page Tables", &select_page_tables_tab_,
+    draw_pane(UiLabel("Disassembler", "Disassembler").c_str(), nullptr,
+        [&] { DrawDisassemblyTab(); });
+    draw_pane(UiLabel("Kernel Explorer", "Kernel Explorer").c_str(), nullptr,
+        [&] { DrawKernelExplorerTab(); });
+    draw_pane(UiLabel("Snapshots", "Snapshots").c_str(), nullptr,
+        [&] { DrawSnapshotTab(); });
+    draw_pane(UiLabel("Page Tables", "Page Tables").c_str(),
+        &select_page_tables_tab_,
         [&] { DrawTranslationTab(); });
-    draw_pane("PFN Ownership", &select_pfn_ownership_tab_,
+    draw_pane(UiLabel("PFN Ownership", "PFN Ownership").c_str(),
+        &select_pfn_ownership_tab_,
         [&] { DrawPfnOwnershipTab(); });
 #else
     DrawTabbedWorkspace();
@@ -660,54 +847,81 @@ void MainWindow::DrawDockedWorkspace() {
 
 void MainWindow::DrawMenuBar() {
     if (!ImGui::BeginMenuBar()) return;
-    if (ImGui::BeginMenu("Session")) {
-        if (ImGui::MenuItem("Refresh process list", "Ctrl+R")) RefreshProcesses();
-        if (ImGui::MenuItem("Disconnect process", nullptr, false, process_memory_ != nullptr)) {
+    if (ImGui::BeginMenu(UiText("Session"))) {
+        if (ImGui::MenuItem(UiText("Refresh process list"), "Ctrl+R")) {
+            RefreshProcesses();
+        }
+        if (ImGui::MenuItem(UiText("Disconnect process"), nullptr, false,
+                process_memory_ != nullptr)) {
             DisconnectProcess();
         }
         const bool can_reconnect =
-            !process_usage_.Busy() && !physical_session_.CanRollback();
+            !process_usage_.Busy() && !physical_session_.CanRollback() &&
+            !physical_session_.RecoveryObservationRequired();
         if (ImGui::MenuItem(
-                "Reconnect KDBG driver", nullptr, false, can_reconnect)) {
+                UiText("Reconnect KDBG driver"), nullptr, false,
+                can_reconnect)) {
             ConnectBackend();
         }
         ImGui::EndMenu();
     }
-    if (ImGui::BeginMenu("Navigate")) {
-        if (ImGui::MenuItem("Driver", "Ctrl+D")) {
+    if (ImGui::BeginMenu(UiText("Navigate"))) {
+        if (ImGui::MenuItem(UiText("Driver"), "Ctrl+D")) {
             select_driver_tab_ = true;
         }
-        if (ImGui::MenuItem("Physical Memory", "Ctrl+P")) {
+        if (ImGui::MenuItem(UiText("Physical Memory"), "Ctrl+P")) {
             select_physical_memory_tab_ = true;
         }
-        if (ImGui::MenuItem("Page Tables", "Ctrl+T")) {
+        if (ImGui::MenuItem(UiText("Page Tables"), "Ctrl+T")) {
             select_page_tables_tab_ = true;
         }
-        if (ImGui::MenuItem("PFN Ownership", "Ctrl+Shift+P")) {
+        if (ImGui::MenuItem(UiText("PFN Ownership"), "Ctrl+Shift+P")) {
             select_pfn_ownership_tab_ = true;
         }
         ImGui::EndMenu();
     }
-    if (ImGui::BeginMenu("Safety")) {
+    if (ImGui::BeginMenu(UiText("Safety"))) {
         const bool process_io_busy = ProcessIoBusy();
         const bool process_armed = process_memory_ != nullptr &&
             !process_io_busy &&
             (process_memory_->WritesArmed() ||
              process_scanner_.WriteAuthorizationActive());
-        if (ImGui::MenuItem("Lock all writes", "Ctrl+L", false,
+        if (ImGui::MenuItem(UiText("Lock all writes"), "Ctrl+L", false,
                 cached_backend_info_.write_enabled || process_armed ||
                     process_io_busy)) {
             LockAllWrites();
         }
         ImGui::EndMenu();
     }
-    if (ImGui::BeginMenu("Help")) {
-        if (ImGui::MenuItem("About KDBG", "F1")) {
+    const auto language_menu = UiLabel("Language / 언어", "Language");
+    if (ImGui::BeginMenu(language_menu.c_str())) {
+        const auto language = CurrentUiLanguage();
+        if (ImGui::MenuItem(
+                "English", nullptr, language == UiLanguage::English)) {
+            pending_language_ = UiLanguage::English;
+        }
+        const bool korean_available = KoreanFontAvailable();
+        const char* korean_label = korean_available ? "한국어" : "Korean";
+        if (ImGui::MenuItem(korean_label, nullptr,
+                language == UiLanguage::Korean, korean_available)) {
+            pending_language_ = UiLanguage::Korean;
+        }
+        if (!korean_available &&
+            ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+            ImGui::SetTooltip("%s", UiText(
+                "Korean UI requires an installed Korean-capable font."));
+        }
+        ImGui::EndMenu();
+    }
+    if (ImGui::BeginMenu(UiText("Help"))) {
+        if (ImGui::MenuItem(UiText("About KDBG"), "F1")) {
             about_open_requested_ = true;
         }
         ImGui::EndMenu();
     }
-    ImGui::TextDisabled("KDBG %s | authorized disposable VM research", kVersion);
+    ImGui::TextDisabled(
+        UiText("KDBG %s | local physical RAM — this Windows instance"),
+        kVersion);
     ImGui::EndMenuBar();
 }
 
@@ -752,22 +966,23 @@ void MainWindow::DrawStatusBar() {
         CurrentPageIsProbeFixture());
     ImGui::TextColored(
         RuntimeReadinessColor(readiness),
-        "Runtime: %s", RuntimeReadinessName(readiness));
+        UiText("Runtime: %s"), RuntimeReadinessName(readiness));
     ImGui::SameLine();
-    ImGui::Text("| Service: %s | ABI: %u | Physical gate: %s",
+    ImGui::Text(UiText("| Service: %s | ABI: %u | Physical gate: %s"),
         ServiceStateName(driver_service_running_),
         info.abi_version,
         info.write_enabled ? "ARMED" : "LOCKED");
     ImGui::SameLine();
-    ImGui::Text("| Probe: %s / %s",
+    ImGui::Text(UiText("| Probe: %s / %s"),
         ServiceStateName(probe_service_running_),
         probe_.IsOpen() ? "DEVICE OPEN" : "DEVICE CLOSED");
     if (process_memory_ != nullptr && ProcessIoBusy()) {
         ImGui::SameLine();
-        ImGui::TextUnformatted("| Process I/O: BUSY");
+        ImGui::TextUnformatted(UiText("| Process I/O: BUSY"));
     } else if (process_memory_ != nullptr) {
         ImGui::SameLine();
-        ImGui::Text("| Process PID %u (%s) | gate: %s | freeze auth: %s",
+        ImGui::Text(UiText(
+            "| Process PID %u (%s) | gate: %s | freeze auth: %s"),
             process_memory_->ProcessId(),
             AttachedProcessName().c_str(),
             process_memory_->WritesArmed() ? "ARMED" : "LOCKED",
@@ -777,21 +992,22 @@ void MainWindow::DrawStatusBar() {
     if (info.write_enabled) {
         ImGui::TextColored(
             ImVec4(1.0F, 0.25F, 0.20F, 1.0F),
-            "WARNING: the driver reports its physical write gate ARMED. Ctrl+L locks all writes.");
+            UiText("WARNING: the driver reports its physical write gate ARMED. Ctrl+L locks all writes."));
     }
     const bool writes_available = info.connected && !LifecycleBusy();
     const char* write_reason = LifecycleBusy()
-        ? "driver lifecycle operation in progress"
+        ? UiText("driver lifecycle operation in progress")
         : (!info.connected
-            ? "the KDBG device is disconnected"
+            ? UiText("the KDBG device is disconnected")
             : (info.write_enabled
-                ? "one-shot driver gate is ARMED"
-                : "verified target and typed PFN confirmation are required"));
+                ? UiText("one-shot driver gate is ARMED")
+                : UiText(
+                    "range-validated target and typed PFN confirmation are required")));
     ImGui::TextColored(
         writes_available
             ? ImVec4(0.75F, 0.85F, 0.30F, 1.0F)
             : ImVec4(0.90F, 0.50F, 0.30F, 1.0F),
-        "Physical write path: %s | %s",
+        UiText("Physical write path: %s | %s"),
         writes_available ? "READY FOR TARGET REVIEW" : "BLOCKED",
         write_reason);
 }
@@ -1246,10 +1462,10 @@ std::string JsonEscape(std::string_view value) {
 }
 
 void MainWindow::DrawProcessSelector() {
-    ImGui::TextUnformatted("Target Process");
+    ImGui::TextUnformatted(UiText("Target Process"));
     ImGui::SetNextItemWidth(-1.0F);
     ImGui::InputTextWithHint(
-        "##process-filter", "filter name or PID",
+        "##process-filter", UiText("filter name or PID"),
         process_filter_.data(), process_filter_.size());
 
     const std::string filter = Lower(process_filter_.data());
@@ -1270,7 +1486,7 @@ void MainWindow::DrawProcessSelector() {
     const char* preview = selected_process_index_ >= 0 &&
         selected_process_index_ < static_cast<int>(processes_.size())
         ? processes_[static_cast<std::size_t>(selected_process_index_)].name.c_str()
-        : "Select a process";
+        : UiText("Select a process");
     if (ImGui::BeginCombo("##process-list", preview)) {
         ImGuiListClipper clipper;
         clipper.Begin(static_cast<int>(std::min<std::size_t>(
@@ -1297,29 +1513,30 @@ void MainWindow::DrawProcessSelector() {
         ImGui::EndCombo();
     }
     if (selected_process_index_ < 0) ImGui::BeginDisabled();
-    if (ImGui::Button("Attach")) AttachSelectedProcess();
+    if (ImGui::Button(UiText("Attach"))) AttachSelectedProcess();
     if (selected_process_index_ < 0) ImGui::EndDisabled();
     ImGui::SameLine();
     if (process_memory_ == nullptr) ImGui::BeginDisabled();
-    if (ImGui::Button("Detach")) DisconnectProcess();
+    if (ImGui::Button(UiText("Detach"))) DisconnectProcess();
     if (process_memory_ == nullptr) ImGui::EndDisabled();
     ImGui::SameLine();
-    if (ImGui::Button("Refresh")) RefreshProcesses();
+    if (ImGui::Button(UiText("Refresh"))) RefreshProcesses();
     if (selected_process_index_ >= 0 &&
         selected_process_index_ < static_cast<int>(processes_.size())) {
         const auto& selected =
             processes_[static_cast<std::size_t>(selected_process_index_)];
-        ImGui::TextWrapped("Selected PID %u | %s | %s",
+        ImGui::TextWrapped(UiText("Selected PID %u | %s | %s"),
             selected.pid,
             selected.is_64_bit ? "x64" : "x86",
-            selected.path.empty() ? "path unavailable" : selected.path.c_str());
+            selected.path.empty() ? UiText("path unavailable")
+                                  : selected.path.c_str());
     }
 }
 
 void MainWindow::DrawDriverTab() {
     if (ProcessIoBusy()) {
-        ImGui::TextDisabled(
-            "Process I/O is BUSY; driver lifecycle controls are paused to keep the UI non-blocking.");
+        ImGui::TextDisabled(UiText(
+            "Process I/O is BUSY; driver lifecycle controls are paused to keep the UI non-blocking."));
         return;
     }
     const auto info = backend_.Info();
@@ -1343,36 +1560,36 @@ void MainWindow::DrawDriverTab() {
     const bool kernel_read_busy = kernel_explorer_.ReadBusy();
     const bool process_io_busy = ProcessIoBusy();
 
-    ImGui::TextWrapped(
+    ImGui::TextWrapped(UiText(
         "The KDBG and KDBGProbe drivers are installed through the Windows "
         "Service Control Manager. Windows test-signing mode and Administrator "
         "rights are required. The probe owns a deterministic contiguous page "
-        "for safe read/edit/write/read-back demonstrations.");
+        "for safe read/edit/write/read-back demonstrations."));
 
     ImGui::TextColored(
         RuntimeReadinessColor(readiness),
-        "Runtime readiness: %s", RuntimeReadinessName(readiness));
+        UiText("Runtime readiness: %s"), RuntimeReadinessName(readiness));
     switch (readiness) {
     case RuntimeReadiness::SourceOnly:
-        ImGui::TextWrapped(
+        ImGui::TextWrapped(UiText(
             "Source-only: no packaged KDbgDriver.sys or KDbgProbe.sys was found. "
-            "Live memory and all write controls remain unavailable.");
+            "Live memory and all write controls remain unavailable."));
         break;
     case RuntimeReadiness::Disconnected:
-        ImGui::TextWrapped(
-            "Runtime components exist, but the KDBG device is not connected and ABI-validated.");
+        ImGui::TextWrapped(UiText(
+            "Runtime components exist, but the KDBG device is not connected and ABI-validated."));
         break;
     case RuntimeReadiness::Mock:
-        ImGui::TextWrapped(
-            "Mock backend: operations are simulated; this is not live-driver evidence.");
+        ImGui::TextWrapped(UiText(
+            "Mock backend: operations are simulated; this is not live-driver evidence."));
         break;
     case RuntimeReadiness::LiveConnected:
-        ImGui::TextWrapped(
-            "Live driver connected. Load and verify the KDbgProbe page for the default demonstration target.");
+        ImGui::TextWrapped(UiText(
+            "Live driver connected. Load and verify the KDbgProbe page for the default demonstration target."));
         break;
     case RuntimeReadiness::LiveVerified:
-        ImGui::TextWrapped(
-            "Live driver and deterministic KDbgProbe page are verified for this session.");
+        ImGui::TextWrapped(UiText(
+            "Live driver and deterministic KDbgProbe page are verified for this session."));
         break;
     }
 
@@ -1380,29 +1597,32 @@ void MainWindow::DrawDriverTab() {
             "runtime-readiness", 3,
             ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
                 ImGuiTableFlags_SizingStretchProp)) {
-        ImGui::TableSetupColumn("Prerequisite");
-        ImGui::TableSetupColumn("State");
-        ImGui::TableSetupColumn("Effect");
+        ImGui::TableSetupColumn(
+            UiLabel("Prerequisite", "Prerequisite").c_str());
+        ImGui::TableSetupColumn(UiLabel("State", "State").c_str());
+        ImGui::TableSetupColumn(UiLabel("Effect", "Effect").c_str());
         ImGui::TableHeadersRow();
         const auto row = [](const char* prerequisite, bool ready,
                             const char* ready_text, const char* blocked_text) {
             ImGui::TableNextRow();
             ImGui::TableNextColumn();
-            ImGui::TextUnformatted(prerequisite);
+            ImGui::TextUnformatted(UiText(prerequisite));
             ImGui::TableNextColumn();
             ImGui::TextColored(
                 ready ? ImVec4(0.35F, 0.90F, 0.45F, 1.0F)
                       : ImVec4(1.0F, 0.55F, 0.25F, 1.0F),
                 "%s", ready ? "READY" : "BLOCKED");
             ImGui::TableNextColumn();
-            ImGui::TextWrapped("%s", ready ? ready_text : blocked_text);
+            ImGui::TextWrapped("%s", UiText(
+                ready ? ready_text : blocked_text));
         };
         row("KDbgDriver.sys", driver_file_ready,
             "Packaged binary found.", "Select an existing packaged .sys file.");
         row("KDbgProbe.sys", probe_file_ready,
             "Packaged probe found.", "Default live demonstration is unavailable.");
         row("KDBG service", driver_service_running_.value_or(false),
-            "Service reports running.", "Install/start it as Administrator in the lab VM.");
+            "Service reports running.",
+            "Install/start it as Administrator on this Windows instance.");
         row("Probe service", probe_service_running_.value_or(false),
             "Service reports running.", "Start it to expose the deterministic probe page.");
         row("KDBG device / ABI", info.connected && !info.is_mock,
@@ -1410,7 +1630,7 @@ void MainWindow::DrawDriverTab() {
             "Physical and privileged driver operations are unavailable.");
         row("Probe fixture", CurrentPageIsProbeFixture(),
             "Verified 4096-byte page is loaded.",
-            "Physical demo writes remain blocked until verified.");
+            "Probe evidence is unavailable; RawPfn writes remain governed by independent RAM-range and session validation.");
         row("Physical gate", info.connected && !info.write_enabled,
             "Connected driver reports LOCKED.",
             info.connected
@@ -1424,18 +1644,20 @@ void MainWindow::DrawDriverTab() {
     const bool can_bring_online = !lifecycle_busy && driver_file_ready &&
         probe_file_ready && driver_service_running_.has_value() &&
         probe_service_running_.has_value() && !physical_session_.IsDirty() &&
-        !physical_session_.CanRollback() && !process_usage_.Busy() &&
+        !physical_session_.CanRollback() &&
+        !physical_session_.RecoveryObservationRequired() &&
+        !process_usage_.Busy() &&
         !kernel_read_busy && !process_io_busy && !info.write_enabled &&
         process_gate_locked &&
         readiness != RuntimeReadiness::LiveVerified;
     if (!can_bring_online) ImGui::BeginDisabled();
-    if (ImGui::Button("Bring Lab Online & Load Probe")) {
+    if (ImGui::Button(UiText("Bring Lab Online & Load Probe"))) {
         StartLifecycleAction(LifecycleAction::BringLabOnline);
     }
     if (!can_bring_online) ImGui::EndDisabled();
     if (lifecycle_busy) {
         ImGui::SameLine();
-        if (ImGui::Button("Request Lifecycle Cancel")) {
+        if (ImGui::Button(UiText("Request Lifecycle Cancel"))) {
             if (deferred_action_ == DeferredAction::StartLifecycle) {
                 deferred_action_ = DeferredAction::None;
                 deferred_lifecycle_ = LifecycleAction::None;
@@ -1452,22 +1674,24 @@ void MainWindow::DrawDriverTab() {
             : (step == 0 ? 0.05F : 0.75F);
         ImGui::ProgressBar(fraction, ImVec2(-1.0F, 0.0F));
         if (deferred_action_ == DeferredAction::StartLifecycle) {
-            ImGui::TextWrapped(
+            ImGui::TextWrapped(UiText(
                 "Waiting without blocking the render thread for active process, "
-                "PFN, or kernel-read workers to stop before the SCM operation starts.");
+                "PFN, or kernel-read workers to stop before the SCM operation starts."));
         } else {
-            ImGui::TextWrapped(
+            ImGui::TextWrapped(UiText(
                 "Lifecycle operation is running off the render thread. "
                 "Cancellation takes effect between Service Control Manager stages; "
-                "the active SCM call is allowed to finish.");
+                "the active SCM call is allowed to finish."));
         }
     }
 
-    ImGui::Text("KDBG service: %s | Probe service: %s",
+    ImGui::Text(UiText("KDBG service: %s | Probe service: %s"),
         ServiceStateName(driver_service_running_),
         ServiceStateName(probe_service_running_));
     if (lifecycle_busy) ImGui::BeginDisabled();
-    if (ImGui::Button("Refresh Service Status")) RefreshServiceStates();
+    if (ImGui::Button(UiText("Refresh Service Status"))) {
+        RefreshServiceStates();
+    }
     if (lifecycle_busy) ImGui::EndDisabled();
     if (!service_status_.empty()) {
         ImGui::SameLine();
@@ -1475,21 +1699,23 @@ void MainWindow::DrawDriverTab() {
     }
 
     ImGui::SetNextItemWidth(-1.0F);
-    ImGui::InputText("KDBG driver SYS", driver_path_.data(), driver_path_.size());
+    ImGui::InputText(UiText("KDBG driver SYS"), driver_path_.data(),
+        driver_path_.size());
     const bool can_install_driver =
         !lifecycle_busy && !kernel_read_busy && !process_io_busy &&
+        !physical_session_.RecoveryObservationRequired() &&
         driver_file_ready;
     if (!can_install_driver) ImGui::BeginDisabled();
-    if (ImGui::Button("Install/Update KDBG")) {
+    if (ImGui::Button(UiText("Install/Update KDBG"))) {
         StartLifecycleAction(LifecycleAction::InstallDriver);
     }
     if (!can_install_driver) ImGui::EndDisabled();
     ImGui::SameLine();
     const bool can_start_driver = !lifecycle_busy && !kernel_read_busy &&
-        !process_io_busy &&
+        !process_io_busy && !physical_session_.RecoveryObservationRequired() &&
         !driver_service_running_.value_or(false);
     if (!can_start_driver) ImGui::BeginDisabled();
-    if (ImGui::Button("Start KDBG")) {
+    if (ImGui::Button(UiText("Start KDBG"))) {
         StartLifecycleAction(LifecycleAction::StartDriver);
     }
     if (!can_start_driver) ImGui::EndDisabled();
@@ -1497,68 +1723,76 @@ void MainWindow::DrawDriverTab() {
     const bool can_stop_driver = !lifecycle_busy && !kernel_read_busy &&
         !process_io_busy &&
         driver_service_running_.value_or(false) &&
-        !process_usage_.Busy() && !physical_session_.CanRollback();
+        !process_usage_.Busy() && !physical_session_.CanRollback() &&
+        !physical_session_.RecoveryObservationRequired();
     if (!can_stop_driver) ImGui::BeginDisabled();
-    if (ImGui::Button("Stop KDBG")) {
+    if (ImGui::Button(UiText("Stop KDBG"))) {
         StartLifecycleAction(LifecycleAction::StopDriver);
     }
     if (!can_stop_driver) ImGui::EndDisabled();
     ImGui::SameLine();
     const bool can_remove_driver =
         !lifecycle_busy && !kernel_read_busy && !process_io_busy &&
+        !physical_session_.RecoveryObservationRequired() &&
         !driver_service_running_.value_or(true) &&
         !backend_.Info().connected && !process_usage_.Busy();
     if (!can_remove_driver) ImGui::BeginDisabled();
-    if (ImGui::Button("Remove KDBG")) {
+    if (ImGui::Button(UiText("Remove KDBG"))) {
         StartLifecycleAction(LifecycleAction::RemoveDriver);
     }
     if (!can_remove_driver) ImGui::EndDisabled();
     ImGui::SameLine();
     const bool can_connect_device =
         !lifecycle_busy && !kernel_read_busy && !process_io_busy &&
-        !process_usage_.Busy() && !physical_session_.CanRollback();
+        !process_usage_.Busy() && !physical_session_.CanRollback() &&
+        !physical_session_.RecoveryObservationRequired();
     if (!can_connect_device) ImGui::BeginDisabled();
-    if (ImGui::Button("Connect Device")) ConnectBackend();
+    if (ImGui::Button(UiText("Connect Device"))) ConnectBackend();
     if (!can_connect_device) ImGui::EndDisabled();
     if (process_usage_.Busy()) {
-        ImGui::TextDisabled(
-            "Cancel the active PFN ownership query before stopping, removing, or reconnecting KDBG.");
+        ImGui::TextDisabled(UiText(
+            "Cancel the active PFN ownership query before stopping, removing, or reconnecting KDBG."));
     }
     if (kernel_read_busy) {
-        ImGui::TextDisabled(
-            "Cancel or finish the active Kernel Explorer read before changing the KDBG service or device connection.");
+        ImGui::TextDisabled(UiText(
+            "Cancel or finish the active Kernel Explorer read before changing the KDBG service or device connection."));
     }
     if (process_io_busy) {
-        ImGui::TextDisabled(
-            "Process I/O is BUSY; cancel or finish it before changing the KDBG service or device connection.");
+        ImGui::TextDisabled(UiText(
+            "Process I/O is BUSY; cancel or finish it before changing the KDBG service or device connection."));
     }
     if (!driver_file_ready) {
-        ImGui::TextDisabled("Install is disabled until KDbgDriver.sys points to an existing file.");
+        ImGui::TextDisabled(UiText(
+            "Install is disabled until KDbgDriver.sys points to an existing file."));
     }
 
     ImGui::Separator();
     ImGui::SetNextItemWidth(-1.0F);
-    ImGui::InputText("Probe driver SYS", probe_driver_path_.data(), probe_driver_path_.size());
-    const bool can_install_probe = !lifecycle_busy && probe_file_ready;
+    ImGui::InputText(UiText("Probe driver SYS"), probe_driver_path_.data(),
+        probe_driver_path_.size());
+    const bool can_install_probe = !lifecycle_busy && probe_file_ready &&
+        !physical_session_.RecoveryObservationRequired();
     if (!can_install_probe) ImGui::BeginDisabled();
-    if (ImGui::Button("Install/Update Probe")) {
+    if (ImGui::Button(UiText("Install/Update Probe"))) {
         StartLifecycleAction(LifecycleAction::InstallProbe);
     }
     if (!can_install_probe) ImGui::EndDisabled();
     ImGui::SameLine();
     const bool can_start_probe = !lifecycle_busy &&
+        !physical_session_.RecoveryObservationRequired() &&
         !probe_service_running_.value_or(false);
     if (!can_start_probe) ImGui::BeginDisabled();
-    if (ImGui::Button("Start Probe")) {
+    if (ImGui::Button(UiText("Start Probe"))) {
         StartLifecycleAction(LifecycleAction::StartProbe);
     }
     if (!can_start_probe) ImGui::EndDisabled();
     ImGui::SameLine();
     const bool can_stop_probe = !lifecycle_busy &&
         probe_service_running_.value_or(false) &&
-        !physical_session_.CanRollback();
+        !physical_session_.CanRollback() &&
+        !physical_session_.RecoveryObservationRequired();
     if (!can_stop_probe) ImGui::BeginDisabled();
-    if (ImGui::Button("Stop Probe")) {
+    if (ImGui::Button(UiText("Stop Probe"))) {
         probe_.Close();
         probe_fixture_loaded_ = false;
         ClearProbeEvidence();
@@ -1570,29 +1804,35 @@ void MainWindow::DrawDriverTab() {
     ImGui::SameLine();
     const bool can_remove_probe =
         !lifecycle_busy && !probe_service_running_.value_or(true) &&
-        !probe_.IsOpen();
+        !probe_.IsOpen() &&
+        !physical_session_.RecoveryObservationRequired();
     if (!can_remove_probe) ImGui::BeginDisabled();
-    if (ImGui::Button("Remove Probe")) {
+    if (ImGui::Button(UiText("Remove Probe"))) {
         StartLifecycleAction(LifecycleAction::RemoveProbe);
     }
     if (!can_remove_probe) ImGui::EndDisabled();
     if (!probe_file_ready) {
-        ImGui::TextDisabled("Install is disabled until KDbgProbe.sys points to an existing file.");
+        ImGui::TextDisabled(UiText(
+            "Install is disabled until KDbgProbe.sys points to an existing file."));
     }
 
     ImGui::Separator();
     const bool can_query_fixture = backend_.Info().connected &&
         !lifecycle_busy &&
         probe_service_running_.value_or(false) &&
-        !physical_session_.IsDirty() && !physical_session_.CanRollback();
+        !physical_session_.IsDirty() && !physical_session_.CanRollback() &&
+        !physical_session_.RecoveryObservationRequired();
     if (!can_query_fixture) ImGui::BeginDisabled();
-    if (ImGui::Button("Query & Load Probe Fixture")) QueryAndLoadProbeFixture();
+    if (ImGui::Button(UiText("Query & Load Probe Fixture"))) {
+        QueryAndLoadProbeFixture();
+    }
     if (!can_query_fixture) ImGui::EndDisabled();
     ImGui::SameLine();
     const bool can_reset_probe = probe_.IsOpen() && probe_info_.has_value() &&
-        !physical_session_.IsDirty() && !physical_session_.CanRollback();
+        !physical_session_.IsDirty() && !physical_session_.CanRollback() &&
+        !physical_session_.RecoveryObservationRequired();
     if (!can_reset_probe) ImGui::BeginDisabled();
-    if (ImGui::Button("Reset Probe Pattern")) {
+    if (ImGui::Button(UiText("Reset Probe Pattern"))) {
         const auto result = probe_.Reset();
         LogResultDiagnostic(
             result,
@@ -1621,20 +1861,24 @@ void MainWindow::DrawDriverTab() {
             static_cast<unsigned long long>(probe_info_->physical_address),
             static_cast<unsigned long long>(probe_info_->pfn));
     } else {
-        ImGui::TextDisabled("Probe fixture has not been queried and verified in this session.");
+        ImGui::TextDisabled(UiText(
+            "Probe fixture has not been queried and verified in this session."));
     }
     if (!probe_status_.empty()) ImGui::TextWrapped("%s", probe_status_.c_str());
-    if (physical_session_.IsDirty()) {
-        ImGui::TextDisabled(
-            "Query & Load is disabled until staged physical edits are reverted or applied.");
+    if (physical_session_.RecoveryObservationRequired()) {
+        ImGui::TextDisabled(UiText(
+            "Query & Load is disabled until the uncertain physical transaction is observed."));
+    } else if (physical_session_.IsDirty()) {
+        ImGui::TextDisabled(UiText(
+            "Query & Load is disabled until staged physical edits are reverted or applied."));
     } else if (physical_session_.CanRollback()) {
-        ImGui::TextDisabled(
-            "Query & Load is disabled while a verified rollback is pending; use Independent Reload (keep rollback).");
+        ImGui::TextDisabled(UiText(
+            "Query & Load is disabled while a verified rollback is pending; use Independent Reload (keep rollback)."));
     }
 
     if (backend_.Info().connected) {
         ImGui::Separator();
-        if (ImGui::Button("Query Driver Counters")) {
+        if (ImGui::Button(UiText("Query Driver Counters"))) {
             const auto session = backend_.QuerySessionStatus();
             if (!session) {
                 operation_status_ = session.GetError().message;
@@ -1658,60 +1902,111 @@ void MainWindow::DrawDriverTab() {
 
 void MainWindow::DrawPhysicalMemoryTab() {
     if (ProcessIoBusy()) {
-        ImGui::TextDisabled(
-            "Process I/O is BUSY; physical-memory controls are paused to keep the UI non-blocking.");
+        ImGui::TextDisabled(UiText(
+            "Process I/O is BUSY; physical-memory controls are paused to keep the UI non-blocking."));
         return;
     }
     if (!backend_.Info().connected) {
-        ImGui::TextDisabled("Connect the KDBG driver to access physical memory.");
+        ImGui::TextDisabled(UiText(
+            "Connect the KDBG driver to access physical memory."));
     }
     if (!backend_.Info().connected) ImGui::BeginDisabled();
     if (ImGui::BeginTable(
             "physical-layout", 3,
             ImGuiTableFlags_Resizable | ImGuiTableFlags_BordersInnerV)) {
         ImGui::TableSetupColumn("PFN", ImGuiTableColumnFlags_WidthFixed, 270.0F);
-        ImGui::TableSetupColumn("Hex Editor", ImGuiTableColumnFlags_WidthStretch);
-        ImGui::TableSetupColumn("Inspector", ImGuiTableColumnFlags_WidthFixed, 360.0F);
+        ImGui::TableSetupColumn(
+            UiLabel("Hex Editor", "Hex Editor").c_str(),
+            ImGuiTableColumnFlags_WidthStretch);
+        ImGui::TableSetupColumn(
+            UiLabel("Inspector", "Inspector").c_str(),
+            ImGuiTableColumnFlags_WidthFixed, 360.0F);
         ImGui::TableNextColumn();
-        const bool rollback_pending = physical_session_.CanRollback();
-        if (rollback_pending) ImGui::BeginDisabled();
+        const bool transaction_pending = physical_session_.CanRollback() ||
+            physical_session_.RecoveryObservationRequired();
+        if (transaction_pending) ImGui::BeginDisabled();
         const bool loaded_from_navigator =
             pfn_input_.Draw(backend_, physical_session_);
-        if (rollback_pending) ImGui::EndDisabled();
+        if (transaction_pending) ImGui::EndDisabled();
         if (loaded_from_navigator) {
+            BindCurrentPageToRuntimeHost();
             probe_fixture_loaded_ = false;
             ClearProbeEvidence();
             last_physical_diffs_.clear();
             last_physical_readback_.clear();
             last_physical_readback_status_.clear();
         }
-        if (rollback_pending) {
-            ImGui::TextDisabled(
-                "PFN navigation is locked until the pending rollback is completed.");
+        if (physical_session_.RecoveryObservationRequired()) {
+            ImGui::TextDisabled(UiText(
+                "PFN navigation is locked until the uncertain transaction is observed."));
+        } else if (physical_session_.CanRollback()) {
+            ImGui::TextDisabled(UiText(
+                "PFN navigation is locked until the pending rollback is completed."));
         }
         ImGui::TableNextColumn();
         hex_editor_.Draw(physical_session_);
         ImGui::TableNextColumn();
         if (physical_session_.HasPage()) {
+            const auto target_kind = physical_session_.Target().kind;
             const bool probe_target = CurrentPageIsProbeFixture();
             const auto process_target = CurrentPageProcessTarget();
-            ImGui::Text("Memory space: PHYSICAL / 4 KiB page");
-            ImGui::Text("State: %s", PageStateName(physical_session_.State()));
-            ImGui::Text("Revision: %llu", static_cast<unsigned long long>(physical_session_.Revision()));
-            ImGui::Text("Dirty bytes: %llu", static_cast<unsigned long long>(physical_session_.DirtyCount()));
-            ImGui::Text("One-shot write unlock: %s", physical_session_.WriteUnlocked() ? "YES" : "NO");
-            ImGui::Text("Conflicts: %llu | Read-back mismatches: %llu",
+            ImGui::TextColored(
+                ImVec4(0.45F, 0.75F, 1.0F, 1.0F),
+                "%s", UiText(
+                    "Local physical RAM — this Windows instance"));
+            const auto runtime_host_identity = RuntimeHostIdentityLabel();
+            ImGui::TextWrapped(
+                UiText("Runtime host identity: %s"),
+                runtime_host_identity.c_str());
+            ImGui::TextColored(
+                CurrentPageBoundToRuntimeHost()
+                    ? ImVec4(0.35F, 0.90F, 0.45F, 1.0F)
+                    : ImVec4(1.0F, 0.35F, 0.30F, 1.0F),
+                "%s", CurrentPageBoundToRuntimeHost()
+                    ? UiText("Target binding: CURRENT RUNTIME SESSION")
+                    : UiText("Target binding: STALE / RELOAD REQUIRED"));
+            ImGui::TextUnformatted(UiText(
+                "Memory space: PHYSICAL / 4 KiB page"));
+            ImGui::Text(UiText("State: %s"),
+                PageStateName(physical_session_.State()));
+            ImGui::Text(UiText("Revision: %llu"),
+                static_cast<unsigned long long>(physical_session_.Revision()));
+            ImGui::Text(UiText("Dirty bytes: %llu"),
+                static_cast<unsigned long long>(physical_session_.DirtyCount()));
+            ImGui::Text(UiText("One-shot write unlock: %s"),
+                physical_session_.WriteUnlocked() ? "YES" : "NO");
+            ImGui::Text(UiText("Driver physical gate: %s"),
+                backend_.Info().write_enabled ? "ARMED" : "LOCKED");
+            ImGui::Text(UiText(
+                "Conflicts: %llu | Read-back mismatches: %llu"),
                 static_cast<unsigned long long>(physical_session_.LastConflictOffsets().size()),
                 static_cast<unsigned long long>(physical_session_.LastMismatchOffsets().size()));
-            ImGui::Text("PA range: 0x%016llX - 0x%016llX | size: 4096 bytes",
+            ImGui::Text(UiText(
+                "PA range: 0x%016llX - 0x%016llX | size: 4096 bytes"),
                 static_cast<unsigned long long>(physical_session_.Address().physical_address),
                 static_cast<unsigned long long>(
                     physical_session_.Address().physical_address + 0xFFFU));
-            if (probe_target) {
+            ImGui::Text(
+                UiText("Baseline CRC32: %08X | Current CRC32: %08X"),
+                PageCrc32(physical_session_.Baseline()),
+                PageCrc32(physical_session_.Working()));
+            const auto provenance =
+                PhysicalTargetProvenance(physical_session_.Target());
+            ImGui::TextWrapped(UiText("Provenance: %s"), provenance.c_str());
+            if (target_kind == PhysicalTargetKind::RawPfn) {
+                ImGui::TextColored(
+                    ImVec4(0.95F, 0.75F, 0.25F, 1.0F),
+                    "%s", UiText(
+                        "WRITE TARGET: RANGE-VALIDATED RAW PFN"));
+                ImGui::TextWrapped("%s", UiText(
+                    "The complete 4096-byte page is inside a driver-reported RAM range; ownership is not implied."));
+            } else if (target_kind == PhysicalTargetKind::ProbeFixture &&
+                       probe_target) {
                 ImGui::TextColored(
                     ImVec4(0.35F, 0.90F, 0.45F, 1.0F),
                     "WRITE TARGET: VERIFIED KDbgProbe FIXTURE");
-            } else if (process_target.has_value()) {
+            } else if (target_kind == PhysicalTargetKind::ProcessMapping &&
+                       process_target.has_value()) {
                 ImGui::TextColored(
                     ImVec4(0.35F, 0.90F, 0.45F, 1.0F),
                     "WRITE TARGET: VERIFIED PROCESS PID %u / VA 0x%016llX",
@@ -1721,17 +2016,17 @@ void MainWindow::DrawPhysicalMemoryTab() {
             } else {
                 ImGui::TextColored(
                     ImVec4(1.0F, 0.35F, 0.30F, 1.0F),
-                    "READ-ONLY: translate a writable 4 KiB user VA in PTView "
-                    "and open its final PA to verify this PFN");
+                    "%s", UiText(
+                        "BLOCKED: probe/process provenance must be revalidated before write review"));
             }
-            if (ImGui::Button("Copy PFN")) {
+            if (ImGui::Button(UiText("Copy PFN"))) {
                 char value[32]{};
                 std::snprintf(value, sizeof(value), "0x%llX",
                     static_cast<unsigned long long>(physical_session_.Address().pfn));
                 ImGui::SetClipboardText(value);
             }
             ImGui::SameLine();
-            if (ImGui::Button("Copy PA")) {
+            if (ImGui::Button(UiText("Copy PA"))) {
                 char value[32]{};
                 std::snprintf(value, sizeof(value), "0x%016llX",
                     static_cast<unsigned long long>(
@@ -1739,11 +2034,11 @@ void MainWindow::DrawPhysicalMemoryTab() {
                 ImGui::SetClipboardText(value);
             }
             ImGui::SameLine();
-            if (ImGui::Button("View PFN Ownership")) {
+            if (ImGui::Button(UiText("View PFN Ownership"))) {
                 select_pfn_ownership_tab_ = true;
             }
         } else {
-            ImGui::TextDisabled("No physical page loaded.");
+            ImGui::TextDisabled(UiText("No physical page loaded."));
         }
         ImGui::EndTable();
     }
@@ -1755,8 +2050,8 @@ void MainWindow::DrawPhysicalMemoryTab() {
 
 void MainWindow::DrawMemoryMapTab() {
     if (ProcessIoBusy() || LifecycleBusy()) {
-        ImGui::TextDisabled(
-            "Process I/O is BUSY; the memory map is paused to keep the UI non-blocking.");
+        ImGui::TextDisabled(UiText(
+            "Process I/O is BUSY; the memory map is paused to keep the UI non-blocking."));
         return;
     }
     memory_map_.Draw();
@@ -1775,8 +2070,8 @@ void MainWindow::DrawProcessMemoryTab() {
         process_scanner_.Busy() || pointer_scanner_.Busy() || snapshots_.Busy();
     if ((competing_io || LifecycleBusy()) &&
         !process_memory_browser_.Busy()) {
-        ImGui::TextDisabled(
-            "Another process I/O worker is BUSY; this pane is paused to keep the UI non-blocking.");
+        ImGui::TextDisabled(UiText(
+            "Another process I/O worker is BUSY; this pane is paused to keep the UI non-blocking."));
         return;
     }
     process_memory_browser_.Draw();
@@ -1785,8 +2080,8 @@ void MainWindow::DrawProcessScannerTab() {
     const bool competing_io = process_memory_browser_.Busy() ||
         disassembly_.Busy() || pointer_scanner_.Busy() || snapshots_.Busy();
     if ((competing_io || LifecycleBusy()) && !process_scanner_.Busy()) {
-        ImGui::TextDisabled(
-            "Another process I/O worker is BUSY; scanning controls are paused to keep the UI non-blocking.");
+        ImGui::TextDisabled(UiText(
+            "Another process I/O worker is BUSY; scanning controls are paused to keep the UI non-blocking."));
         return;
     }
     process_scanner_.Draw();
@@ -1795,8 +2090,8 @@ void MainWindow::DrawPointerScannerTab() {
     const bool competing_io = process_memory_browser_.Busy() ||
         disassembly_.Busy() || process_scanner_.Busy() || snapshots_.Busy();
     if ((competing_io || LifecycleBusy()) && !pointer_scanner_.Busy()) {
-        ImGui::TextDisabled(
-            "Another process I/O worker is BUSY; pointer scanning is paused to keep the UI non-blocking.");
+        ImGui::TextDisabled(UiText(
+            "Another process I/O worker is BUSY; pointer scanning is paused to keep the UI non-blocking."));
         return;
     }
     pointer_scanner_.Draw();
@@ -1805,8 +2100,8 @@ void MainWindow::DrawDisassemblyTab() {
     const bool competing_io = process_memory_browser_.Busy() ||
         process_scanner_.Busy() || pointer_scanner_.Busy() || snapshots_.Busy();
     if ((competing_io || LifecycleBusy()) && !disassembly_.Busy()) {
-        ImGui::TextDisabled(
-            "Another process I/O worker is BUSY; disassembly is paused to keep the UI non-blocking.");
+        ImGui::TextDisabled(UiText(
+            "Another process I/O worker is BUSY; disassembly is paused to keep the UI non-blocking."));
         return;
     }
     disassembly_.Draw();
@@ -1814,8 +2109,8 @@ void MainWindow::DrawDisassemblyTab() {
 void MainWindow::DrawKernelExplorerTab() {
     if (ProcessIoBusy() ||
         (LifecycleBusy() && !kernel_explorer_.Busy())) {
-        ImGui::TextDisabled(
-            "Process I/O is BUSY; Kernel Explorer is paused to keep the UI non-blocking.");
+        ImGui::TextDisabled(UiText(
+            "Process I/O is BUSY; Kernel Explorer is paused to keep the UI non-blocking."));
         return;
     }
     kernel_explorer_.Draw();
@@ -1842,8 +2137,8 @@ void MainWindow::DrawSnapshotTab() {
         disassembly_.Busy() || process_scanner_.Busy() ||
         pointer_scanner_.Busy();
     if ((competing_io || LifecycleBusy()) && !snapshots_.Busy()) {
-        ImGui::TextDisabled(
-            "Another process I/O worker is BUSY; snapshots are paused to keep the UI non-blocking.");
+        ImGui::TextDisabled(UiText(
+            "Another process I/O worker is BUSY; snapshots are paused to keep the UI non-blocking."));
         return;
     }
     snapshots_.Draw();
@@ -1851,8 +2146,8 @@ void MainWindow::DrawSnapshotTab() {
 
 void MainWindow::DrawTranslationTab() {
     if (ProcessIoBusy() || LifecycleBusy()) {
-        ImGui::TextDisabled(
-            "Process I/O is BUSY; page-table operations are paused to keep the UI non-blocking.");
+        ImGui::TextDisabled(UiText(
+            "Process I/O is BUSY; page-table operations are paused to keep the UI non-blocking."));
         return;
     }
     page_table_.Draw(
@@ -1860,6 +2155,11 @@ void MainWindow::DrawTranslationTab() {
         process_memory_ == nullptr ? 0 : process_memory_->ProcessId());
     if (const auto page = page_table_.ConsumePhysicalNavigation();
         page.has_value()) {
+        if (physical_session_.RecoveryObservationRequired()) {
+            operation_status_ =
+                "Observe the uncertain physical transaction before opening a translated PFN.";
+            return;
+        }
         if (physical_session_.IsDirty()) {
             operation_status_ =
                 "Revert or apply staged physical edits before opening a translated PFN.";
@@ -1870,8 +2170,21 @@ void MainWindow::DrawTranslationTab() {
                 "Complete the pending verified rollback before opening a translated PFN.";
             return;
         }
-        const auto loaded = physical_session_.Load(backend_, *page);
+        const auto process_target =
+            page_table_.CurrentProcessTarget(*page);
+        const auto loaded = process_target.has_value()
+            ? physical_session_.Load(
+                backend_,
+                PhysicalWriteTarget::ProcessMapping(
+                    *page,
+                    process_target->pid,
+                    process_target->virtual_address &
+                        ~static_cast<std::uint64_t>(
+                            kPhysicalPageSize - 1U)))
+            : physical_session_.Load(
+                backend_, PhysicalWriteTarget::RawPfn(*page));
         if (loaded) {
+            BindCurrentPageToRuntimeHost();
             probe_fixture_loaded_ = false;
             ClearProbeEvidence();
             last_physical_diffs_.clear();
@@ -1879,8 +2192,6 @@ void MainWindow::DrawTranslationTab() {
             last_physical_readback_status_.clear();
             pfn_input_.SetPfn(page->pfn);
             select_physical_memory_tab_ = true;
-            const auto process_target =
-                page_table_.CurrentProcessTarget(*page);
             operation_status_ = process_target.has_value()
                 ? "Translated writable 4 KiB user page opened in Physical Memory. "
                   "Unlock and Apply will revalidate PID, CR3, VA, and PFN before writing."
@@ -1897,8 +2208,8 @@ void MainWindow::DrawPfnOwnershipTab() {
     if (analysis_evidence_future_.valid()) return;
     if (ProcessIoBusy() ||
         (LifecycleBusy() && !process_usage_.Busy())) {
-        ImGui::TextDisabled(
-            "Process I/O is BUSY; PFN ownership is paused to keep the UI non-blocking.");
+        ImGui::TextDisabled(UiText(
+            "Process I/O is BUSY; PFN ownership is paused to keep the UI non-blocking."));
         return;
     }
     std::optional<PfnAddress> page;
@@ -1946,10 +2257,14 @@ void MainWindow::DrawPfnOwnershipTab() {
 
 void MainWindow::DrawDiffPanel() {
     if (!physical_session_.HasPage()) return;
-    if (!ImGui::CollapsingHeader("Dirty Diff", ImGuiTreeNodeFlags_DefaultOpen)) return;
+    if (!ImGui::CollapsingHeader(
+            UiLabel("Dirty Diff", "Dirty Diff").c_str(),
+            ImGuiTreeNodeFlags_DefaultOpen)) {
+        return;
+    }
     const auto diffs = physical_session_.ByteDiffs();
     if (diffs.empty()) {
-        ImGui::TextDisabled("No local changes.");
+        ImGui::TextDisabled(UiText("No local changes."));
         return;
     }
     if (ImGui::BeginTable(
@@ -1957,10 +2272,11 @@ void MainWindow::DrawDiffPanel() {
             ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
                 ImGuiTableFlags_ScrollY,
             ImVec2(0.0F, 150.0F))) {
-        ImGui::TableSetupColumn("Offset");
-        ImGui::TableSetupColumn("Physical Address");
-        ImGui::TableSetupColumn("Before");
-        ImGui::TableSetupColumn("After");
+        ImGui::TableSetupColumn(UiLabel("Offset", "Offset").c_str());
+        ImGui::TableSetupColumn(
+            UiLabel("Physical Address", "Physical Address").c_str());
+        ImGui::TableSetupColumn(UiLabel("Before", "Before").c_str());
+        ImGui::TableSetupColumn(UiLabel("After", "After").c_str());
         ImGui::TableHeadersRow();
         ImGuiListClipper clipper;
         clipper.Begin(static_cast<int>(std::min<std::size_t>(
@@ -1983,7 +2299,8 @@ void MainWindow::DrawDiffPanel() {
 void MainWindow::DrawPhysicalReadback() {
     if (last_physical_readback_status_.empty()) return;
     if (!ImGui::CollapsingHeader(
-            "Last Physical Operation Read-back",
+            UiLabel("Last Physical Operation Read-back",
+                "Last Physical Operation Read-back").c_str(),
             ImGuiTreeNodeFlags_DefaultOpen)) {
         return;
     }
@@ -1997,12 +2314,13 @@ void MainWindow::DrawPhysicalReadback() {
             ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
                 ImGuiTableFlags_ScrollY,
             ImVec2(0.0F, 180.0F))) {
-        ImGui::TableSetupColumn("Offset");
-        ImGui::TableSetupColumn("Physical Address");
-        ImGui::TableSetupColumn("Baseline");
-        ImGui::TableSetupColumn("Submitted");
-        ImGui::TableSetupColumn("Read-back");
-        ImGui::TableSetupColumn("Result");
+        ImGui::TableSetupColumn(UiLabel("Offset", "Offset").c_str());
+        ImGui::TableSetupColumn(
+            UiLabel("Physical Address", "Physical Address").c_str());
+        ImGui::TableSetupColumn(UiLabel("Baseline", "Baseline").c_str());
+        ImGui::TableSetupColumn(UiLabel("Submitted", "Submitted").c_str());
+        ImGui::TableSetupColumn(UiLabel("Read-back", "Read-back").c_str());
+        ImGui::TableSetupColumn(UiLabel("Result", "Result").c_str());
         ImGui::TableHeadersRow();
         ImGuiListClipper clipper;
         clipper.Begin(static_cast<int>(std::min<std::size_t>(
@@ -2038,6 +2356,8 @@ void MainWindow::DrawPhysicalReadback() {
 
 void MainWindow::DrawPhysicalActions() {
     if (!physical_session_.HasPage()) return;
+    const bool recovery_observation_required =
+        physical_session_.RecoveryObservationRequired();
     const bool probe_target = CurrentPageIsProbeFixture() ||
         (physical_session_.CanRollback() &&
          CurrentPageMatchesProbeIdentity());
@@ -2045,9 +2365,16 @@ void MainWindow::DrawPhysicalActions() {
     const bool ownership_idle = !process_usage_.Busy();
     const bool lifecycle_idle = !LifecycleBusy();
     const bool can_stage_probe_pattern = probe_target &&
-        !physical_session_.CanRollback() && ownership_idle && lifecycle_idle;
+        !physical_session_.CanRollback() &&
+        !recovery_observation_required && ownership_idle && lifecycle_idle;
+    if (recovery_observation_required) {
+        ImGui::TextColored(
+            ImVec4(1.0F, 0.55F, 0.20F, 1.0F),
+            "%s", UiText(
+                "RECOVERY OBSERVATION REQUIRED: the previous transaction result is uncertain. Reload the exact 4096-byte page before any further write."));
+    }
     if (!can_stage_probe_pattern) ImGui::BeginDisabled();
-    if (ImGui::Button("Stage Evidence Probe Pattern")) {
+    if (ImGui::Button(UiText("Stage Evidence Probe Pattern"))) {
         physical_session_.RevertAll();
         const auto& baseline = physical_session_.Baseline();
         bool staged = true;
@@ -2077,7 +2404,7 @@ void MainWindow::DrawPhysicalActions() {
     if (!can_stage_probe_pattern) ImGui::EndDisabled();
     ImGui::SameLine();
     if (!physical_session_.CanUndo()) ImGui::BeginDisabled();
-    if (ImGui::Button("Undo Byte Edit")) {
+    if (ImGui::Button(UiText("Undo Byte Edit"))) {
         SetOperationResult(
             physical_session_.Undo(),
             "Last physical-page byte edit undone.");
@@ -2085,7 +2412,7 @@ void MainWindow::DrawPhysicalActions() {
     if (!physical_session_.CanUndo()) ImGui::EndDisabled();
     ImGui::SameLine();
     if (!physical_session_.CanRedo()) ImGui::BeginDisabled();
-    if (ImGui::Button("Redo Byte Edit")) {
+    if (ImGui::Button(UiText("Redo Byte Edit"))) {
         SetOperationResult(
             physical_session_.Redo(),
             "Last physical-page byte edit redone.");
@@ -2093,16 +2420,17 @@ void MainWindow::DrawPhysicalActions() {
     if (!physical_session_.CanRedo()) ImGui::EndDisabled();
     ImGui::SameLine();
     if (!physical_session_.IsDirty()) ImGui::BeginDisabled();
-    if (ImGui::Button("Revert Local Edits")) {
+    if (ImGui::Button(UiText("Revert Local Edits"))) {
         physical_session_.RevertAll();
         operation_status_ = "Local physical-page edits reverted.";
     }
     if (!physical_session_.IsDirty()) ImGui::EndDisabled();
     ImGui::SameLine();
     const bool can_unlock = physical_session_.IsDirty() &&
-        write_target && ownership_idle && lifecycle_idle;
+        !recovery_observation_required && write_target && ownership_idle &&
+        lifecycle_idle;
     if (!can_unlock) ImGui::BeginDisabled();
-    if (ImGui::Button("Unlock One Physical Apply")) {
+    if (ImGui::Button(UiText("Unlock One Physical Apply"))) {
         if (ValidateCurrentPhysicalTargetForWrite()) {
             write_modal_.Open(WriteReviewPurpose::Apply);
         }
@@ -2110,10 +2438,12 @@ void MainWindow::DrawPhysicalActions() {
     if (!can_unlock) ImGui::EndDisabled();
     ImGui::SameLine();
     const bool can_apply = physical_session_.IsDirty() &&
+        !recovery_observation_required &&
         physical_session_.WriteUnlocked() && write_target && ownership_idle &&
         lifecycle_idle;
     if (!can_apply) ImGui::BeginDisabled();
-    if (ImGui::Button("Apply Changed Runs & Verify")) {
+    if (ImGui::Button(UiText(
+            "Apply Exact 4 KiB Transaction & Verify"))) {
         if (!ValidateCurrentPhysicalTargetForWrite()) {
             write_modal_.ClearUnlocked();
         } else {
@@ -2141,7 +2471,9 @@ void MainWindow::DrawPhysicalActions() {
             } else {
                 SetOperationResult(
                     result,
-                    "Physical dirty runs were applied; the current core read-back comparison passed and the write gate is LOCKED.");
+                    "Local dirty diff (" +
+                        std::to_string(submitted_diffs.size()) +
+                        " byte(s)) was reviewed; the driver completed one exact 4096-byte compare/write/read-back transaction and the write gate is LOCKED.");
             }
             if (result && probe_target && probe_.IsOpen()) {
                 const auto refreshed = probe_.Query();
@@ -2201,20 +2533,30 @@ void MainWindow::DrawPhysicalActions() {
         (!physical_session_.CanRollback() && page_evidence.Complete() &&
          !probe_evidence_after_rollback_.has_value()));
     if (needs_probe_metadata_retry) {
-        if (ImGui::Button("Retry Probe Metadata (keep evidence)")) {
+        if (ImGui::Button(UiText(
+                "Retry Probe Metadata (keep evidence)"))) {
             RetryProbeMetadataForEvidence();
         }
     }
-    if (physical_session_.CanRollback()) {
-        const bool can_reload = !physical_session_.IsDirty() &&
+    if (physical_session_.CanRollback() || recovery_observation_required) {
+        const bool can_reload =
+            (!physical_session_.IsDirty() || recovery_observation_required) &&
             write_target && ownership_idle && lifecycle_idle &&
-            (!probe_target || probe_evidence_after_write_.has_value());
+            (recovery_observation_required || !probe_target ||
+             probe_evidence_after_write_.has_value());
         if (!can_reload) ImGui::BeginDisabled();
-        if (ImGui::Button("Independent Reload (keep rollback)")) {
+        const char* reload_label = recovery_observation_required
+            ? UiText("Observe Live Page (recover rollback state)")
+            : UiText("Independent Reload (keep rollback)");
+        if (ImGui::Button(reload_label)) {
             probe_evidence_after_reload_.reset();
             probe_evidence_after_rollback_.reset();
             last_physical_evidence_path_.clear();
-            if (ValidateCurrentPhysicalTargetForWrite()) {
+            const bool observing_recovery = recovery_observation_required;
+            const bool target_valid = observing_recovery
+                ? ValidateCurrentPhysicalTargetForObservation()
+                : ValidateCurrentPhysicalTargetForWrite();
+            if (target_valid) {
                 const auto result =
                     physical_session_.ReloadPreservingRollback(backend_);
                 if (!result) {
@@ -2224,10 +2566,20 @@ void MainWindow::DrawPhysicalActions() {
                         *physical_session_.Evidence().independent_reload;
                     last_physical_readback_.assign(
                         reloaded.begin(), reloaded.end());
-                    last_physical_readback_status_ =
-                        "Independent reload captured: 4096 bytes; full-page match; rollback snapshot preserved.";
-                    operation_status_ =
-                        "Independent 4096-byte reload matched the verified process-page write; rollback remains available.";
+                    if (observing_recovery) {
+                        last_physical_readback_status_ =
+                            "Recovery observation captured: exact 4096-byte live page read.";
+                        operation_status_ = physical_session_.CanRollback()
+                            ? "Recovery observation completed; the observed page differs from the saved baseline and conditional rollback is now available."
+                            : "Recovery observation completed; the observed page already matches the saved baseline, so no rollback is required.";
+                    } else {
+                        last_physical_readback_status_ =
+                            "Independent reload captured: 4096 bytes; full-page match; rollback snapshot preserved.";
+                        operation_status_ = physical_session_.Target().kind ==
+                                PhysicalTargetKind::RawPfn
+                            ? "Independent 4096-byte reload matched the RawPfn write; rollback remains available."
+                            : "Independent 4096-byte reload matched the verified process-page write; rollback remains available.";
+                    }
                 } else {
                     const auto refreshed = probe_.Query();
                     if (!refreshed) {
@@ -2262,10 +2614,19 @@ void MainWindow::DrawPhysicalActions() {
                                 "CRITICAL: independent physical reload and Probe metadata disagree; evidence remains blocked and rollback remains available.";
                         } else {
                             probe_evidence_after_reload_ = refreshed.Value();
-                            last_physical_readback_status_ =
-                                "Independent reload evidence captured: 4096 bytes; full-page and Probe CRC match; rollback snapshot preserved.";
-                            operation_status_ =
-                                "Independent 4096-byte reload matched the verified write and Probe CRC; rollback snapshot remains available.";
+                            if (observing_recovery) {
+                                last_physical_readback_status_ =
+                                    "Recovery observation captured: 4096 bytes; Probe identity and CRC match the observed page.";
+                                operation_status_ =
+                                    physical_session_.CanRollback()
+                                    ? "Recovery observation completed; conditional rollback is now available."
+                                    : "Recovery observation completed; the page already matches the saved baseline and no rollback is required.";
+                            } else {
+                                last_physical_readback_status_ =
+                                    "Independent reload evidence captured: 4096 bytes; full-page and Probe CRC match; rollback snapshot preserved.";
+                                operation_status_ =
+                                    "Independent 4096-byte reload matched the verified write and Probe CRC; rollback snapshot remains available.";
+                            }
                         }
                     }
                 }
@@ -2286,7 +2647,7 @@ void MainWindow::DrawPhysicalActions() {
                 lifecycle_idle &&
                 (!independent_reload_required || independent_reload_complete);
             if (!can_unlock_rollback) ImGui::BeginDisabled();
-            if (ImGui::Button("Unlock Rollback")) {
+            if (ImGui::Button(UiText("Unlock Rollback"))) {
                 if (ValidateCurrentPhysicalTargetForRollback()) {
                     write_modal_.Open(WriteReviewPurpose::Rollback);
                 }
@@ -2296,7 +2657,7 @@ void MainWindow::DrawPhysicalActions() {
             const bool can_rollback = write_target && ownership_idle &&
                 lifecycle_idle;
             if (!can_rollback) ImGui::BeginDisabled();
-            if (ImGui::Button("Rollback Previous Apply")) {
+            if (ImGui::Button(UiText("Rollback Previous Apply"))) {
                 if (!ValidateCurrentPhysicalTargetForRollback()) {
                     write_modal_.ClearUnlocked();
                 } else {
@@ -2391,61 +2752,64 @@ void MainWindow::DrawPhysicalActions() {
         probe_evidence_after_reload_.has_value() &&
         probe_evidence_after_rollback_.has_value() && probe_target;
     if (!can_export_evidence) ImGui::BeginDisabled();
-    if (ImGui::Button("Export Live Evidence Bundle")) {
+    if (ImGui::Button(UiText("Export Live Evidence Bundle"))) {
         ExportPhysicalEvidence();
     }
     if (!can_export_evidence) ImGui::EndDisabled();
     if (!last_physical_evidence_path_.empty()) {
         ImGui::SameLine();
-        if (ImGui::Button("Copy Evidence Path")) {
+        if (ImGui::Button(UiText("Copy Evidence Path"))) {
             ImGui::SetClipboardText(last_physical_evidence_path_.c_str());
         }
-        ImGui::TextWrapped(
-            "Evidence bundle: %s", last_physical_evidence_path_.c_str());
+        ImGui::TextWrapped(UiText("Evidence bundle: %s"),
+            last_physical_evidence_path_.c_str());
     }
     if (!write_target) {
-        ImGui::TextDisabled(
-            "Physical apply/rollback is disabled until a probe fixture or a "
-            "writable 4 KiB PTView process mapping verifies this PFN.");
+        ImGui::TextDisabled(UiText(
+            "Physical apply/rollback is disabled until the RawPfn RAM range or "
+            "the selected Probe/ProcessMapping provenance is revalidated."));
     } else if (!ownership_idle) {
-        ImGui::TextDisabled(
-            "Physical apply/rollback is disabled while PFN ownership analysis uses the backend.");
+        ImGui::TextDisabled(UiText(
+            "Physical apply/rollback is disabled while PFN ownership analysis uses the backend."));
     } else if (!lifecycle_idle) {
-        ImGui::TextDisabled(
-            "Physical apply/rollback is disabled while a driver lifecycle operation is running.");
+        ImGui::TextDisabled(UiText(
+            "Physical apply/rollback is disabled while a driver lifecycle operation is running."));
     } else if (physical_session_.CanRollback() &&
                physical_session_.LastApplyVerified() &&
                !physical_session_.Evidence().independent_reload.has_value()) {
-        ImGui::TextDisabled(
-            "Run Independent Reload (keep rollback) before unlocking rollback.");
+        ImGui::TextDisabled(UiText(
+            "Run Independent Reload (keep rollback) before unlocking rollback."));
     }
 }
 
 void MainWindow::DrawAnalysisEvidence() {
-    ImGui::SeparatorText("Analysis live evidence (dedicated user fixture)");
-    ImGui::TextWrapped(
+    ImGui::SeparatorText(UiText(
+        "Analysis live evidence (dedicated user fixture)"));
+    ImGui::TextWrapped(UiText(
         "Exports a separate hash-bound user VA -> page walk -> physical page "
         "proof plus the current Kernel Explorer read. This never substitutes "
-        "the Probe physical-write transaction.");
+        "the Probe physical-write transaction."));
     ImGui::SetNextItemWidth(-1.0F);
     ImGui::InputText(
-        "Fixture INFO JSON", fixture_info_path_.data(), fixture_info_path_.size());
+        UiText("Fixture INFO JSON"), fixture_info_path_.data(),
+        fixture_info_path_.size());
 
     const bool running = analysis_evidence_future_.valid();
     const bool coarse_ready = !running && cached_backend_info_.connected &&
         !cached_backend_info_.is_mock && process_memory_ != nullptr &&
         process_memory_->IsOpen() && !process_memory_->WritesArmed() &&
         !cached_backend_info_.write_enabled && physical_session_.HasPage() &&
+        !physical_session_.RecoveryObservationRequired() &&
         physical_session_.ByteDiffs().empty() && !process_usage_.Busy() &&
         !kernel_explorer_.Busy();
     ImGui::BeginDisabled(!coarse_ready);
-    if (ImGui::Button("Export Analysis Evidence")) {
+    if (ImGui::Button(UiText("Export Analysis Evidence"))) {
         StartAnalysisEvidenceExport();
     }
     ImGui::EndDisabled();
     if (running) {
         ImGui::SameLine();
-        if (ImGui::Button("Cancel Analysis Export")) {
+        if (ImGui::Button(UiText("Cancel Analysis Export"))) {
             CancelAnalysisEvidenceExport();
         }
         const auto progress = analysis_evidence_progress_.load(
@@ -2458,17 +2822,17 @@ void MainWindow::DrawAnalysisEvidence() {
         ImGui::TextWrapped("%s", analysis_evidence_status_.c_str());
     }
     if (!last_analysis_evidence_path_.empty()) {
-        if (ImGui::Button("Copy Analysis Evidence Path")) {
+        if (ImGui::Button(UiText("Copy Analysis Evidence Path"))) {
             ImGui::SetClipboardText(last_analysis_evidence_path_.c_str());
         }
-        ImGui::TextWrapped(
-            "Analysis evidence: %s", last_analysis_evidence_path_.c_str());
+        ImGui::TextWrapped(UiText("Analysis evidence: %s"),
+            last_analysis_evidence_path_.c_str());
     }
     if (!coarse_ready && !running) {
-        ImGui::TextDisabled(
+        ImGui::TextDisabled(UiText(
             "Requires LIVE backend, attached fixture, clean loaded 4 KiB page, "
             "LOCKED physical/process gates, completed ownership/PTView, and an "
-            "exact-signature Kernel Explorer read.");
+            "exact-signature Kernel Explorer read."));
     }
     ImGui::Separator();
 }
@@ -2593,6 +2957,7 @@ void MainWindow::StartAnalysisEvidenceExport() {
     last_analysis_evidence_path_.clear();
     auto* const memory = process_memory_.get();
     auto* const backend = &backend_;
+    const auto driver_abi_version = cached_backend_info_.abi_version;
     const auto captured_utc = IsoTimestampUtc();
     const auto directory_name = "analysis-" + EvidenceTimestampUtc();
     analysis_evidence_future_ = std::async(
@@ -2601,7 +2966,7 @@ void MainWindow::StartAnalysisEvidenceExport() {
          page_table = *page_table, kernel = *kernel,
          expected_canonical, root = *evidence_root,
          expected_driver_canonical, module_basename, expected_pdb_basename,
-         captured_utc, directory_name]() mutable {
+         captured_utc, directory_name, driver_abi_version]() mutable {
             AnalysisEvidenceOutcome outcome;
             const auto fail = [&](Error error) {
                 outcome.error = std::move(error);
@@ -2832,7 +3197,8 @@ void MainWindow::StartAnalysisEvidenceExport() {
                 json << "{\n"
                      << "  \"schema\": \"kdbg-analysis-live-evidence-v1\",\n"
                      << "  \"captured_utc\": \"" << captured_utc << "\",\n"
-                     << "  \"driver_abi_version\": 6,\n"
+                     << "  \"driver_abi_version\": "
+                     << driver_abi_version << ",\n"
                      << "  \"process\": {\"pid\": " << fixture.pid
                      << ", \"process_start_id\": " << fixture.process_start_id
                      << ", \"image_basename\": \"" << JsonEscape(fixture.image_basename)
@@ -3019,6 +3385,11 @@ void MainWindow::CancelAnalysisEvidenceExport() noexcept {
 
 void MainWindow::StartLifecycleAction(LifecycleAction action) {
     if (action == LifecycleAction::None || LifecycleBusy()) return;
+    if (physical_session_.RecoveryObservationRequired()) {
+        operation_status_ =
+            "Driver/probe lifecycle changes are blocked until the uncertain physical transaction is observed.";
+        return;
+    }
     const bool changes_kdbg_service =
         action == LifecycleAction::BringLabOnline ||
         action == LifecycleAction::InstallDriver ||
@@ -3572,9 +3943,10 @@ void MainWindow::RefreshServiceStates() {
 void MainWindow::AttachSelectedProcess() {
     if (selected_process_index_ < 0 ||
         selected_process_index_ >= static_cast<int>(processes_.size())) return;
-    if (physical_session_.CanRollback()) {
+    if (physical_session_.CanRollback() ||
+        physical_session_.RecoveryObservationRequired()) {
         operation_status_ =
-            "Process switch blocked until the pending physical rollback is complete.";
+            "Process switch blocked until physical recovery observation and any pending rollback are complete.";
         return;
     }
     QueueDeferredAction(
@@ -3585,9 +3957,10 @@ void MainWindow::AttachSelectedProcess() {
 
 void MainWindow::DisconnectProcess() {
     if (process_memory_ == nullptr) return;
-    if (physical_session_.CanRollback()) {
+    if (physical_session_.CanRollback() ||
+        physical_session_.RecoveryObservationRequired()) {
         operation_status_ =
-            "Process detach blocked until the pending physical rollback is complete.";
+            "Process detach blocked until physical recovery observation and any pending rollback are complete.";
         return;
     }
     QueueDeferredAction(DeferredAction::DisconnectProcess);
@@ -3619,9 +3992,10 @@ bool MainWindow::FinishDisconnectProcess() {
 }
 
 void MainWindow::ConnectBackend() {
-    if (physical_session_.CanRollback()) {
+    if (physical_session_.CanRollback() ||
+        physical_session_.RecoveryObservationRequired()) {
         operation_status_ =
-            "Reconnect blocked until the pending physical rollback is completed.";
+            "Reconnect blocked until physical recovery observation and any pending rollback are completed.";
         return;
     }
     QueueDeferredAction(DeferredAction::ConnectBackend);
@@ -3642,6 +4016,9 @@ void MainWindow::FinishConnectBackend() {
     probe_fixture_loaded_ = false;
     ClearProbeEvidence();
     const auto result = backend_.Open();
+    if (result) {
+        ++runtime_backend_session_generation_;
+    }
     LogResultDiagnostic(
         result,
         DiagnosticEvent::DriverConnectSucceeded,
@@ -3650,6 +4027,11 @@ void MainWindow::FinishConnectBackend() {
 }
 
 void MainWindow::QueryAndLoadProbeFixture() {
+    if (physical_session_.RecoveryObservationRequired()) {
+        operation_status_ =
+            "Observe the uncertain physical transaction before loading another fixture.";
+        return;
+    }
     if (physical_session_.IsDirty()) {
         operation_status_ =
             "Revert or apply staged physical edits before loading the probe fixture.";
@@ -3710,7 +4092,8 @@ void MainWindow::QueryAndLoadProbeFixture() {
         operation_status_ = probe_status_;
         return;
     }
-    const auto loaded = physical_session_.Load(backend_, address.Value());
+    const auto loaded = physical_session_.Load(
+        backend_, PhysicalWriteTarget::ProbeFixture(address.Value()));
     if (!loaded) {
         probe_fixture_loaded_ = false;
         probe_info_.reset();
@@ -3718,6 +4101,7 @@ void MainWindow::QueryAndLoadProbeFixture() {
         operation_status_ = probe_status_;
         return;
     }
+    BindCurrentPageToRuntimeHost();
     const auto physical_crc = PageCrc32(physical_session_.Baseline());
     if (physical_crc != queried.Value().crc32) {
         probe_fixture_loaded_ = false;
@@ -4107,10 +4491,33 @@ bool MainWindow::FinishLockAllWrites() {
     return false;
 }
 
+bool MainWindow::CurrentPageBoundToRuntimeHost() const noexcept {
+    return physical_session_.HasPage() &&
+        runtime_backend_session_generation_ != 0U &&
+        physical_target_backend_session_ ==
+            runtime_backend_session_generation_;
+}
+
+std::string MainWindow::RuntimeHostIdentityLabel() const {
+    return "machine=" + runtime_host_machine_ + " | boot=" +
+        runtime_host_boot_id_ + " | app-session=" +
+        runtime_host_process_session_id_ + " | backend-session=" +
+        std::to_string(runtime_backend_session_generation_);
+}
+
+void MainWindow::BindCurrentPageToRuntimeHost() noexcept {
+    physical_target_backend_session_ = physical_session_.HasPage()
+        ? runtime_backend_session_generation_
+        : 0U;
+}
+
 bool MainWindow::CurrentPageMatchesProbeIdentity() const noexcept {
     return probe_fixture_loaded_ && probe_.IsOpen() &&
         probe_service_running_.value_or(false) &&
         probe_info_.has_value() && physical_session_.HasPage() &&
+        CurrentPageBoundToRuntimeHost() &&
+        physical_session_.Target().kind ==
+            PhysicalTargetKind::ProbeFixture &&
         probe_info_->byte_count == kPhysicalPageSize &&
         physical_session_.Address().pfn == probe_info_->pfn &&
         physical_session_.Address().physical_address ==
@@ -4125,23 +4532,48 @@ bool MainWindow::CurrentPageIsProbeFixture() const noexcept {
 std::optional<VerifiedProcessPhysicalTarget>
 MainWindow::CurrentPageProcessTarget() const noexcept {
     if (ProcessIoBusy() || !physical_session_.HasPage() ||
+        !CurrentPageBoundToRuntimeHost() ||
+        physical_session_.Target().kind !=
+            PhysicalTargetKind::ProcessMapping ||
         process_memory_ == nullptr) {
         return std::nullopt;
     }
+    const auto& provenance = physical_session_.Target();
     const auto target =
         page_table_.CurrentProcessTarget(physical_session_.Address());
     if (!target.has_value() ||
-        target->pid != process_memory_->ProcessId()) {
+        target->pid != process_memory_->ProcessId() ||
+        !provenance.process_id.has_value() ||
+        !provenance.virtual_page_address.has_value() ||
+        target->pid != *provenance.process_id ||
+        (target->virtual_address &
+         ~static_cast<std::uint64_t>(kPhysicalPageSize - 1U)) !=
+            *provenance.virtual_page_address ||
+        target->pfn != provenance.address.pfn) {
         return std::nullopt;
     }
     return target;
 }
 
 bool MainWindow::CurrentPageIsVerifiedWriteTarget() const noexcept {
-    return CurrentPageIsProbeFixture() ||
-        (physical_session_.CanRollback() &&
-         CurrentPageMatchesProbeIdentity()) ||
-        CurrentPageProcessTarget().has_value();
+    if (!backend_.Info().connected || !physical_session_.HasPage() ||
+        !CurrentPageBoundToRuntimeHost() ||
+        !physical_session_.Target().IsConsistent()) {
+        return false;
+    }
+    switch (physical_session_.Target().kind) {
+    case PhysicalTargetKind::RawPfn:
+        // PhysicalPageSession::Load accepted this page only after verifying
+        // that all 4096 bytes fit one driver-reported physical RAM range.
+        return true;
+    case PhysicalTargetKind::ProbeFixture:
+        return CurrentPageIsProbeFixture() ||
+            (physical_session_.CanRollback() &&
+             CurrentPageMatchesProbeIdentity());
+    case PhysicalTargetKind::ProcessMapping:
+        return CurrentPageProcessTarget().has_value();
+    }
+    return false;
 }
 
 bool MainWindow::LifecycleBusy() const noexcept {
@@ -4160,8 +4592,38 @@ bool MainWindow::BackendIoBusy() const noexcept {
         kernel_explorer_.ReadBusy();
 }
 
+bool MainWindow::ValidateCurrentPhysicalTargetForObservation() {
+    if (!physical_session_.RecoveryObservationRequired()) {
+        operation_status_ =
+            "Recovery observation is not required for the current page.";
+        return false;
+    }
+    if (!physical_session_.HasPage()) {
+        operation_status_ =
+            "Recovery observation blocked: no physical page is loaded.";
+        return false;
+    }
+    if (physical_session_.Target().kind == PhysicalTargetKind::RawPfn) {
+        return ValidateRawPfnTarget(false);
+    }
+    // Probe rollback validation checks the exact PFN/PA/generation identity
+    // without assuming the page CRC, which is intentionally unknown here.
+    // Process rollback validation likewise re-walks the exact PID/VA/PFN
+    // provenance before the observation read.
+    return ValidateCurrentPhysicalTargetForRollback();
+}
+
 bool MainWindow::ValidateCurrentPhysicalTargetForWrite() {
-    if (CurrentPageIsProbeFixture()) {
+    if (!physical_session_.HasPage()) {
+        operation_status_ =
+            "Physical write review blocked: no physical page is loaded.";
+        return false;
+    }
+    if (physical_session_.Target().kind == PhysicalTargetKind::RawPfn) {
+        return ValidateRawPfnTarget(false);
+    }
+    if (physical_session_.Target().kind ==
+        PhysicalTargetKind::ProbeFixture) {
         return ValidateProbeTargetForWrite();
     }
     const auto target = CurrentPageProcessTarget();
@@ -4178,10 +4640,18 @@ bool MainWindow::ValidateCurrentPhysicalTargetForWrite() {
             revalidated.GetError().message;
         return false;
     }
+    const auto& provenance = physical_session_.Target();
     if (process_memory_ == nullptr ||
-        revalidated.Value().pid != process_memory_->ProcessId()) {
+        revalidated.Value().pid != process_memory_->ProcessId() ||
+        !provenance.process_id.has_value() ||
+        !provenance.virtual_page_address.has_value() ||
+        revalidated.Value().pid != *provenance.process_id ||
+        (revalidated.Value().virtual_address &
+         ~static_cast<std::uint64_t>(kPhysicalPageSize - 1U)) !=
+            *provenance.virtual_page_address ||
+        revalidated.Value().pfn != provenance.address.pfn) {
         operation_status_ =
-            "Physical write review blocked: the attached process changed.";
+            "Physical write review blocked: the attached process or its PID/VA/PFN provenance changed.";
         return false;
     }
     operation_status_ =
@@ -4192,7 +4662,16 @@ bool MainWindow::ValidateCurrentPhysicalTargetForWrite() {
 }
 
 bool MainWindow::ValidateCurrentPhysicalTargetForRollback() {
-    if (CurrentPageMatchesProbeIdentity()) {
+    if (!physical_session_.HasPage()) {
+        operation_status_ =
+            "Physical rollback blocked: no physical page is loaded.";
+        return false;
+    }
+    if (physical_session_.Target().kind == PhysicalTargetKind::RawPfn) {
+        return ValidateRawPfnTarget(true);
+    }
+    if (physical_session_.Target().kind ==
+        PhysicalTargetKind::ProbeFixture) {
         return ValidateProbeTargetForRollback();
     }
     const auto target = CurrentPageProcessTarget();
@@ -4209,8 +4688,59 @@ bool MainWindow::ValidateCurrentPhysicalTargetForRollback() {
             revalidated.GetError().message;
         return false;
     }
+    const auto& provenance = physical_session_.Target();
     return process_memory_ != nullptr &&
-        revalidated.Value().pid == process_memory_->ProcessId();
+        revalidated.Value().pid == process_memory_->ProcessId() &&
+        provenance.process_id.has_value() &&
+        provenance.virtual_page_address.has_value() &&
+        revalidated.Value().pid == *provenance.process_id &&
+        (revalidated.Value().virtual_address &
+         ~static_cast<std::uint64_t>(kPhysicalPageSize - 1U)) ==
+            *provenance.virtual_page_address &&
+        revalidated.Value().pfn == provenance.address.pfn;
+}
+
+bool MainWindow::ValidateRawPfnTarget(bool rollback) {
+    const char* operation = rollback ? "rollback" : "write review";
+    if (!backend_.Info().connected || !physical_session_.HasPage() ||
+        !CurrentPageBoundToRuntimeHost() ||
+        physical_session_.Target().kind != PhysicalTargetKind::RawPfn ||
+        !physical_session_.Target().IsConsistent()) {
+        operation_status_ = std::string{"Physical "} + operation +
+            " blocked: the RawPfn session is not valid for this backend.";
+        return false;
+    }
+    if (rollback && !physical_session_.CanRollback()) {
+        operation_status_ =
+            "Physical rollback blocked: no verified RawPfn apply is pending.";
+        return false;
+    }
+
+    const auto ranges = backend_.GetPhysicalRanges();
+    if (!ranges) {
+        operation_status_ = std::string{"Physical "} + operation +
+            " blocked: RAM range revalidation failed: " +
+            ranges.GetError().message;
+        return false;
+    }
+    const auto& address = physical_session_.Address();
+    const bool contained = std::any_of(
+        ranges.Value().begin(), ranges.Value().end(),
+        [&](const PhysicalRange& range) {
+            return range.Contains(
+                address.physical_address, kPhysicalPageSize);
+        });
+    if (!contained) {
+        operation_status_ = std::string{"Physical "} + operation +
+            " blocked: the complete RawPfn page is no longer inside one "
+            "driver-reported physical RAM range.";
+        return false;
+    }
+
+    operation_status_ = "RawPfn target range revalidated for this Windows "
+        "instance: PFN " + HexValue(address.pfn) + " / PA " +
+        HexValue(address.physical_address, 16) + " / 4096 bytes.";
+    return true;
 }
 
 bool MainWindow::ValidateProbeTargetForWrite() {
@@ -4312,9 +4842,9 @@ void MainWindow::CapturePhysicalReadback(
             return last_physical_readback_[diff.offset] != diff.after;
         }));
     last_physical_readback_status_ = operation_name +
-        " evidence captured: 4096 read-back bytes; " +
+        " evidence captured: driver transfer/read-back contract 4096 bytes; " +
         std::to_string(last_physical_diffs_.size()) +
-        " submitted byte(s), " + std::to_string(mismatch_count) +
+        " locally dirty/submitted byte(s), " + std::to_string(mismatch_count) +
         " mismatch(es).";
     if (mismatch_count != 0) {
         operation_status_ +=
@@ -4325,43 +4855,49 @@ void MainWindow::CapturePhysicalReadback(
 
 void MainWindow::DrawAboutDialog() {
     if (about_open_requested_) {
-        ImGui::OpenPopup("About KDBG");
+        ImGui::OpenPopup(UiLabel("About KDBG", "About KDBG").c_str());
         about_open_requested_ = false;
     }
     if (!ImGui::BeginPopupModal(
-            "About KDBG", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+            UiLabel("About KDBG", "About KDBG").c_str(), nullptr,
+            ImGuiWindowFlags_AlwaysAutoResize)) {
         return;
     }
     ImGui::Text("KDBG %s", kVersion);
-    ImGui::Text("Build ID: %s", kBuildId);
+    ImGui::Text(UiText("Build ID: %s"), kBuildId);
     ImGui::Separator();
-    ImGui::TextWrapped(
-        "Windows x64 physical/process-memory research UI for an authorized, "
-        "snapshot-capable disposable assignment VM. KDBG never transmits "
-        "memory externally by itself.");
-    ImGui::Text("Backend: %s | ABI %u | physical gate %s",
+    ImGui::TextWrapped(UiText(
+        "Windows x64 physical/process-memory research UI. Physical PFN "
+        "operations address local physical RAM exposed by KDbgDriver in this "
+        "Windows instance. KDBG never transmits memory externally by itself."));
+    ImGui::Text(UiText("Backend: %s | ABI %u | physical gate %s"),
         cached_backend_info_.connected
             ? cached_backend_info_.name.c_str()
             : "disconnected",
         cached_backend_info_.abi_version,
         cached_backend_info_.write_enabled ? "ARMED" : "LOCKED");
     ImGui::Separator();
-    ImGui::TextUnformatted("Licenses / attribution");
-    ImGui::BulletText("KDBG original code: repository license and attribution files");
-    ImGui::BulletText("Dear ImGui and imgui_memory_editor: MIT License");
-    ImGui::BulletText("Zydis and Zycore: MIT License");
-    ImGui::BulletText("Optional MemProcFS integration remains out-of-process (AGPL-3.0)");
-    ImGui::TextDisabled(
-        "See THIRD_PARTY.lock.json and the packaged licenses directory for full notices.");
+    ImGui::TextUnformatted(UiText("Licenses / attribution"));
+    ImGui::BulletText("%s", UiText(
+        "KDBG original code: repository license and attribution files"));
+    ImGui::BulletText("%s", UiText(
+        "Dear ImGui and imgui_memory_editor: MIT License"));
+    ImGui::BulletText("%s", UiText("Zydis and Zycore: MIT License"));
+    ImGui::BulletText("%s", UiText(
+        "Optional MemProcFS integration remains out-of-process (AGPL-3.0)"));
+    ImGui::TextDisabled(UiText(
+        "See THIRD_PARTY.lock.json and the packaged licenses directory for full notices."));
     ImGui::Separator();
-    ImGui::TextWrapped(
+    ImGui::TextWrapped(UiText(
         "Local diagnostics: %%LOCALAPPDATA%%\\KDBG\\logs. The event log "
         "rotates at 1 MiB across three files and excludes memory bytes, "
         "credentials, and user paths. MiniDumpNormal crash dumps stay local; "
-        "KDBG does not transmit them.");
-    if (ImGui::Button("Copy build ID")) ImGui::SetClipboardText(kBuildId);
+        "KDBG does not transmit them."));
+    if (ImGui::Button(UiText("Copy build ID"))) {
+        ImGui::SetClipboardText(kBuildId);
+    }
     ImGui::SameLine();
-    if (ImGui::Button("Close")) ImGui::CloseCurrentPopup();
+    if (ImGui::Button(UiText("Close"))) ImGui::CloseCurrentPopup();
     ImGui::EndPopup();
 }
 

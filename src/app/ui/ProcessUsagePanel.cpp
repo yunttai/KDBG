@@ -1,5 +1,7 @@
 #include "app/ui/ProcessUsagePanel.h"
 
+#include "app/ui/Localization.h"
+
 #include "core/pfn/MemProcFsProvider.h"
 #include "core/pfn/PageTableReverseMapper.h"
 
@@ -13,6 +15,10 @@
 #include <utility>
 
 namespace kdbg {
+
+using ui::UiLabel;
+using ui::UiText;
+
 namespace {
 
 std::string PathToUtf8(const std::filesystem::path& path) {
@@ -111,7 +117,7 @@ void ProcessUsagePanel::StartMemProcFs(std::uint64_t pfn) {
     job_pfn_ = pfn;
     job_started_ = std::chrono::steady_clock::now();
     running_.store(true, std::memory_order_release);
-    status_ = "MemProcFS ownership query started.";
+    status_ = UiText("MemProcFS ownership query started.");
     worker_ = std::jthread(
         [this, bridge, pfn, generation](std::stop_token token) {
         MemProcFsProvider provider(bridge);
@@ -140,7 +146,7 @@ void ProcessUsagePanel::StartReverseMap(
     job_pfn_ = pfn;
     job_started_ = std::chrono::steady_clock::now();
     running_.store(true, std::memory_order_release);
-    status_ = "Selected-process reverse mapping started.";
+    status_ = UiText("Selected-process reverse mapping started.");
     IMemoryBackend* const backend_ptr = &backend;
     worker_ = std::jthread(
         [this, backend_ptr, pfn, pid, process_name = std::move(process_name),
@@ -214,8 +220,13 @@ void ProcessUsagePanel::ConsumeWorkerResult() {
     published_generation_ = result_generation;
     mappings_ = std::move(result->mappings);
     provider_ = std::move(result->provider);
-    status_ = "PFN ownership query complete: " +
-        std::to_string(mappings_.size()) + " mapping(s).";
+    char status[128]{};
+    std::snprintf(
+        status,
+        sizeof(status),
+        UiText("PFN ownership query complete: %llu mapping(s)."),
+        static_cast<unsigned long long>(mappings_.size()));
+    status_ = status;
 }
 
 void ProcessUsagePanel::Draw(
@@ -224,36 +235,41 @@ void ProcessUsagePanel::Draw(
     std::uint32_t attached_pid,
     const std::string& attached_name) {
     ConsumeWorkerResult();
-    ImGui::TextUnformatted("PFN -> Process / Virtual Address");
+    ImGui::TextUnformatted(UiText("PFN -> Process / Virtual Address"));
     if (!page.has_value()) {
-        ImGui::TextDisabled("Load a PFN first.");
+        ImGui::TextDisabled(UiText("Load a PFN first."));
         if (Busy()) {
-            ImGui::TextWrapped("A query for PFN 0x%llX is still running.",
+            ImGui::TextWrapped(UiText(
+                "A query for PFN 0x%llX is still running."),
                 static_cast<unsigned long long>(job_pfn_));
-            if (ImGui::Button("Cancel PFN Query")) worker_.request_stop();
+            if (ImGui::Button(UiText("Cancel PFN Query"))) {
+                worker_.request_stop();
+            }
         }
         return;
     }
-    ImGui::Text("Target PFN: 0x%llX | PA: 0x%016llX",
+    ImGui::Text(UiText("Target PFN: 0x%llX | PA: 0x%016llX"),
         static_cast<unsigned long long>(page->pfn),
         static_cast<unsigned long long>(page->physical_address));
 
     const auto bridge_display = PathToUtf8(bridge_path_);
     ImGui::TextWrapped(
-        "MemProcFS bridge (packaged): %s", bridge_display.c_str());
+        UiText("MemProcFS bridge (packaged): %s"), bridge_display.c_str());
     const bool busy = Busy();
     if (busy) ImGui::BeginDisabled();
-    if (ImGui::Button("Query MemProcFS")) StartMemProcFs(page->pfn);
+    if (ImGui::Button(UiText("Query MemProcFS"))) StartMemProcFs(page->pfn);
     ImGui::SameLine();
     if (attached_pid == 0 || !backend.Info().connected) ImGui::BeginDisabled();
-    if (ImGui::Button("Reverse-map Attached Process")) {
+    if (ImGui::Button(UiText("Reverse-map Attached Process"))) {
         StartReverseMap(
             backend, page->pfn, attached_pid, attached_name);
     }
     if (attached_pid == 0 || !backend.Info().connected) ImGui::EndDisabled();
     if (busy) ImGui::EndDisabled();
     ImGui::SetNextItemWidth(150.0F);
-    ImGui::InputInt("Table-page limit", &table_limit_);
+    ImGui::InputInt(
+        UiLabel("Table-page limit", "Table-page limit").c_str(),
+        &table_limit_);
     table_limit_ = std::clamp(table_limit_, 1, 2'000'000);
     if (busy) {
         std::string phase;
@@ -264,14 +280,18 @@ void ProcessUsagePanel::Draw(
         const auto elapsed = std::chrono::duration<double>(
             std::chrono::steady_clock::now() - job_started_).count();
         ImGui::ProgressBar(0.0F, ImVec2(-1.0F, 0.0F), phase.c_str());
-        ImGui::Text("Target PFN 0x%llX | elapsed %.1f s | cancellation is cooperative",
+        ImGui::Text(UiText(
+            "Target PFN 0x%llX | elapsed %.1f s | cancellation is cooperative"),
             static_cast<unsigned long long>(job_pfn_), elapsed);
-        if (ImGui::Button("Cancel PFN Query")) {
+        if (ImGui::Button(UiText("Cancel PFN Query"))) {
             worker_.request_stop();
-            status_ = "PFN query cancellation requested.";
+            status_ = UiText("PFN query cancellation requested.");
         }
     }
-    if (attached_pid == 0) ImGui::TextDisabled("Attach a process for the built-in page-table reverse mapper.");
+    if (attached_pid == 0) {
+        ImGui::TextDisabled(UiText(
+            "Attach a process for the built-in page-table reverse mapper."));
+    }
     if (!status_.empty()) ImGui::TextWrapped("%s", status_.c_str());
     DrawResults(page->pfn);
 }
@@ -280,14 +300,15 @@ void ProcessUsagePanel::DrawResults(std::uint64_t current_pfn) {
     if (!published_pfn_.has_value()) return;
     const bool stale = *published_pfn_ != current_pfn;
     ImGui::Text(
-        "Published PFN: 0x%llX | Provider: %s | Mappings: %llu",
+        UiText("Published PFN: 0x%llX | Provider: %s | Mappings: %llu"),
         static_cast<unsigned long long>(*published_pfn_),
         provider_.c_str(),
         static_cast<unsigned long long>(mappings_.size()));
     if (stale) {
         ImGui::TextColored(
             ImVec4(1.0F, 0.35F, 0.30F, 1.0F),
-            "STALE RESULT: the loaded PFN changed. Navigation is disabled until this PFN is queried.");
+            UiText(
+                "STALE RESULT: the loaded PFN changed. Navigation is disabled until this PFN is queried."));
     }
     if (mappings_.empty()) return;
     if (ImGui::BeginTable(
@@ -299,23 +320,31 @@ void ProcessUsagePanel::DrawResults(std::uint64_t current_pfn) {
         ImGui::TableSetupColumn(
             "PID", ImGuiTableColumnFlags_WidthFixed, 64.0F);
         ImGui::TableSetupColumn(
-            "Process", ImGuiTableColumnFlags_WidthFixed, 132.0F);
+            UiLabel("Process", "Process").c_str(),
+            ImGuiTableColumnFlags_WidthFixed, 132.0F);
         ImGui::TableSetupColumn(
-            "Virtual Address", ImGuiTableColumnFlags_WidthFixed, 152.0F);
+            UiLabel("Virtual Address", "Virtual Address").c_str(),
+            ImGuiTableColumnFlags_WidthFixed, 152.0F);
         ImGui::TableSetupColumn(
             "PTE Address", ImGuiTableColumnFlags_WidthFixed, 152.0F);
         ImGui::TableSetupColumn(
-            "Type", ImGuiTableColumnFlags_WidthFixed, 96.0F);
+            UiLabel("Type", "Type").c_str(),
+            ImGuiTableColumnFlags_WidthFixed, 96.0F);
         ImGui::TableSetupColumn(
-            "Shared", ImGuiTableColumnFlags_WidthFixed, 68.0F);
+            UiLabel("Shared", "Shared").c_str(),
+            ImGuiTableColumnFlags_WidthFixed, 68.0F);
         ImGui::TableSetupColumn(
-            "Confidence", ImGuiTableColumnFlags_WidthFixed, 96.0F);
+            UiLabel("Confidence", "Confidence").c_str(),
+            ImGuiTableColumnFlags_WidthFixed, 96.0F);
         ImGui::TableSetupColumn(
-            "Source", ImGuiTableColumnFlags_WidthFixed, 176.0F);
+            UiLabel("Source", "Source").c_str(),
+            ImGuiTableColumnFlags_WidthFixed, 176.0F);
         ImGui::TableSetupColumn(
-            "Permissions", ImGuiTableColumnFlags_WidthFixed, 104.0F);
+            UiLabel("Permissions", "Permissions").c_str(),
+            ImGuiTableColumnFlags_WidthFixed, 104.0F);
         ImGui::TableSetupColumn(
-            "Open", ImGuiTableColumnFlags_WidthFixed, 96.0F);
+            UiLabel("Open", "Open").c_str(),
+            ImGuiTableColumnFlags_WidthFixed, 96.0F);
         ImGui::TableHeadersRow();
         ImGuiListClipper clipper;
         clipper.Begin(static_cast<int>(std::min<std::size_t>(

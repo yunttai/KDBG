@@ -549,7 +549,8 @@ $orchestratorContracts = [ordered]@{
         $orchestratorText.Contains("[string]`$report.runtime_identity.kdbg_service.binary.sha256 -cne `$expectedDriverSha") -and
         $orchestratorText.Contains("[string]`$report.runtime_identity.probe_service.binary.sha256 -cne `$expectedProbeSha") -and
         $orchestratorText.Contains('backend.connected -ne $true') -and
-        $orchestratorText.Contains('backend.abi_version -ne 6') -and
+        $orchestratorText.Contains('backend.abi_version -ne 7') -and
+        $orchestratorText.Contains('supports_physical_page_compare_write -ne $true') -and
         $orchestratorText.Contains('write_cleanup.final_gate_locked -ne $true')
     postboot_probe_refresh_before_gui = $orchestratorText.Contains('$prepared.probe_pfn = [uint64]$report.probe_before.pfn') -and
         $orchestratorText.Contains("`$prepared.probe_pfn_hex = '0x{0:X}'") -and

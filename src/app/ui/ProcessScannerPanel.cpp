@@ -1,6 +1,7 @@
 #include "app/ui/ProcessScannerPanel.h"
 
 #include "app/PerformanceTelemetry.h"
+#include "app/ui/Localization.h"
 #include "core/scanner/ValueCodec.h"
 
 #include <imgui.h>
@@ -148,7 +149,7 @@ void ProcessScannerPanel::Attach(IProcessMemory* memory) {
         watches_ = std::make_unique<WatchList>(*memory_);
         PublishAllWatches();
         next_watch_refresh_ = std::chrono::steady_clock::now();
-        status_ = "Process scanner ready.";
+        status_ = ui::UiText("Process scanner ready.");
     }
 }
 
@@ -605,7 +606,7 @@ void ProcessScannerPanel::PollWatchWorker() {
     if (outcome->cancelled) {
         watch_full_refresh_requested_ = false;
         watch_manual_pass_active_ = false;
-        status_ = "Watch refresh cancellation completed.";
+        status_ = ui::UiText("Watch refresh cancellation completed.");
         return;
     }
     watch_cursor_ = outcome->begin + outcome->completed;
@@ -629,7 +630,8 @@ void ProcessScannerPanel::RequestFullWatchRefresh() {
 
 void ProcessScannerPanel::Draw() {
     if (memory_ == nullptr || !memory_->IsOpen() || scanner_ == nullptr) {
-        ImGui::TextDisabled("Attach to a process to use the memory scanner.");
+        ImGui::TextDisabled(
+            "%s", ui::UiText("Attach to a process to use the memory scanner."));
         return;
     }
     if (!scan_running_.load(std::memory_order_acquire) &&
@@ -638,7 +640,8 @@ void ProcessScannerPanel::Draw() {
     }
     PollWatchWorker();
 
-    ImGui::Text("Attached PID: %u | Pointer width: %u-bit | Gate: %s | Freeze authorization: %s",
+    ImGui::Text(ui::UiText(
+        "Attached PID: %u | Pointer width: %u-bit | Gate: %s | Freeze authorization: %s"),
         memory_->ProcessId(),
         static_cast<unsigned>(memory_->PointerSize() * 8U),
         memory_->WritesArmed() ? "ARMED" : "LOCKED",
@@ -658,34 +661,51 @@ void ProcessScannerPanel::Draw() {
 
 void ProcessScannerPanel::DrawScanControls() {
     ImGui::SetNextItemWidth(150.0F);
-    ImGui::Combo("Value Type", &value_type_index_, kTypeLabels, IM_ARRAYSIZE(kTypeLabels));
+    ImGui::Combo(
+        ui::UiLabel("Value Type", "Value Type").c_str(),
+        &value_type_index_, kTypeLabels, IM_ARRAYSIZE(kTypeLabels));
     ImGui::SameLine();
     ImGui::SetNextItemWidth(160.0F);
-    ImGui::Combo("Scan Type", &compare_index_, kCompareLabels, IM_ARRAYSIZE(kCompareLabels));
+    ImGui::Combo(
+        ui::UiLabel("Scan Type", "Scan Type").c_str(),
+        &compare_index_, kCompareLabels, IM_ARRAYSIZE(kCompareLabels));
 
     const auto compare = kComparisons[std::clamp(compare_index_, 0, 11)];
     if (NeedsValue(compare)) {
         ImGui::SetNextItemWidth(300.0F);
-        ImGui::InputText("Value", value_.data(), value_.size());
+        ImGui::InputText(
+            ui::UiLabel("Value", "Value").c_str(),
+            value_.data(), value_.size());
     } else {
-        ImGui::TextDisabled("This comparison uses the previous snapshot and does not require a value.");
+        ImGui::TextDisabled(
+            "%s", ui::UiText(
+                "This comparison uses the previous snapshot and does not require a value."));
     }
     if (NeedsSecond(compare)) {
         ImGui::SetNextItemWidth(300.0F);
-        ImGui::InputText("Second Value", second_value_.data(), second_value_.size());
+        ImGui::InputText(
+            ui::UiLabel("Second Value", "Second Value").c_str(),
+            second_value_.data(), second_value_.size());
     }
 
-    ImGui::Checkbox("Hexadecimal", &hexadecimal_);
+    ImGui::Checkbox(
+        ui::UiLabel("Hexadecimal", "Hexadecimal").c_str(), &hexadecimal_);
     ImGui::SameLine();
-    ImGui::Checkbox("Writable only", &writable_only_);
+    ImGui::Checkbox(
+        ui::UiLabel("Writable only", "Writable only").c_str(),
+        &writable_only_);
     ImGui::SameLine();
-    ImGui::Checkbox("Include executable", &include_executable_);
+    ImGui::Checkbox(
+        ui::UiLabel("Include executable", "Include executable").c_str(),
+        &include_executable_);
     ImGui::SetNextItemWidth(120.0F);
-    ImGui::InputInt("Alignment", &alignment_);
+    ImGui::InputInt(
+        ui::UiLabel("Alignment", "Alignment").c_str(), &alignment_);
     alignment_ = std::clamp(alignment_, 1, 4096);
     ImGui::SameLine();
     ImGui::SetNextItemWidth(150.0F);
-    ImGui::InputInt("Max results", &max_results_);
+    ImGui::InputInt(
+        ui::UiLabel("Max results", "Max results").c_str(), &max_results_);
     max_results_ = std::clamp(max_results_, 1, 2'000'000);
 
     const bool running = scan_running_.load(std::memory_order_acquire);
@@ -695,26 +715,28 @@ void ProcessScannerPanel::DrawScanControls() {
         snapshot->publication_state == ScanPublicationState::Complete &&
         !scan_error.has_value();
     if (running) ImGui::BeginDisabled();
-    if (ImGui::Button(snapshot != nullptr ? "New First Scan" : "First Scan")) {
+    const char* const first_scan_text =
+        snapshot != nullptr ? "New First Scan" : "First Scan";
+    if (ImGui::Button(ui::UiLabel(first_scan_text, first_scan_text).c_str())) {
         StartScan(true);
-        status_ = "First scan started.";
+        status_ = ui::UiText("First scan started.");
     }
     ImGui::SameLine();
     if (!next_scan_allowed) ImGui::BeginDisabled();
-    if (ImGui::Button("Next Scan")) {
+    if (ImGui::Button(ui::UiLabel("Next Scan", "Next Scan").c_str())) {
         StartScan(false);
-        status_ = "Next scan started.";
+        status_ = ui::UiText("Next scan started.");
     }
     if (!next_scan_allowed) ImGui::EndDisabled();
     ImGui::SameLine();
-    if (ImGui::Button("Reset")) {
+    if (ImGui::Button(ui::UiLabel("Reset", "Reset").c_str())) {
         ResetScan();
-        status_ = "Scan results cleared.";
+        status_ = ui::UiText("Scan results cleared.");
     }
     if (running) ImGui::EndDisabled();
     if (running) {
         ImGui::SameLine();
-        if (ImGui::Button("Cancel")) {
+        if (ImGui::Button(ui::UiLabel("Cancel", "Cancel").c_str())) {
             RuntimePerformanceTelemetry().RequestProcessScanCancellation(
                 scan_telemetry_id_.load(std::memory_order_acquire));
             scan_worker_.request_stop();
@@ -729,15 +751,16 @@ void ProcessScannerPanel::DrawScanControls() {
             std::clamp(fraction, 0.0F, 1.0F),
             ImVec2(-1.0F, 0.0F),
             progress.phase.c_str());
-        ImGui::Text("Regions %llu/%llu | Bytes 0x%llX/0x%llX | Candidates %llu",
+        ImGui::Text(ui::UiText(
+            "Regions %llu/%llu | Bytes 0x%llX/0x%llX | Candidates %llu"),
             static_cast<unsigned long long>(progress.regions_scanned),
             static_cast<unsigned long long>(progress.regions_total),
             static_cast<unsigned long long>(progress.bytes_scanned),
             static_cast<unsigned long long>(progress.bytes_total),
             static_cast<unsigned long long>(progress.candidates));
     } else if (scan_error.has_value()) {
-        status_ = scan_error->message +
-            " Next Scan is blocked; start a new First Scan.";
+        status_ = scan_error->message + " " +
+            ui::UiText("Next Scan is blocked; start a new First Scan.");
     } else if (snapshot != nullptr) {
         if (snapshot->publication_state == ScanPublicationState::Partial) {
             const auto& report = snapshot->read_report;
@@ -750,16 +773,19 @@ void ProcessScannerPanel::DrawScanControls() {
                 "/" + std::to_string(report.requested_bytes) +
                 " bytes completed. Next Scan is blocked; start a new First Scan.";
             if (!report.first_error.message.empty()) {
-                status_ += " First error: " + report.first_error.message;
+                status_ += std::string(" ") + ui::UiText("First error:") +
+                    " " + report.first_error.message;
             }
         } else {
             char buffer[192]{};
-            std::snprintf(buffer, sizeof(buffer),
-                "Scan generation %llu complete: %llu result(s), 0x%llX bytes%s.",
+            std::snprintf(buffer, sizeof(buffer), ui::UiText(
+                "Scan generation %llu complete: %llu result(s), 0x%llX bytes%s."),
                 static_cast<unsigned long long>(snapshot->generation),
                 static_cast<unsigned long long>(snapshot->summary.result_count),
                 static_cast<unsigned long long>(snapshot->summary.bytes_scanned),
-                snapshot->summary.truncated ? " (result limit reached)" : "");
+                snapshot->summary.truncated
+                    ? ui::UiText(" (result limit reached)")
+                    : "");
             status_ = buffer;
         }
     }
@@ -770,7 +796,7 @@ void ProcessScannerPanel::DrawResults() {
     const auto result_count = snapshot == nullptr
         ? 0U
         : snapshot->candidates.size();
-    ImGui::Text("Published Scan Results: %llu",
+    ImGui::Text(ui::UiText("Published Scan Results: %llu"),
         static_cast<unsigned long long>(result_count));
     if (snapshot != nullptr &&
         snapshot->publication_state == ScanPublicationState::Partial) {
@@ -778,7 +804,8 @@ void ProcessScannerPanel::DrawResults() {
         ImGui::PushStyleColor(
             ImGuiCol_Text, ImVec4(1.0F, 0.65F, 0.15F, 1.0F));
         ImGui::TextWrapped(
-            "PARTIAL / INCOMPLETE: skipped %llu, failed %llu, short %llu, bytes %llu/%llu. Next Scan disabled.",
+            ui::UiText(
+                "PARTIAL / INCOMPLETE: skipped %llu, failed %llu, short %llu, bytes %llu/%llu. Next Scan disabled."),
             static_cast<unsigned long long>(report.items_skipped),
             static_cast<unsigned long long>(report.failed_reads),
             static_cast<unsigned long long>(report.short_reads),
@@ -787,16 +814,18 @@ void ProcessScannerPanel::DrawResults() {
         ImGui::PopStyleColor();
         if (!report.first_error.message.empty()) {
             ImGui::TextWrapped(
-                "First read error: %s", report.first_error.message.c_str());
+                ui::UiText("First read error: %s"),
+                report.first_error.message.c_str());
         }
     }
     if (scan_running_.load(std::memory_order_acquire) && snapshot != nullptr) {
         ImGui::TextDisabled(
-            "Showing immutable generation %llu while the worker builds the next generation.",
+            ui::UiText(
+                "Showing immutable generation %llu while the worker builds the next generation."),
             static_cast<unsigned long long>(snapshot->generation));
     }
     if (snapshot == nullptr || snapshot->candidates.empty()) {
-        ImGui::TextDisabled("No scan results.");
+        ImGui::TextDisabled("%s", ui::UiText("No scan results."));
         return;
     }
 
@@ -805,11 +834,11 @@ void ProcessScannerPanel::DrawResults() {
             ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
                 ImGuiTableFlags_ScrollY | ImGuiTableFlags_Resizable,
             ImVec2(0.0F, 260.0F))) {
-        ImGui::TableSetupColumn("Address");
-        ImGui::TableSetupColumn("Previous");
-        ImGui::TableSetupColumn("Current");
-        ImGui::TableSetupColumn("Delta");
-        ImGui::TableSetupColumn("Watch");
+        ImGui::TableSetupColumn(ui::UiLabel("Address", "Address").c_str());
+        ImGui::TableSetupColumn(ui::UiLabel("Previous", "Previous").c_str());
+        ImGui::TableSetupColumn(ui::UiLabel("Current", "Current").c_str());
+        ImGui::TableSetupColumn(ui::UiLabel("Delta", "Delta").c_str());
+        ImGui::TableSetupColumn(ui::UiLabel("Watch", "Watch").c_str());
         ImGui::TableHeadersRow();
         ImGuiListClipper clipper;
         clipper.Begin(static_cast<int>(std::min<std::size_t>(
@@ -832,11 +861,15 @@ void ProcessScannerPanel::DrawResults() {
                     snapshot->type, candidate.current, snapshot->hexadecimal);
                 ImGui::TextUnformatted(current.c_str());
                 ImGui::TableNextColumn();
-                ImGui::TextUnformatted(candidate.previous == candidate.current ? "=" : "changed");
+                ImGui::TextUnformatted(
+                    candidate.previous == candidate.current
+                        ? "="
+                        : ui::UiText("changed"));
                 ImGui::TableNextColumn();
                 if (FixedValueWidth(snapshot->type) == 0) {
                     ImGui::TextDisabled("N/A");
-                } else if (ImGui::SmallButton("Add")) {
+                } else if (ImGui::SmallButton(
+                               ui::UiLabel("Add", "Add").c_str())) {
                     if (WatchActionsBusy()) {
                         status_ =
                             "Wait for the current scan/watch batch before adding a watch.";
@@ -849,7 +882,9 @@ void ProcessScannerPanel::DrawResults() {
                         "scan result",
                         snapshot->hexadecimal);
                     if (added) PublishAllWatches();
-                    status_ = added ? "Address added to watch list." : added.GetError().message;
+                    status_ = added
+                        ? ui::UiText("Address added to watch list.")
+                        : added.GetError().message;
                 }
                 ImGui::PopID();
             }
@@ -859,7 +894,7 @@ void ProcessScannerPanel::DrawResults() {
 }
 
 void ProcessScannerPanel::DrawWatchList() {
-    ImGui::TextUnformatted("Address List / Freeze");
+    ImGui::TextUnformatted(ui::UiText("Address List / Freeze"));
     const auto now = std::chrono::steady_clock::now();
     if (!watch_running_.load(std::memory_order_acquire) &&
         !scan_running_.load(std::memory_order_acquire)) {
@@ -883,27 +918,32 @@ void ProcessScannerPanel::DrawWatchList() {
             std::clamp(fraction, 0.0F, 1.0F),
             ImVec2(-1.0F, 0.0F),
             watch_manual_pass_active_
-                ? "manual watch refresh"
-                : "bounded refresh/freeze batch");
+                ? ui::UiText("manual watch refresh")
+                : ui::UiText("bounded refresh/freeze batch"));
         ImGui::Text(
-            "Cycle progress %llu/%llu | batch cap 64 | failures %llu",
+            ui::UiText(
+                "Cycle progress %llu/%llu | batch cap 64 | failures %llu"),
             static_cast<unsigned long long>(completed),
             static_cast<unsigned long long>(total),
             static_cast<unsigned long long>(watch_failures_));
-        if (ImGui::Button("Cancel Watch I/O")) {
+        if (ImGui::Button(
+                ui::UiLabel("Cancel Watch I/O", "Cancel Watch I/O").c_str())) {
             watch_cancel_requested_.store(true, std::memory_order_release);
             watch_worker_.request_stop();
             watch_full_refresh_requested_ = false;
         }
     } else {
         ImGui::TextDisabled(
-            "Published rows: %llu | scheduler batch cap: 64%s",
+            ui::UiText("Published rows: %llu | scheduler batch cap: 64%s"),
             static_cast<unsigned long long>(published_watches_.size()),
-            watch_last_overrun_ ? " | cycle spans multiple 200 ms slices" : "");
+            watch_last_overrun_
+                ? ui::UiText(" | cycle spans multiple 200 ms slices")
+                : "");
     }
     if (watch_last_error_.has_value()) {
         ImGui::TextWrapped(
-            "Last watch worker error: %s [requested=%llu completed=%llu]",
+            ui::UiText(
+                "Last watch worker error: %s [requested=%llu completed=%llu]"),
             watch_last_error_->message.c_str(),
             static_cast<unsigned long long>(watch_last_error_->requested),
             static_cast<unsigned long long>(watch_last_error_->completed));
@@ -918,62 +958,78 @@ void ProcessScannerPanel::DrawWatchList() {
 
     ImGui::BeginDisabled(watch_busy);
     if (!write_authorization_active_ && !memory_->WritesArmed()) {
-        if (ImGui::Button("Arm Process Writes")) {
+        if (ImGui::Button(
+                ui::UiLabel(
+                    "Arm Process Writes", "Arm Process Writes").c_str())) {
             write_confirmation_.fill('\0');
-            ImGui::OpenPopup("Arm Process Writes##KDBG");
+            const auto popup_label = ui::UiLabel(
+                "Arm Process Writes", "Arm Process Writes##KDBG");
+            ImGui::OpenPopup(popup_label.c_str());
         }
-    } else if (ImGui::Button("Lock Process Writes")) {
+    } else if (ImGui::Button(
+                   ui::UiLabel(
+                       "Lock Process Writes", "Lock Process Writes").c_str())) {
         write_authorization_active_ = false;
         const auto result = memory_->SetWritesArmed(false);
-        SetStatus(result, "Process writes locked.");
+        SetStatus(result, ui::UiText("Process writes locked."));
     }
     ImGui::SameLine();
-    if (ImGui::Button("Refresh Values")) RequestFullWatchRefresh();
+    if (ImGui::Button(
+            ui::UiLabel("Refresh Values", "Refresh Values").c_str())) {
+        RequestFullWatchRefresh();
+    }
     ImGui::EndDisabled();
 
     ImGui::SetNextItemWidth(390.0F);
     ImGui::InputText(
-        "Address-list file",
+        ui::UiLabel("Address-list file", "Address-list file").c_str(),
         address_list_path_.data(), address_list_path_.size());
     ImGui::SameLine();
     ImGui::BeginDisabled(watch_busy);
-    if (ImGui::Button("Save Table")) {
+    if (ImGui::Button(ui::UiLabel("Save Table", "Save Table").c_str())) {
         const auto result = watches_->Save(address_list_path_.data());
-        SetStatus(result, "Address list saved.");
+        SetStatus(result, ui::UiText("Address list saved."));
     }
     ImGui::SameLine();
-    if (ImGui::Button("Load Table")) {
+    if (ImGui::Button(ui::UiLabel("Load Table", "Load Table").c_str())) {
         const auto result = watches_->Load(address_list_path_.data());
         selected_watch_id_ = 0;
         if (result) {
             watch_cursor_ = 0;
             PublishAllWatches();
         }
-        SetStatus(result,
-            "Address list loaded. Saved frozen entries were intentionally disarmed.");
+        SetStatus(result, ui::UiText(
+            "Address list loaded. Saved frozen entries were intentionally disarmed."));
     }
     ImGui::EndDisabled();
 
     ImGui::SetNextItemWidth(180.0F);
     ImGui::InputText(
-        "Manual Address", manual_address_.data(), manual_address_.size());
+        ui::UiLabel("Manual Address", "Manual Address").c_str(),
+        manual_address_.data(), manual_address_.size());
     ImGui::SameLine();
     ImGui::SetNextItemWidth(125.0F);
     ImGui::Combo(
-        "Manual Type", &manual_type_index_,
+        ui::UiLabel("Manual Type", "Manual Type").c_str(),
+        &manual_type_index_,
         kTypeLabels, 10);
     ImGui::SameLine();
-    ImGui::Checkbox("Manual Hex", &manual_hexadecimal_);
+    ImGui::Checkbox(
+        ui::UiLabel("Manual Hex", "Manual Hex").c_str(),
+        &manual_hexadecimal_);
     ImGui::SetNextItemWidth(300.0F);
     ImGui::InputTextWithHint(
-        "Description", "optional label",
+        ui::UiLabel("Description", "Description").c_str(),
+        ui::UiText("optional label"),
         manual_description_.data(), manual_description_.size());
     ImGui::SameLine();
     ImGui::BeginDisabled(watch_busy);
-    if (ImGui::Button("Add Address")) {
+    if (ImGui::Button(
+            ui::UiLabel("Add Address", "Add Address").c_str())) {
         std::uint64_t address = 0;
         if (!ParseAddress(manual_address_.data(), &address) || address == 0) {
-            status_ = "Manual address must be a non-zero decimal or 0x-prefixed value.";
+            status_ = ui::UiText(
+                "Manual address must be a non-zero decimal or 0x-prefixed value.");
         } else {
             const auto added = watches_->Add(
                 address,
@@ -982,14 +1038,15 @@ void ProcessScannerPanel::DrawWatchList() {
                 manual_hexadecimal_);
             if (added) PublishAllWatches();
             status_ = added
-                ? "Manual address added to the address list."
+                ? ui::UiText("Manual address added to the address list.")
                 : added.GetError().message;
         }
     }
     ImGui::EndDisabled();
 
     if (published_watches_.empty()) {
-        ImGui::TextDisabled("Add an address from scan results.");
+        ImGui::TextDisabled(
+            "%s", ui::UiText("Add an address from scan results."));
         return;
     }
     if (ImGui::BeginTable(
@@ -997,12 +1054,13 @@ void ProcessScannerPanel::DrawWatchList() {
             ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
                 ImGuiTableFlags_Resizable | ImGuiTableFlags_ScrollY,
             ImVec2(0.0F, 220.0F))) {
-        ImGui::TableSetupColumn("Freeze");
-        ImGui::TableSetupColumn("Description");
-        ImGui::TableSetupColumn("Address");
-        ImGui::TableSetupColumn("Type");
-        ImGui::TableSetupColumn("Value");
-        ImGui::TableSetupColumn("Action");
+        ImGui::TableSetupColumn(ui::UiLabel("Freeze", "Freeze").c_str());
+        ImGui::TableSetupColumn(
+            ui::UiLabel("Description", "Description").c_str());
+        ImGui::TableSetupColumn(ui::UiLabel("Address", "Address").c_str());
+        ImGui::TableSetupColumn(ui::UiLabel("Type", "Type").c_str());
+        ImGui::TableSetupColumn(ui::UiLabel("Value", "Value").c_str());
+        ImGui::TableSetupColumn(ui::UiLabel("Action", "Action").c_str());
         ImGui::TableHeadersRow();
         std::uint64_t remove_id = 0;
         std::optional<std::pair<std::uint64_t, bool>> freeze_change;
@@ -1037,13 +1095,17 @@ void ProcessScannerPanel::DrawWatchList() {
                 ImGui::TextUnformatted(formatted.c_str());
                 if (!entry.last_error.empty()) ImGui::SetItemTooltip("%s", entry.last_error.c_str());
                 ImGui::TableNextColumn();
-                if (ImGui::SmallButton("Edit")) {
+                if (ImGui::SmallButton(
+                        ui::UiLabel("Edit", "Edit").c_str())) {
                     selected_watch_id_ = entry.id;
                     std::snprintf(watch_value_.data(), watch_value_.size(), "%s", formatted.c_str());
                 }
                 ImGui::SameLine();
                 ImGui::BeginDisabled(watch_busy);
-                if (ImGui::SmallButton("Remove")) remove_id = entry.id;
+                if (ImGui::SmallButton(
+                        ui::UiLabel("Remove", "Remove").c_str())) {
+                    remove_id = entry.id;
+                }
                 ImGui::EndDisabled();
                 ImGui::PopID();
             }
@@ -1054,7 +1116,8 @@ void ProcessScannerPanel::DrawWatchList() {
                 if (selected_watch_id_ == remove_id) selected_watch_id_ = 0;
                 PublishAllWatches();
             }
-            SetStatus(removed, "Address removed from the watch list.");
+            SetStatus(
+                removed, ui::UiText("Address removed from the watch list."));
         } else if (freeze_change.has_value()) {
             const auto result = [&]() -> Result<void> {
                 if (!freeze_change->second) {
@@ -1081,36 +1144,45 @@ void ProcessScannerPanel::DrawWatchList() {
             SetStatus(
                 result,
                 freeze_change->second
-                    ? "Address frozen."
-                    : "Address unfrozen.");
+                    ? ui::UiText("Address frozen.")
+                    : ui::UiText("Address unfrozen."));
         }
         ImGui::EndTable();
     }
 
     if (selected_watch_id_ != 0) {
         ImGui::SetNextItemWidth(300.0F);
-        ImGui::InputText("New Value", watch_value_.data(), watch_value_.size());
+        ImGui::InputText(
+            ui::UiLabel("New Value", "New Value").c_str(),
+            watch_value_.data(), watch_value_.size());
         ImGui::SameLine();
         if (!memory_->WritesArmed() || watch_busy) ImGui::BeginDisabled();
-        if (ImGui::Button("Write & Verify")) {
+        if (ImGui::Button(
+                ui::UiLabel("Write & Verify", "Write & Verify").c_str())) {
             const auto result = watches_->WriteValue(selected_watch_id_, watch_value_.data());
             write_authorization_active_ = false;
             if (result) PublishAllWatches();
-            SetStatus(result, "Process value written and verified.");
+            SetStatus(
+                result, ui::UiText("Process value written and verified."));
         }
         if (!memory_->WritesArmed() || watch_busy) ImGui::EndDisabled();
     }
 }
 
 void ProcessScannerPanel::DrawWriteGateModal() {
+    const auto popup_label = ui::UiLabel(
+        "Arm Process Writes", "Arm Process Writes##KDBG");
     if (ImGui::BeginPopupModal(
-            "Arm Process Writes##KDBG", nullptr,
+            popup_label.c_str(), nullptr,
             ImGuiWindowFlags_AlwaysAutoResize)) {
         ImGui::TextWrapped(
-            "Writes can destabilize the target. Use only in the assignment VM. "
-            "Enter the attached PID (%u) to arm writes.",
+            ui::UiText(
+                "Writes affect the attached process on this Windows instance. "
+                "Enter the attached PID (%u) to arm writes."),
             memory_->ProcessId());
-        ImGui::InputText("PID confirmation", write_confirmation_.data(), write_confirmation_.size());
+        ImGui::InputText(
+            ui::UiLabel("PID confirmation", "PID confirmation").c_str(),
+            write_confirmation_.data(), write_confirmation_.size());
         std::uint32_t confirmed = 0;
         const auto parsed = std::from_chars(
             write_confirmation_.data(),
@@ -1124,9 +1196,9 @@ void ProcessScannerPanel::DrawWriteGateModal() {
             confirmed == memory_->ProcessId();
         const bool arm_blocked = !valid || WatchActionsBusy();
         if (arm_blocked) ImGui::BeginDisabled();
-        if (ImGui::Button("Arm")) {
+        if (ImGui::Button(ui::UiLabel("Arm", "Arm").c_str())) {
             const auto result = memory_->SetWritesArmed(true);
-            SetStatus(result, "Process writes armed.");
+            SetStatus(result, ui::UiText("Process writes armed."));
             if (result) {
                 write_authorization_active_ = true;
                 freeze_fail_closed_status_.clear();
@@ -1135,7 +1207,9 @@ void ProcessScannerPanel::DrawWriteGateModal() {
         }
         if (arm_blocked) ImGui::EndDisabled();
         ImGui::SameLine();
-        if (ImGui::Button("Cancel")) ImGui::CloseCurrentPopup();
+        if (ImGui::Button(ui::UiLabel("Cancel", "Cancel").c_str())) {
+            ImGui::CloseCurrentPopup();
+        }
         ImGui::EndPopup();
     }
 }

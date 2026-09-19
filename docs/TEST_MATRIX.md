@@ -11,7 +11,30 @@ formal review remains `CAPTURED_UNREVIEWED`, `evidence_pass=false`, and
 Production signing and stable release are blocked. DEF CON submission is out of
 scope. Historical rows remain bound only to their named epochs.
 
-| Current 1.1.0 gate | Status | Exact evidence |
+The current product target is the local physical RAM of the bare-metal Windows
+`runtime_host` where KDBG and its driver execute. RawPfn read/write is ordinary
+product scope. `orchestrator_host` is control/evidence only and
+`regression_guest` is the historical VM lane; no row below may be promoted or
+renamed across those roles.
+
+## Current working-tree gates
+
+| Gate | Status | Exact evidence/boundary |
+|---|---|---|
+| Source-complete | PASS | current ABI 7 backend/driver source, RawPfn page transaction, GUI target-kind flow, LocalHost profile, live-verifier v2 and bare-metal producer contracts pass deterministic source/portable validation |
+| Windows-build-verified | NOT VERIFIED / BLOCKED | current user-mode build evidence does not establish the driver/package gate; this environment cannot build the current drivers because the required WDK toolset is unavailable (`MSB8020`) |
+| Regression-guest | NOT RUN | no current-working-tree guest package/run is bound; historical RC4/RC1 VM rows below remain immutable |
+| Bare-metal runtime-host read-only | NOT RUN | no current source-bound LocalHost lifecycle/ABI/exact Raw PFN read artifact from a named `runtime_host` |
+| Bare-metal runtime-host Probe write | NOT RUN | no current `kdbg.live-verify.v2` apply/read-back/reload/rollback artifact or `kdbg.win11-baremetal-validation.v1` bundle |
+| Bare-metal RawPfn | NOT RUN | product source/portable implementation is PASS, but no current source-bound bare-metal RawPfn live transaction was executed |
+
+Machine/boot/session values are optional automatically collected provenance.
+Their absence is not a LocalHost RawPfn product blocker. ProbeFixture is the
+deterministic write-evidence target and does not restrict ordinary RawPfn use.
+
+## Historical RC4 gates (not rebound)
+
+| Historical RC4 gate | Status | Exact evidence |
 |---|---|---|
 | Source | PASS | source `966c51f26c9e4da27491a4c00b8989c0eb8360ea3b85d8e9513adf1915ee0f92`; scope `bd2c93dad7604e84534515a00437e8198fa565a654fa665b6cbf235585b98932`; core CTest 9/9; source validator PASS |
 | Windows build/package | PASS | main `4dd98b120a725d1804078a394c4d659cdb059a568a38a78643a936ce5f1f34d9`; symbols `1f042e5e7a51cb1e2428b6ddb3c955c277de4993a264444e242fe469d104ac68`; benchmark `7999ed886e5b8710f48cd8d08405e6aa8d52608cc4672b0980b7c696fcdef63f` |
@@ -23,17 +46,17 @@ scope. Historical rows remain bound only to their named epochs.
 | Presentation public-v4 MP4 | PASS (automatic + independent presentation review) | `43eda62e57607d36517c4bf139094cae8ef786dd7a8e0ea688154f3787475260`; 9,553,416 bytes; 1920x1080/10 fps/405 frames/40.5 s; 20 scenes/24 segments/19 boundaries reviewed; no rendered path/username/taskbar/notification/unrelated process; raw frames excluded; no formal promotion |
 | Production signing | BLOCKED | 11 inputs staged, request `3f94c260…4001`; not signed/not submitted; signer/HSM/TSA absent |
 
-| Area | Portable | Windows build | Live VM |
-|---|---|---|---|
-| PFN/range/page walk | deterministic unit tests | backend compile/link | Probe PFN/PA match |
-| Physical transaction | mock conflict/short I/O/read-back/rollback | GUI/driver ABI | write/reload/rollback |
-| Process scanner/address list | fixture tests | Win32 integration | fixture process |
-| Pointer/disassembly/snapshot | deterministic fixtures | Zydis/GUI build | visible workflow |
-| PFN ownership/PTView | synthetic mapper | bridge/provider build | PID/VA/PTE and final PA |
-| Package | source contract | PE/PDB GUID+age, INF/CAT, provenance/hash/SBOM validator | install/diagnose/remove |
-| Native Setup | plan/quoting/marker tests | `KDBGSetup.exe` MSVC/MinGW build, PE/PDB/package binding | clean install/repair/update/uninstall/reboot inventory |
-| Runtime telemetry | deterministic bounded/privacy tests | MSVC GUI hook and JSON writer | scan region/byte/I/O/cancel plus GUI frame-stall raw JSON |
-| Evidence | schema and scene-review negative tests | artifact/MP4/report hash binding | video/log/redaction, 20-scene capture and required human visual review |
+| Area | Portable | Windows build | Regression guest | Bare-metal `runtime_host` |
+|---|---|---|---|---|
+| PFN/range/page walk | deterministic unit tests | backend/driver compile-link | Probe PFN/PA regression | local RAM Raw PFN exact read |
+| Physical transaction | compare/conflict/short I/O/read-back/rollback | GUI/ABI 7 driver | guest Probe regression | LocalHost Probe evidence and ordinary RawPfn transaction |
+| Process scanner/address list | fixture tests | Win32 integration | fixture process | process/VA ownership evidence |
+| Pointer/disassembly/snapshot | deterministic fixtures | Zydis/GUI build | visible workflow | visible workflow on the named runtime host |
+| PFN ownership/PTView | synthetic mapper | bridge/provider build | PID/VA/PTE and final PA | runtime-host PID/VA ownership and page-table walk |
+| Package | source contract | PE/PDB GUID+age, INF/CAT, provenance/hash/SBOM validator | install/diagnose/remove | `TargetProfile LocalHost` lifecycle and cleanup |
+| Native Setup | plan/quoting/marker tests | `KDBGSetup.exe` MSVC/MinGW build, PE/PDB/package binding | guest lifecycle | LocalHost install/start/run/uninstall |
+| Runtime telemetry | deterministic bounded/privacy tests | MSVC GUI hook and JSON writer | guest raw JSON | runtime-host raw JSON with private paths excluded |
+| Evidence | schema and negative tests | artifact/report hash binding | immutable guest archive | live-verify v2 plus bare-metal validation v1 bundle |
 
 PASS must include command output and artifacts from the corresponding column.
 Portable results never promote the Windows or live columns.

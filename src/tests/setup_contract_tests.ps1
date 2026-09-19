@@ -25,15 +25,34 @@ Assert-Equal "KDBG" $Contract.InstallParentLeaf "install parent mismatch"
 Assert-Equal "Product" $Contract.InstallLeaf "stable install leaf mismatch"
 Assert-Equal 4 @($Contract.Actions).Count "action count mismatch"
 
+$Policy = Get-Content -LiteralPath (
+    Join-Path $PSScriptRoot "..\config\safety_policy.example.json") -Raw |
+    ConvertFrom-Json
+Assert-True (-not $Policy.environment.dedicated_vm_required) `
+    "packaged policy must not require a dedicated VM"
+Assert-True (-not $Policy.environment.restorable_snapshot_required) `
+    "packaged policy must not require a restorable snapshot"
+
+$LiveEvidenceExample = Get-Content -LiteralPath (
+    Join-Path $PSScriptRoot "..\tools\live-evidence.example.json") -Raw |
+    ConvertFrom-Json
+Assert-Equal 7 $LiveEvidenceExample.abi_version `
+    "current live-evidence template ABI mismatch"
+
 foreach ($Action in @("Install", "Repair", "Update")) {
     $Plan = Get-KdbgSetupPlan -Action $Action
     Assert-Equal $Action $Plan.Action "action mismatch"
     Assert-True $Plan.MutatesDriverServicesOnlyThroughPackageLifecycle `
         "driver lifecycle delegation must remain explicit"
-    Assert-True $Plan.RequiresDedicatedVmConfirmation `
-        "dedicated VM confirmation missing"
-    Assert-True $Plan.RequiresSnapshotConfirmation `
-        "snapshot confirmation missing"
+    Assert-True (-not $Plan.RequiresDedicatedVmConfirmation) `
+        "ordinary setup must not require dedicated VM confirmation"
+    Assert-True (-not $Plan.RequiresSnapshotConfirmation) `
+        "ordinary setup must not require snapshot confirmation"
+    Assert-Equal "DisposableVm,LocalHost" `
+        (@($Plan.SupportedTargetProfiles) -join ",") `
+        "setup target profiles mismatch"
+    Assert-Equal "LocalHost" $Plan.DefaultTargetProfile `
+        "LocalHost must be the ordinary setup target"
     Assert-Equal `
         "VerifySourcePackage,StagePackage,VerifyStagedPackage,CommitPackage,InstallOrRepairDriverPair,RegisterProduct" `
         (@($Plan.Phases) -join ",") "install-family phase order mismatch"
@@ -88,6 +107,7 @@ $SetupScript = Get-Content -LiteralPath (
     Join-Path $PSScriptRoot "..\tools\setup\setup.ps1") -Raw
 foreach ($Token in @(
         "RequireTrustedDriverSignatures", "tools\install.ps1",
+        "TargetProfile", "LocalHost", "tools\TargetProfile.psm1",
         "tools\uninstall.ps1", "UninstallString", "WScript.Shell",
         "Prepare-ExactPackagePurge", "Commit-ExactPackagePurge",
         "Assert-NoReparsePoints",
@@ -108,6 +128,10 @@ Assert-True (-not $SetupUi.Contains("exact signed package") -and
 Assert-True ($SetupUi.Contains("package purge remains pending") -and
     $SetupUi.Contains("publisher signing is a separate release gate")) `
     "Setup UI must distinguish pending purge and user-mode signing gates"
+Assert-True ($SetupUi.Contains('L"DisposableVm"') -and
+    $SetupUi.Contains('L"LocalHost"') -and
+    $SetupUi.Contains('L" -TargetProfile "')) `
+    "Setup UI must forward the explicitly selected target profile"
 foreach ($State in @('"ready"', '"scheduled"', '"waiting"', '"purging"', '"succeeded"', '"failed"', '"cancelled"')) {
     Assert-True $SetupScript.Contains($State) `
         "persistent purge contract lacks state $State"

@@ -90,6 +90,14 @@ kdbg_enable_sanitizers(kdbg_app_telemetry)
 kdbg_enable_msvc_analysis(kdbg_app_telemetry)
 kdbg_enable_release_symbols(kdbg_app_telemetry)
 
+add_library(kdbg_app_localization
+    app/ui/Localization.cpp)
+target_include_directories(kdbg_app_localization PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+kdbg_set_project_warnings(kdbg_app_localization)
+kdbg_enable_sanitizers(kdbg_app_localization)
+kdbg_enable_msvc_analysis(kdbg_app_localization)
+kdbg_enable_release_symbols(kdbg_app_localization)
+
 if(KDBG_BUILD_LIVE_VERIFY OR KDBG_BUILD_TESTS)
     add_library(kdbg_live_verify_core
         tools/live_verify/LiveVerify.cpp)
@@ -218,6 +226,7 @@ if(KDBG_BUILD_GUI)
     )
     target_link_libraries(KDBG PRIVATE
         kdbg_core
+        kdbg_app_localization
         kdbg_app_telemetry
         kdbg_windows
         kdbg_imgui

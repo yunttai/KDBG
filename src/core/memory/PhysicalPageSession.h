@@ -3,6 +3,7 @@
 #include "core/common/Result.h"
 #include "core/memory/IMemoryBackend.h"
 #include "core/model/PhysicalPage.h"
+#include "core/model/PhysicalWriteTarget.h"
 #include "core/model/WriteDiff.h"
 #include "core/pfn/PfnAddress.h"
 
@@ -52,7 +53,11 @@ public:
     static constexpr std::size_t kMaxEditHistory = 4096U;
 
     Result<void> Load(IMemoryBackend& backend, const PfnAddress& address);
+    Result<void> Load(
+        IMemoryBackend& backend,
+        const PhysicalWriteTarget& target);
     Result<void> ReloadPreservingRollback(IMemoryBackend& backend);
+    void Invalidate() noexcept;
 
     Result<void> EditByte(std::size_t offset, std::uint8_t value);
     Result<void> RevertByte(std::size_t offset);
@@ -71,6 +76,7 @@ public:
     [[nodiscard]] std::size_t DirtyCount() const noexcept;
     [[nodiscard]] bool WriteUnlocked() const noexcept;
     [[nodiscard]] bool CanRollback() const noexcept;
+    [[nodiscard]] bool RecoveryObservationRequired() const noexcept;
     [[nodiscard]] bool LastApplyVerified() const noexcept;
     [[nodiscard]] bool CanUndo() const noexcept;
     [[nodiscard]] bool CanRedo() const noexcept;
@@ -79,6 +85,7 @@ public:
     [[nodiscard]] std::uint64_t Revision() const noexcept;
 
     [[nodiscard]] const PfnAddress& Address() const;
+    [[nodiscard]] const PhysicalWriteTarget& Target() const;
     [[nodiscard]] const std::array<std::uint8_t, kPhysicalPageSize>&
     Baseline() const noexcept;
     [[nodiscard]] const std::array<std::uint8_t, kPhysicalPageSize>&
@@ -114,13 +121,12 @@ private:
     void RecomputeDirty() noexcept;
     void LockWrite() noexcept;
 
-    std::optional<PfnAddress> address_;
+    std::optional<PhysicalWriteTarget> target_;
     std::array<std::uint8_t, kPhysicalPageSize> baseline_{};
     std::array<std::uint8_t, kPhysicalPageSize> working_{};
     std::optional<std::array<std::uint8_t, kPhysicalPageSize>> rollback_snapshot_;
     std::optional<std::array<std::uint8_t, kPhysicalPageSize>> rollback_expected_;
     PhysicalPageEvidence evidence_{};
-    bool rollback_allows_partial_{false};
     std::bitset<kPhysicalPageSize> dirty_{};
     std::vector<std::size_t> last_conflicts_;
     std::vector<std::size_t> last_mismatches_;
@@ -128,6 +134,8 @@ private:
     std::deque<ByteEdit> redo_stack_;
     PageSessionState state_{PageSessionState::Empty};
     bool write_unlocked_{false};
+    bool last_apply_verified_{false};
+    bool recovery_observation_required_{false};
     std::uint64_t revision_{0};
 };
 

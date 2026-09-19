@@ -4,6 +4,19 @@ Status date: 2026-09-19 KST. A gate is PASS only when the current workspace has
 the command result and required artifact. Historical or external results do not
 promote the current gate.
 
+## Current working-tree boundary
+
+The current product target is `LocalHost` RawPfn editing of the same bare-metal
+Windows `runtime_host` that runs KDBG and its driver. Source/portable validation
+is PASS (`verify_layout.py`, core build, CTest 11/11, release-validator tests
+88/88, and `validate_release.py --source-complete`). The current ABI 7 WDK
+driver build is BLOCKED / NOT VERIFIED on this machine because the required WDK
+toolset is unavailable (`MSB8020`). Same-host read-only, Probe-write, and RawPfn
+live-write evidence are all NOT RUN. No actual host physical write is claimed.
+
+The RC4 table and artifacts below are historical records bound to their exact
+source/package identities; they do not override this working-tree boundary.
+
 Epoch boundary: 1.1.0 is the current release target on branch
 `feature/kdbg-1.1.0`; the RC4 product-source commit is
 `4b376bb0d61eab232af8a2f7f29033238b911022`. The unsigned build epoch is
@@ -23,7 +36,7 @@ epochs and do not promote a 1.1.0 gate.
 | Source freeze | annotated RC tag bound to exact source commit | **PASS (PUBLISHED RC TAG)** — `v1.1.0-rc4` is published to `origin` at `4b376bb0d61eab232af8a2f7f29033238b911022` |
 | Production signing/release | trusted returned artifacts and stable tag/release | **BLOCKED** — staged inputs only; no production signer/HSM/TSA, returned signed artifacts, stable `v1.1.0`, or public release |
 
-## Current 1.1.0 exact evidence
+## Historical RC4 exact evidence
 
 - Unsigned main ZIP SHA-256:
   `4dd98b120a725d1804078a394c4d659cdb059a568a38a78643a936ce5f1f34d9`.

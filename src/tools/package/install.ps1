@@ -3,20 +3,32 @@ param(
     [switch]$Start,
     [switch]$ConfirmDedicatedVm,
     [switch]$ConfirmSnapshot,
+    [ValidateSet("DisposableVm", "LocalHost")]
+    [string]$TargetProfile,
     [ValidateSet("DistributionSource", "InstalledProduct")]
     [string]$PackageRootMode = "DistributionSource"
 )
 
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
+$ResolvedTargetProfile = if ([string]::IsNullOrWhiteSpace($TargetProfile)) {
+    if ($ConfirmDedicatedVm -and $ConfirmSnapshot) { "DisposableVm" }
+    else { "LocalHost" }
+} else { $TargetProfile }
 
-if (-not $ConfirmDedicatedVm -or -not $ConfirmSnapshot) {
+if ($ResolvedTargetProfile -eq "DisposableVm" -and
+    (-not $ConfirmDedicatedVm -or -not $ConfirmSnapshot)) {
     throw "Installation requires -ConfirmDedicatedVm and -ConfirmSnapshot."
 }
+Import-Module (Join-Path $PSScriptRoot "TargetProfile.psm1") -Force
+$null = Assert-KdbgTargetProfile `
+    -TargetProfile $ResolvedTargetProfile `
+    -ConfirmDedicatedVm:$ConfirmDedicatedVm `
+    -ConfirmSnapshot:$ConfirmSnapshot
 $Identity = [Security.Principal.WindowsIdentity]::GetCurrent()
 $Principal = [Security.Principal.WindowsPrincipal]::new($Identity)
 if (-not $Principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-    throw "Run PowerShell as Administrator in a disposable snapshot VM."
+    throw "Run PowerShell as Administrator on the selected target."
 }
 
 $PackageRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot ".."))
@@ -331,6 +343,7 @@ try {
             }
             "ReloadPair" {
                 & (Join-Path $PSScriptRoot "start.ps1") `
+                    -TargetProfile $ResolvedTargetProfile `
                     -ConfirmDedicatedVm:$ConfirmDedicatedVm `
                     -ConfirmSnapshot:$ConfirmSnapshot `
                     -PackageRootMode $PackageRootMode
@@ -407,8 +420,10 @@ try {
     throw $InstallFailure
 }
 if ($ReloadPair) {
-    Write-Host "KDBG services were stopped as a pair, rebound, reloaded, and verified against this package. Driver SYS/CAT trust is valid on this guest."
+    $RuntimeLabel = if ($ResolvedTargetProfile -eq "DisposableVm") { "guest" } else { "local host" }
+    Write-Host "KDBG services were stopped as a pair, rebound, reloaded, and verified against this package. Driver SYS/CAT trust is valid on this $RuntimeLabel."
 } else {
-    Write-Host "KDBG services were confirmed stopped/absent as a pair and bound to this package. Driver SYS/CAT trust is valid on this guest."
+    $RuntimeLabel = if ($ResolvedTargetProfile -eq "DisposableVm") { "guest" } else { "local host" }
+    Write-Host "KDBG services were confirmed stopped/absent as a pair and bound to this package. Driver SYS/CAT trust is valid on this $RuntimeLabel."
 }
 exit 0

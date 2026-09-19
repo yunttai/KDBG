@@ -4,6 +4,89 @@
 
 ## 결론
 
+현재 제품 목표는 `KDBG.exe`와 `KDbgDriver.sys`가 실행되는 동일 bare-metal
+Windows `runtime_host`의 local system physical RAM을 Raw PFN으로 읽고 편집하는
+것이다. `orchestrator_host`는 lifecycle/evidence controller이고 Hyper-V
+`regression_guest`는 별도 회귀 lane이다. RawPfn은 일반 제품 범위이며
+ProbeFixture는 자동 destructive evidence target일 뿐이다.
+
+현재 working tree는 이 target을 제품 동작과 검증 도구에 반영했다. ABI 7의
+exact 4 KiB compare/write/read-back transaction, RawPfn page session, LocalHost
+target profile, GUI target provenance와 bare-metal evidence harness가 구현돼 있다.
+다만 이것은 source/portable 완료 판정이며 실제 runtime-host write 성공 판정은
+아니다. 기존 RC4/RC1 VM evidence와 hash/status는 historical identity에 그대로
+결속되며 bare-metal PASS로 재표기하거나 승격하지 않는다.
+
+| Bare-metal runtime-host gate | 현재 상태 / blocker |
+|---|---|
+| Target terminology/contract | SOURCE COMPLETE — `runtime_host`, `orchestrator_host`, `regression_guest` roles aligned |
+| RawPfn core/driver primitive | SOURCE COMPLETE — ABI 7 exact 4096-byte compare/write/read-back implemented |
+| Target-kind UI + optional automatic provenance | SOURCE COMPLETE — LocalHost RawPfn is a normal product path; automatically available provenance is evidence metadata only |
+| Bare-metal lifecycle profile | SOURCE COMPLETE — `TargetProfile LocalHost|DisposableVm`; ordinary install/start/run defaults to `LocalHost` |
+| Windows WDK driver build | BLOCKED / NOT VERIFIED — this host lacks the required WDK toolset; MSBuild reports `MSB8020` |
+| Bare-metal read-only evidence | NOT RUN — no same-host runtime evidence was produced in this epoch |
+| Bare-metal Probe-write evidence | NOT RUN — harness/validator source exists, but no same-host transaction was executed |
+| Bare-metal RawPfn live-write evidence | NOT RUN — no actual runtime-host PFN write is claimed |
+| Historical regression_guest evidence | PRESERVED; no promotion |
+
+Latest working-tree integration check for this target-alignment epoch:
+
+- `python .\src\tools\verify_layout.py`: PASS
+- `cmake --preset core-debug` and `cmake --build --preset core-debug --parallel`:
+  PASS using the existing Visual Studio bundled CMake/WinLibs toolchain
+- `ctest --preset core-debug --output-on-failure`: **11/11 PASS**
+- `python -m unittest src.tests.test_validate_release`: **88/88 PASS**
+- `python .\src\tools\validate_release.py --source-complete`: PASS
+- WDK driver build: **BLOCKED / NOT VERIFIED** (`MSB8020`; required toolset is
+  unavailable on this host)
+- bare-metal runtime-host read-only, Probe-write and RawPfn live-write gates:
+  **NOT RUN**
+
+따라서 현재 working tree의 source/portable gate는 PASS다. Windows WDK build와
+세 bare-metal live gate는 독립적으로 미완료이며, source PASS가 이를 승격하지
+않는다.
+
+PRD section 3의 bypass/BYOVD/stealth 등 목록은 현재 AGENTS/agent/skill 계약과
+충돌하는 `UNRESOLVED` 항목이다. 이번 runtime-host 정렬은 이를 구현하거나 완료한
+것으로 해석하지 않는다.
+
+현재 working tree는 RC4 product-source commit
+`4b376bb0d61eab232af8a2f7f29033238b911022` 이후의 runtime English/한국어
+UI를 구현 중이다. 단일 executable, compiled-in catalog, English 기본,
+항상 보이는 상위 `Language / 언어` selector, stable ImGui `###` IDs, Windows Korean system-font discovery와
+English fallback, `[KDBG][Preferences]` persistence가 현재 source 범위다.
+
+기존 RC4 package, Windows build, required-core, GUI capture 및 public-v4 결과는
+모두 정확한 RC4 source에만 결속된 historical evidence다. Post-RC4
+source에 대한 source/portable 테스트와 MSVC `/utf-8` Windows GUI build
+evidence는 새로 기록됐다. 실제 locale/font/persistence runtime, live-VM 및
+human visual validation은 신규 PASS로 표시하지 않는다. 언어 전환은 write gate,
+confirmation, dirty/history, target, worker 및 backend state에 영향을 주지
+않아야 하며 이 회귀 근거도 아직 신규 gate 대상이다.
+
+| Post-RC4 bilingual UI gate | 현재 상태 |
+|---|---|
+| Source/portable | PASS — `verify_layout.py`, `core-debug` configure/build, CTest 9/9 |
+| Deterministic localization tests | PASS in core-debug, windows-debug, and windows-release CTest 9/9 suites |
+| MSVC `/utf-8` single-executable GUI build | PASS — Debug and Release GUI link complete |
+| Windows localization launch/INI persistence | NON-VISUAL PASS — isolated `LOCALAPPDATA`; English `en-US` and fixed Korean preset `ko-KR` retained across 8-second launches |
+| Korean glyph appearance/clipping | NOT RUN; `malgun.ttf` presence alone is not visual evidence |
+| Interactive selector/write-state preservation | NOT RUN |
+| Safety/write-state non-interference | REGRESSION EVIDENCE PENDING; actual GUI runtime check NOT RUN |
+| Live-VM / human visual review | NOT RUN; no PASS claim |
+
+The artifact path `out/localization-host-smoke-persistence` retains its
+historical name. This is a Windows localization launch smoke, not a bare-metal
+physical-memory runtime-host gate. The
+English-default launch stayed alive for 8 seconds and wrote
+`[KDBG][Preferences] Language=en-US`. After setting a fixed test INI to `ko-KR`,
+the Korean-preset launch stayed alive for 8 seconds with
+`C:\Windows\Fonts\malgun.ttf` present and retained `Language=ko-KR`. This PASS
+is limited to non-visual host launch and persistence; it does not promote the
+selector, glyph/clipping, state-preservation, VM/live, or human-review gates.
+
+## Historical RC4 baseline
+
 `feature/kdbg-1.1.0`의 RC4 source/build/package와 Windows 11 required-core는
 검증됐다. 공식 GUI run도 host/capture/integrity 자동 검증을 통과했지만 사람 검토
 승격은 아직 없으므로 상태는 반드시 `CAPTURED_UNREVIEWED`,
@@ -15,7 +98,7 @@ RC4 optional extended/lifecycle/soak는 실행하지 않았다. RC1에서 수행
 수행하지 않았다. 따라서 안정 태그와 공개 release는 차단 상태다. DEF CON 제출은
 이번 작업 범위에서 명시적으로 제외한다.
 
-## RC4 identity
+## Historical RC4 identity
 
 | 항목 | 값 |
 |---|---|
@@ -28,7 +111,7 @@ RC4 optional extended/lifecycle/soak는 실행하지 않았다. RC1에서 수행
 | VM-only derivative | `product-1.1.0-rc4-test1-20260919` |
 | VM-only package SHA-256 | `7f7c179738eb670ca79d6c41bc9c46c445c1ffd31811c46f39bbbdcad3df45d5` |
 
-## Gate 현황
+## Historical RC4 gate 현황
 
 | Gate | RC4 상태 | 근거/경계 |
 |---|---|---|
@@ -44,7 +127,12 @@ RC4 optional extended/lifecycle/soak는 실행하지 않았다. RC1에서 수행
 | Source-freeze tag | PASS (published RC tag) | annotated `v1.1.0-rc4` on `origin` at `4b376bb0d61eab232af8a2f7f29033238b911022` |
 | Stable `v1.1.0` / public release | BLOCKED | production-signed 반환물과 timestamp 부재 |
 
-## Windows 11 RC4 증거
+`GUI host/capture/integrity`와 historical `host summary`에서 `host`는 기존
+하네스의 orchestrator-side execution/capture 명칭이다. 이 문자열과 hash는
+historical artifact identity를 보존하기 위해 바꾸지 않으며, bare-metal
+`runtime_host` physical-memory evidence를 뜻하지 않는다.
+
+## Historical Windows 11 RC4 증거
 
 ### Required-core
 
@@ -87,7 +175,7 @@ RC4 optional extended/lifecycle/soak는 실행하지 않았다. RC1에서 수행
   delivery directory에는 MP4만 있다. Raw frames는 공개 배포에서 제외한다.
 - 이 영상은 presentation-only이며 공식 GUI evidence 상태를 변경하지 않는다.
 
-## Production signing 및 release 경계
+## Historical RC4 production signing 및 release 경계
 
 - Prepared inputs:
   `out/production-signing/product-1.1.0-rc4-final-20260919-prepared/`
@@ -119,5 +207,8 @@ Pop-Location
 python .\src\tools\validate_release.py --source-complete
 ```
 
-Portable 명령만으로 Windows build나 live VM PASS를 주장하지 않는다. Windows/live
-판정은 위 exact RC4 identity와 evidence에만 결속한다.
+Portable 명령만으로 Windows build나 live VM PASS를 주장하지 않는다. 위
+Windows/live 판정은 historical exact RC4 identity와 evidence에만 결속한다.
+Post-RC4 bilingual UI의 MSVC `/utf-8` GUI build와 비시각적 host launch/INI
+persistence smoke는 기록됐다. 상위 selector 클릭·상태 불변, Korean glyph/
+clipping, VM/live 및 human visual 근거는 아직 필요하다.

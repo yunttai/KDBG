@@ -261,8 +261,10 @@ function Get-KdbgSetupPlan {
         Schema = $script:KdbgSetupContract.Schema
         Action = $Action
         MutatesDriverServicesOnlyThroughPackageLifecycle = $true
-        RequiresDedicatedVmConfirmation = $true
-        RequiresSnapshotConfirmation = $true
+        RequiresDedicatedVmConfirmation = $false
+        RequiresSnapshotConfirmation = $false
+        SupportedTargetProfiles = @("DisposableVm", "LocalHost")
+        DefaultTargetProfile = "LocalHost"
         Phases = $Phases
     }
 }

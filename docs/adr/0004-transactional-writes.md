@@ -17,12 +17,16 @@ Hex editor의 즉시 byte Write는 잘못된 중간값, 경쟁 상태, 부분 Wr
 2. range check
 3. preflight re-read
 4. conflict check
-5. dirty run write
+5. one ABI 7 exact 4 KiB compare/write transaction using expected baseline and desired page
 6. read-back
 7. byte verification
 8. baseline commit 또는 rollback
 
 순서로만 수행한다.
+
+Dirty bitmap/run은 local review와 evidence에만 사용한다. `dirty_bytes`는 local
+edit 수이고 physical driver transfer는 성공 시 항상
+`driver_transferred_bytes=4096`이다.
 
 ## Consequences
 

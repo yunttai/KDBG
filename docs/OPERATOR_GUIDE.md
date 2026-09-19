@@ -2,13 +2,17 @@
 
 ## Preconditions and readiness
 
-- Owned disposable Windows x64 VM and confirmed restorable snapshot
 - Administrator PowerShell and supported test-signing configuration
 - Package ZIP hash verified before extraction
 - `tools/diagnose.ps1 -VerifyPackage -RequireAdministrator` passes
-- KDbgProbe is the default release-validation target. The only additional
-  product target is an exact 4 KiB PFN derived from the current PTView mapping
-  of a dedicated process fixture.
+- Select and record the target role: bare-metal `runtime_host` for the product
+  path, or `regression_guest` plus snapshot identity for the VM regression lane.
+- `orchestrator_host` is lifecycle/evidence control only and is not an implicit
+  memory target. Tools may automatically capture machine/boot/session values as
+  evidence provenance or stale-backend-session diagnostics; operators do not
+  confirm them and their absence does not block LocalHost RawPfn read/write.
+- RawPfn is a normal product target. KDbgProbe is the default automated
+  destructive-evidence target and does not limit RawPfn capability.
 
 After installation, use `-RequireInstalled`; after start, use `-RequireRunning`:
 
@@ -20,24 +24,38 @@ After installation, use `-RequireInstalled`; after start, use `-RequireRunning`:
 Readiness means the packaged files and service registrations passed these
 checks and both device names could be opened (or were exclusively held by the
 single controller). `diagnose.ps1` alone is not an ABI transaction. A successful
-`start.ps1` additionally produces the packaged verifier's read-only ABI 6,
+`start.ps1` additionally produces the packaged verifier's read-only ABI 7,
 runtime identity, exact Probe 4096-byte read, and final-gate-lock report at
 `%LOCALAPPDATA%\KDBG\readiness\start-latest.json`. Neither result is physical-
 write evidence.
 
 ## Lifecycle
 
-The normal product path is the elevated `KDBGSetup.exe` UI. It provides
+The intended normal product path is the elevated `KDBGSetup.exe` UI on the
+bare-metal runtime_host. It provides
 Install/Repair/Update/Uninstall, uses the stable
 `%ProgramFiles%\KDBG\Product` destination, and delegates driver mutations to the
 same transactional package scripts below. Apps & Features and the Start Menu
-point to the installed setup and GUI. The explicit scripts remain the recovery
-and automation interface:
+point to the installed setup and GUI. The explicit script interface selects the
+target profile directly.
+
+`LocalHost` is the product default. The commands below pass it explicitly so
+the evidence log is unambiguous:
 
 ```powershell
-.\tools\install.ps1 -ConfirmDedicatedVm -ConfirmSnapshot
-.\tools\start.ps1 -ConfirmDedicatedVm -ConfirmSnapshot
-.\tools\run.ps1 -ConfirmDedicatedVm -ConfirmSnapshot
+.\tools\install.ps1 -TargetProfile LocalHost
+.\tools\start.ps1 -TargetProfile LocalHost
+.\tools\run.ps1 -TargetProfile LocalHost
+.\tools\stop.ps1
+.\tools\uninstall.ps1 -ConfirmKdbgServices
+```
+
+Separate regression_guest lane:
+
+```powershell
+.\tools\install.ps1 -TargetProfile DisposableVm -ConfirmDedicatedVm -ConfirmSnapshot
+.\tools\start.ps1 -TargetProfile DisposableVm -ConfirmDedicatedVm -ConfirmSnapshot
+.\tools\run.ps1 -TargetProfile DisposableVm -ConfirmDedicatedVm -ConfirmSnapshot
 .\tools\stop.ps1
 .\tools\uninstall.ps1 -ConfirmKdbgServices
 ```
@@ -45,6 +63,11 @@ and automation interface:
 `run.ps1 -StartDrivers` starts an already installed package before launch.
 `-StopDriversOnExit` stops both services after the GUI exits. Start order is
 KDBG then KDBGProbe; stop order is reversed.
+
+`LocalHost` does not require the VM/snapshot switches. `DisposableVm` requires
+both confirmations. Source availability of either profile is not live evidence;
+the corresponding target gate remains unverified until its exact command and
+artifacts are recorded.
 
 `install.ps1` also enforces that stop-before-rebind order itself. A repair or
 update cannot skip the pair stop merely because the registered path already
@@ -73,15 +96,23 @@ registration phase succeeded; package deletion is still pending. Setup prints a
 unarmed helper records `state: cancelled` and preserves Product when setup did
 not finish removing registration and writing the exact commit marker.
 
-## Safe physical transaction
+## Physical transaction
 
-Record Probe PFN, physical address, generation, and CRC32. Read 4096 bytes and
-retain the baseline. For v4 evidence, click `Stage Evidence Probe Pattern`; it XORs
+For a RawPfn product transaction, record target kind, runtime-host identity,
+PFN, physical address and containing local RAM range. Read exactly 4096 bytes
+and retain the baseline. Review local edits, verify the full-page preflight
+still matches, type the same PFN, apply once, require full-page read-back, and
+retain rollback state.
+
+For automated destructive evidence, additionally record Probe PFN, generation,
+and CRC32. For v4 evidence, click `Stage Evidence Probe Pattern`; it XORs
 the shared mask `4B 44 42 47 A5 5A 3C C3` into baseline offsets
 `0x100..0x107` locally and issues no write. Review the one exact dirty run and
 Undo/Redo, verify the preflight still matches the baseline, type the same PFN
-to unlock one write, apply only dirty runs, and require a full-page expected/
-read-back match. Reload independently, query Probe CRC, perform verified
+to unlock one write, then issue one ABI 7 exact-page compare/write transaction.
+The local `dirty_bytes` remains 8 for diff review while
+`driver_transferred_bytes` is 4096. Require a full-page expected/read-back
+match. Reload independently, query Probe CRC, perform verified
 rollback, and check that the gate returned to LOCKED.
 
 ## Update and Migration
@@ -116,15 +147,16 @@ If start or its packaged read-only verifier fails, `start.ps1` stops only the
 services it started in that attempt and retains the failed readiness JSON.
 If update diagnostics fail, stop the services, run the old package installer,
 and verify `-RequireRunning`. If a driver remains
-pending stop/deletion, reboot the disposable guest and retry removal. If page
-read-back or rollback fails, perform no further writes, retain the log, and
-restore the known snapshot.
+pending stop/deletion, reboot the active Windows target and retry removal. If
+page read-back or rollback fails, perform no further writes and retain the log.
+For a regression_guest run, restore the named snapshot.
 
 ## Evidence and privacy
 
 Show only the fixture PID/name/VA. Hide notifications, private paths, unrelated
-processes, usernames, and unrelated memory. The demonstration must show Probe
-PFN discovery, 4096-byte physical read, local hex edit, diff review, typed PFN
+processes, usernames, and unrelated memory. The automated destructive-evidence
+demonstration must show target role and runtime identity, Probe PFN discovery,
+4096-byte physical read, local hex edit, diff review, typed PFN
 unlock, one-shot apply, full read-back match, process/VA ownership evidence, and
 the page-table walk. Keep the six raw page files, successful live-run JSON,
 dedicated fixture `INFO` JSON, process/physical page pair, analysis metadata,

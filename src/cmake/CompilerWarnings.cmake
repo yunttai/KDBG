@@ -4,6 +4,7 @@ function(kdbg_set_project_warnings target)
             /W4
             /permissive-
             /Zc:__cplusplus
+            /utf-8
         )
         if(KDBG_WARNINGS_AS_ERRORS)
             target_compile_options(${target} PRIVATE /WX)

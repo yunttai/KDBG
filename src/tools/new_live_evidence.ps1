@@ -82,7 +82,7 @@ if (-not (Test-Path -LiteralPath $GuiMetadataFull -PathType Leaf) -or
 $Gui = Get-Content -LiteralPath $GuiMetadataFull -Raw | ConvertFrom-Json
 if ($Gui.schema -ne "kdbg-physical-live-evidence-v1" -or
     [UInt32]$Gui.page_size -ne 4096 -or
-    [UInt32]$Gui.driver_abi_version -ne 6 -or
+    [UInt32]$Gui.driver_abi_version -ne 7 -or
     [UInt32]$Gui.edit_offset -ne 0x100 -or
     [UInt32]$Gui.edit_length -ne 8 -or
     [string]$Gui.edit_xor_mask -cne "4b444247a55a3cc3" -or
@@ -100,8 +100,9 @@ if (-not (Test-Path -LiteralPath $AnalysisMetadataFull -PathType Leaf) -or
     throw "AnalysisMetadata must be a sibling file in the evidence output directory."
 }
 $Analysis = Get-Content -LiteralPath $AnalysisMetadataFull -Raw | ConvertFrom-Json
-if ($Analysis.schema -ne "kdbg-analysis-live-evidence-v1") {
-    throw "AnalysisMetadata schema must be kdbg-analysis-live-evidence-v1."
+if ($Analysis.schema -ne "kdbg-analysis-live-evidence-v1" -or
+    [UInt32]$Analysis.driver_abi_version -ne 7) {
+    throw "AnalysisMetadata must use the current ABI 7 analysis evidence contract."
 }
 function Resolve-GuiPage([string]$Name, [string]$Label) {
     if ([string]::IsNullOrWhiteSpace($Name) -or
@@ -162,6 +163,10 @@ if ($LiveRun.schema -ne "kdbg.live-verify.v1" -or
     $LiveRun.mode -ne "probe-write-rollback" -or
     $LiveRun.success -ne $true -or
     $LiveRun.cancelled -ne $false -or
+    [UInt32]$LiveRun.backend.abi_version -ne 7 -or
+    $LiveRun.backend.supports_physical_page_compare_write -ne $true -or
+    [UInt32]$LiveRun.session_after_apply.last_physical_write_transferred -ne 4096 -or
+    [UInt32]$LiveRun.session_final.last_physical_write_transferred -ne 4096 -or
     $LiveRun.write_cleanup.rollback_verified -ne $true -or
     $LiveRun.write_cleanup.final_gate_locked -ne $true) {
     throw "LiveRunReport is not a successful Probe write/read-back/rollback run."
@@ -391,7 +396,7 @@ $Evidence = [ordered]@{
     timestamp_utc = [DateTime]::UtcNow.ToString("o")
     os_build = $OsBuild
     package_version = "1.1.0"
-    abi_version = 6
+    abi_version = 7
     pfn = "0x$($PfnValue.ToString('x'))"
     physical_address = "0x$($PhysicalAddress.ToString('x'))"
     page_size = 4096

@@ -55,7 +55,12 @@ class GuiDemoManifestTests(unittest.TestCase):
         )
         return stream.getvalue()
 
-    def _write_fixture(self, *, extra_entry: tuple[str, bytes] | None = None) -> None:
+    def _write_fixture(
+        self,
+        *,
+        extra_entry: tuple[str, bytes] | None = None,
+        abi_version: int = 6,
+    ) -> None:
         captures: list[dict[str, object]] = []
         images: dict[str, bytes] = {}
         for index, (step_id, scene_id) in enumerate(build_gui_demo_manifest.EXPECTED, 1):
@@ -113,12 +118,23 @@ class GuiDemoManifestTests(unittest.TestCase):
             "success": True,
             "services": [{"name": "KDBG", "status": "Running"}, {"name": "KDBGProbe", "status": "Running"}],
             "verifier": {"exit_code": 0, "exited_before_gui": True},
-            "backend": {"connected": True, "abi_version": 6, "gate_locked": True},
+            "backend": {
+                "connected": True,
+                "abi_version": abi_version,
+                "gate_locked": True,
+                **({"supports_physical_page_compare_write": True}
+                   if abi_version == 7 else {}),
+            },
         }
         probe = {
             "schema": "kdbg.live-verify.v1",
             "success": True,
-            "backend": {"connected": True, "abi_version": 6},
+            "backend": {
+                "connected": True,
+                "abi_version": abi_version,
+                **({"supports_physical_page_compare_write": True}
+                   if abi_version == 7 else {}),
+            },
             "write_cleanup": {"final_gate_locked": True},
         }
         guest_entries = {
@@ -191,6 +207,15 @@ class GuiDemoManifestTests(unittest.TestCase):
         self.assertEqual(report["verification"]["frame_count"]["decoded"], 24)
         self.assertEqual(report["evidence_binding"]["artifacts"]["package_sha256"], self.package_sha)
         self.assertFalse(report["review"]["human_review_complete"])
+
+    def test_accepts_current_abi7_capture_contract(self) -> None:
+        self._write_fixture(abi_version=7)
+        raw = build_gui_demo_manifest.build_manifest(
+            self.run,
+            self.root / "abi7" / "scenes.json",
+            self.root / "abi7" / "frames",
+        )
+        self.assertEqual(len(raw["scenes"]), 20)
 
     def test_rejects_capture_hash_mismatch(self) -> None:
         archive_path = self.run / "guest-evidence.zip"

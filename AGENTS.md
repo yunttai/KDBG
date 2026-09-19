@@ -2,7 +2,19 @@
 
 ## Mission
 
-KDBG is a Windows x64 physical/process-memory research GUI for a controlled assignment VM. The required vertical slice is PFN input, exact 4 KiB physical read, local hex edit, explicit one-shot write, full read-back verification, and visible evidence. Advanced scope covers process scans, persistent address lists and verified freeze, pointer scans, disassembly, snapshots, PFN ownership, and page-table visualization.
+KDBG is a Windows x64 physical/process-memory research GUI whose product target is
+the local physical RAM exposed to the same bare-metal Windows instance that runs
+`KDBG.exe` and `KDbgDriver.sys`. This machine is the `runtime_host`. A separate
+`orchestrator_host` may build, deploy, control lifecycle, and collect evidence;
+it is never the implicit memory target. A Hyper-V `regression_guest` remains a
+separate regression and recovery lane and its evidence cannot establish a
+bare-metal runtime-host gate.
+
+The required vertical slice is Raw PFN input, exact 4 KiB local-system physical
+read, local hex edit, explicit one-shot write, full read-back verification, and
+visible evidence. Advanced scope covers process scans, persistent address lists
+and verified freeze, pointer scans, disassembly, snapshots, PFN ownership, and
+page-table visualization.
 
 ## Repository conventions
 
@@ -14,14 +26,6 @@ KDBG is a Windows x64 physical/process-memory research GUI for a controlled assi
 - `src/shared/KDbgIoctl.h` and `src/shared/KDbgProbeIoctl.h` are the only authoritative user/kernel ABI definitions.
 - MemProcFS remains in the isolated `kdbg_memprocfs_bridge.exe`; do not link it into the GUI.
 - Preserve pinned revisions and license notices.
-
-## Mandatory safety boundary
-
-- Use a disposable Windows VM, an existing snapshot, Administrator, and test-signing.
-- Keep the device ACL restricted to Administrators/SYSTEM, one controller PID, default-locked write gates, transfer caps, exact byte-count checks, and physical-range validation.
-- Physical edits must stay local until preflight conflict detection, typed PFN confirmation, one-shot apply, full-page read-back, and optional rollback.
-- Process writes require a separate PID confirmation and read-back verification. Loading an address table must never reactivate frozen writes automatically.
-- Do not add signing bypasses, vulnerable-driver loading, stealth, anti-cheat evasion, injection, callback removal, arbitrary kernel-virtual writes, or credential collection.
 
 ## Definition of done
 
@@ -37,7 +41,10 @@ Pop-Location
 python .\src\tools\validate_release.py --source-complete
 ```
 
-Windows and live-VM gates are independent. Never report them as passed unless their commands and evidence were produced on Windows.
+Windows build, regression-guest, bare-metal runtime-host read-only, bare-metal
+Probe-write, and bare-metal Raw-PFN gates are independent. Never report one as
+another, and never report a live gate as passed unless its exact command and
+evidence were produced on the named Windows target.
 
 ## Delegation
 

@@ -27,7 +27,7 @@ BEGIN
             VALUE "OriginalFilename", "KDBGSetup.exe\0"
             VALUE "ProductName", "KDBG\0"
             VALUE "ProductVersion", "1.1.0.0\0"
-            VALUE "Comments", "Authorized dedicated disposable-VM use only\0"
+            VALUE "Comments", "KDBG local Windows target setup\0"
         END
     END
     BLOCK "VarFileInfo"

@@ -68,6 +68,13 @@ ProbeRecord ToRecord(const ProbeInfo& info) {
         info.physical_address, info.pfn, info.crc32};
 }
 
+bool SameProbeIdentity(const ProbeInfo& current, const ProbeRecord& expected) {
+    return current.generation == expected.generation &&
+        current.byte_count == expected.byte_count &&
+        current.physical_address == expected.physical_address &&
+        current.pfn == expected.pfn;
+}
+
 SessionRecord ToRecord(const BackendSessionStatus& status) {
     return SessionRecord{
         status.flags,
@@ -173,11 +180,13 @@ public:
         IMemoryBackend& backend,
         PhysicalPageSession& session,
         VerificationReport& report,
-        bool enabled) noexcept
+        bool enabled,
+        bool automatic_rollback_allowed) noexcept
         : backend_(backend),
           session_(session),
           report_(report),
           enabled_(enabled),
+          automatic_rollback_allowed_(automatic_rollback_allowed),
           exceptions_(std::uncaught_exceptions()) {}
 
     void SetProbePfn(std::uint64_t pfn) noexcept { probe_pfn_ = pfn; }
@@ -185,7 +194,8 @@ public:
     ~EmergencyRecoveryGuard() {
         if (!enabled_ || std::uncaught_exceptions() <= exceptions_) return;
         static_cast<void>(backend_.SetWriteEnabled(false));
-        if (!report_.rollback_attempted && session_.CanRollback() &&
+        if (automatic_rollback_allowed_ && !report_.rollback_attempted &&
+            session_.CanRollback() &&
             probe_pfn_.has_value()) {
             const auto unlocked = session_.UnlockForRollback(*probe_pfn_);
             if (unlocked) {
@@ -203,6 +213,7 @@ private:
     PhysicalPageSession& session_;
     VerificationReport& report_;
     bool enabled_{false};
+    bool automatic_rollback_allowed_{false};
     int exceptions_{0};
     std::optional<std::uint64_t> probe_pfn_;
 };
@@ -360,6 +371,8 @@ Result<Options> ParseOptions(std::span<const std::string_view> arguments) {
             options.help = true;
         } else if (argument == "--write") {
             options.write = true;
+        } else if (argument == "--baremetal-evidence") {
+            options.baremetal_evidence = true;
         } else if (argument == "--confirm-disposable-vm") {
             options.confirm_disposable_vm = true;
         } else if (argument == "--snapshot-id") {
@@ -372,6 +385,10 @@ Result<Options> ParseOptions(std::span<const std::string_view> arguments) {
             const auto value = ParseUnsigned(text.Value());
             if (!value) return Result<Options>::Failure(value.GetError());
             options.confirm_probe_pfn = value.Value();
+        } else if (argument == "--artifact-directory") {
+            const auto value = require_value(argument);
+            if (!value) return Result<Options>::Failure(value.GetError());
+            options.artifact_directory = std::string(value.Value());
         } else if (argument == "--output") {
             const auto value = require_value(argument);
             if (!value) return Result<Options>::Failure(value.GetError());
@@ -413,19 +430,35 @@ Result<Options> ParseOptions(std::span<const std::string_view> arguments) {
             "live_verify::ParseOptions"));
     }
     if (options.write) {
-        if (!options.confirm_disposable_vm ||
-            !HasVisibleText(options.snapshot_id) ||
-            options.snapshot_id.size() > 256U ||
-            !options.confirm_probe_pfn.has_value()) {
+        if (options.baremetal_evidence) {
+            if (options.confirm_disposable_vm ||
+                !options.snapshot_id.empty() ||
+                !options.confirm_probe_pfn.has_value() ||
+                !HasVisibleText(options.artifact_directory) ||
+                options.artifact_directory.size() > 32767U) {
+                return Result<Options>::Failure(MakeError(
+                    ErrorCode::WriteLocked,
+                    "Bare-metal evidence mode requires --write, "
+                    "--confirm-probe-pfn, and --artifact-directory; "
+                    "VM confirmations "
+                    "are mutually exclusive",
+                    "live_verify::ParseOptions"));
+            }
+        } else if (!options.confirm_disposable_vm ||
+                   !HasVisibleText(options.snapshot_id) ||
+                   options.snapshot_id.size() > 256U ||
+                   !options.confirm_probe_pfn.has_value()) {
             return Result<Options>::Failure(MakeError(
                 ErrorCode::WriteLocked,
                 "Write mode requires --confirm-disposable-vm, a non-empty "
                 "--snapshot-id, and --confirm-probe-pfn",
                 "live_verify::ParseOptions"));
         }
-    } else if (options.confirm_disposable_vm ||
+    } else if (options.baremetal_evidence ||
+               options.confirm_disposable_vm ||
                options.confirm_probe_pfn.has_value() ||
-               !options.snapshot_id.empty()) {
+               !options.snapshot_id.empty() ||
+               !options.artifact_directory.empty()) {
         return Result<Options>::Failure(MakeError(
             ErrorCode::InvalidArgument,
             "Write confirmations are accepted only together with --write",
@@ -443,8 +476,11 @@ std::string Usage() {
         "Write mode (disposable snapshot VM and KDbgProbe only):\n"
         "  --write --confirm-disposable-vm --snapshot-id ID "
         "--confirm-probe-pfn PFN\n"
-        "This tool never installs or starts a driver. Do not run write mode "
-        "on a host or an unknown PFN.\n";
+        "Bare-metal evidence mode (local KDbgProbe PFN only):\n"
+        "  --write --baremetal-evidence --confirm-probe-pfn PFN "
+        "--artifact-directory DIR\n"
+        "This tool never installs or starts a driver. Both write modes use "
+        "only the PFN returned by the running KDbgProbe.\n";
 }
 
 VerificationReport FailureReport(
@@ -453,10 +489,16 @@ VerificationReport FailureReport(
     RuntimeIdentityRecord runtime_identity,
     const Error& error) {
     VerificationReport report{};
-    report.mode = options.write ? "probe-write-rollback" : "read-only";
+    report.schema = options.baremetal_evidence
+        ? "kdbg.live-verify.v2" : "kdbg.live-verify.v1";
+    report.mode = options.baremetal_evidence
+        ? "baremetal-probe-write-rollback"
+        : (options.write ? "probe-write-rollback" : "read-only");
     report.operator_confirmed_disposable_vm =
         options.confirm_disposable_vm;
     report.snapshot_id = options.snapshot_id;
+    report.target_profile = options.baremetal_evidence
+        ? "LocalHost" : "DisposableVm";
     report.system = std::move(system);
     report.system.build_id = options.build_id;
     report.runtime_identity = std::move(runtime_identity);
@@ -472,10 +514,16 @@ VerificationReport Run(
     RuntimeIdentityRecord runtime_identity,
     const CancellationQuery& is_cancelled) {
     VerificationReport report{};
-    report.mode = options.write ? "probe-write-rollback" : "read-only";
+    report.schema = options.baremetal_evidence
+        ? "kdbg.live-verify.v2" : "kdbg.live-verify.v1";
+    report.mode = options.baremetal_evidence
+        ? "baremetal-probe-write-rollback"
+        : (options.write ? "probe-write-rollback" : "read-only");
     report.operator_confirmed_disposable_vm =
         options.confirm_disposable_vm;
     report.snapshot_id = options.snapshot_id;
+    report.target_profile = options.baremetal_evidence
+        ? "LocalHost" : "DisposableVm";
     report.system = std::move(system);
     report.system.build_id = options.build_id;
     report.runtime_identity = std::move(runtime_identity);
@@ -483,7 +531,8 @@ VerificationReport Run(
 
     auto session = std::make_unique<PhysicalPageSession>();
     EmergencyRecoveryGuard emergency_recovery{
-        backend, *session, report, options.write};
+        backend, *session, report, options.write,
+        !options.baremetal_evidence};
     std::array<std::uint8_t, kPhysicalPageSize> original{};
     bool have_original = false;
 
@@ -500,7 +549,27 @@ VerificationReport Run(
         return report;
     }
 
-    if (options.write &&
+    if (options.baremetal_evidence &&
+        (report.backend.abi_version != 7U ||
+         !report.backend.supports_physical_page_compare_write)) {
+        AddError(report, MakeError(
+            ErrorCode::AbiMismatch,
+            "Bare-metal evidence requires ABI 7 and the serialized exact-page compare-write capability",
+            "live_verify::baremetal_backend_contract"));
+        return report;
+    }
+
+    if (options.baremetal_evidence &&
+        (!options.write || !options.confirm_probe_pfn.has_value() ||
+         !HasVisibleText(options.artifact_directory))) {
+        AddError(report, MakeError(
+            ErrorCode::WriteLocked,
+            "Bare-metal evidence write confirmation is incomplete",
+            "live_verify::Run"));
+        return report;
+    }
+
+    if (options.write && !options.baremetal_evidence &&
         (!options.confirm_disposable_vm ||
          !HasVisibleText(options.snapshot_id) ||
          !options.confirm_probe_pfn.has_value())) {
@@ -565,9 +634,68 @@ VerificationReport Run(
                 "baseline_vs_rollback_readback", *evidence.baseline,
                 *evidence.rollback));
         }
+        if (options.baremetal_evidence) {
+            const auto capture_page = [&]<typename Page>(
+                std::string_view role,
+                std::string_view file_name,
+                const std::optional<Page>& page) {
+                if (!page) return;
+                const auto found = std::find_if(
+                    report.raw_page_artifacts.begin(),
+                    report.raw_page_artifacts.end(),
+                    [&](const RawPageArtifactRecord& existing) {
+                        return existing.role == role;
+                    });
+                RawPageArtifactRecord artifact{};
+                artifact.role = role;
+                artifact.file_name = file_name;
+                artifact.bytes = *page;
+                if (found == report.raw_page_artifacts.end()) {
+                    report.raw_page_artifacts.push_back(std::move(artifact));
+                } else {
+                    *found = std::move(artifact);
+                }
+            };
+            capture_page("baseline", "baseline.bin", evidence.baseline);
+            capture_page("preflight", "preflight.bin", evidence.preflight);
+            capture_page(
+                "expected_after", "expected-after.bin",
+                evidence.expected_after);
+            capture_page("readback", "readback.bin", evidence.readback);
+            capture_page(
+                "independent_reload", "independent-reload.bin",
+                evidence.independent_reload);
+            capture_page("rollback", "rollback.bin", evidence.rollback);
+        }
     };
 
     const auto rollback = [&]() -> bool {
+        if (options.baremetal_evidence) {
+            if (report.rollback_suppressed_stale_identity) return false;
+            const auto identity_start = Clock::now();
+            const auto current_probe = query_probe();
+            const bool fresh = current_probe &&
+                report.probe_before.has_value() &&
+                SameProbeIdentity(current_probe.Value(), *report.probe_before);
+            report.operations.push_back(OperationRecord{
+                "probe_query_before_rollback", 0,
+                current_probe ? sizeof(ProbeInfo) : 0,
+                ElapsedMilliseconds(identity_start), fresh});
+            report.probe_identity_fresh_at_rollback = fresh;
+            if (!current_probe) {
+                report.rollback_suppressed_stale_identity = true;
+                AddError(report, current_probe.GetError());
+                return false;
+            }
+            if (!fresh) {
+                report.rollback_suppressed_stale_identity = true;
+                AddError(report, MakeError(
+                    ErrorCode::ConcurrentModification,
+                    "KDbgProbe identity became stale; rollback was suppressed",
+                    "live_verify::probe_identity_before_rollback"));
+                return false;
+            }
+        }
         report.rollback_attempted = true;
         if (!session->CanRollback()) {
             AddError(report, MakeError(
@@ -595,6 +723,7 @@ VerificationReport Run(
             return false;
         }
         report.rollback_verified = true;
+        report.rollback_driver_transferred_bytes = kPhysicalPageSize;
         capture_evidence();
         return true;
     };
@@ -626,6 +755,11 @@ VerificationReport Run(
         final_relock();
         static_cast<void>(query_session(
             report.session_final, "live_verify::final_session_status"));
+        if (report.session_final.has_value() && report.rollback_attempted &&
+            report.session_final->last_physical_write_transferred != 0U) {
+            report.rollback_driver_transferred_bytes =
+                report.session_final->last_physical_write_transferred;
+        }
         report.final_gate_locked = report.session_final.has_value() &&
             !report.session_final->write_enabled;
         if (!report.final_gate_locked) {
@@ -812,6 +946,7 @@ VerificationReport Run(
             "live_verify::post_apply_session_status"));
         return report;
     }
+    report.apply_driver_transferred_bytes = kPhysicalPageSize;
     if (IsCancelled(is_cancelled)) {
         finish_after_write_failure(CancelledError(
             "live_verify::after_apply"));
@@ -832,15 +967,20 @@ VerificationReport Run(
     report.probe_after_write = ToRecord(after_write.Value());
     const auto expected_after_crc = Crc32(std::span<const std::uint8_t>(
         session->Baseline().data(), session->Baseline().size()));
-    if (after_write.Value().generation != probe.Value().generation ||
-        after_write.Value().pfn != probe.Value().pfn ||
-        after_write.Value().physical_address != probe.Value().physical_address ||
-        after_write.Value().byte_count != kPhysicalPageSize ||
-        after_write.Value().crc32 != expected_after_crc) {
+    if (!SameProbeIdentity(after_write.Value(), *report.probe_before)) {
+        if (options.baremetal_evidence) {
+            report.rollback_suppressed_stale_identity = true;
+        }
         finish_after_write_failure(MakeError(
             ErrorCode::VerificationMismatch,
-            "KDbgProbe generation, physical identity, size, or CRC does not "
-            "match the verified page",
+            "KDbgProbe generation or physical identity became stale",
+            "live_verify::probe_after_write"));
+        return report;
+    }
+    if (after_write.Value().crc32 != expected_after_crc) {
+        finish_after_write_failure(MakeError(
+            ErrorCode::VerificationMismatch,
+            "KDbgProbe CRC does not match the verified page",
             "live_verify::probe_after_write"));
         return report;
     }
@@ -925,6 +1065,11 @@ VerificationReport Run(
     final_relock();
     static_cast<void>(query_session(
         report.session_final, "live_verify::final_session_status"));
+    if (report.session_final.has_value() && report.rollback_attempted &&
+        report.session_final->last_physical_write_transferred != 0U) {
+        report.rollback_driver_transferred_bytes =
+            report.session_final->last_physical_write_transferred;
+    }
     report.final_gate_locked = report.session_final.has_value() &&
         !report.session_final->write_enabled;
     if (!report.final_gate_locked) {
@@ -950,6 +1095,33 @@ std::string ToJson(const VerificationReport& report) {
            << (report.operator_confirmed_disposable_vm ? "true" : "false")
            << ",\"snapshot_id\":";
     WriteString(stream, report.snapshot_id);
+    if (report.schema == "kdbg.live-verify.v2") {
+        stream << ",\"baremetal_contract\":{\"target_profile\":";
+        WriteString(stream, report.target_profile);
+        stream << ",\"probe_identity_fresh_at_rollback\":"
+               << (report.probe_identity_fresh_at_rollback
+                       ? "true" : "false")
+               << ",\"rollback_suppressed_stale_identity\":"
+               << (report.rollback_suppressed_stale_identity
+                       ? "true" : "false")
+               << '}';
+        stream << ",\"raw_page_artifacts\":[";
+        for (std::size_t index = 0;
+             index < report.raw_page_artifacts.size(); ++index) {
+            if (index != 0) stream << ',';
+            const auto& artifact = report.raw_page_artifacts[index];
+            stream << "{\"role\":";
+            WriteString(stream, artifact.role);
+            stream << ",\"file_name\":";
+            WriteString(stream, artifact.file_name);
+            stream << ",\"sha256\":";
+            WriteString(stream, artifact.sha256);
+            stream << ",\"byte_count\":" << artifact.bytes.size()
+                   << ",\"written\":"
+                   << (artifact.written ? "true" : "false") << '}';
+        }
+        stream << ']';
+    }
 
     stream << ",\"system\":{\"generated_utc\":";
     WriteString(stream, report.system.generated_utc);
@@ -1003,7 +1175,11 @@ std::string ToJson(const VerificationReport& report) {
            << ",\"write_enabled\":"
            << (report.backend.write_enabled ? "true" : "false")
            << ",\"is_mock\":"
-           << (report.backend.is_mock ? "true" : "false") << '}';
+           << (report.backend.is_mock ? "true" : "false")
+           << ",\"supports_physical_page_compare_write\":"
+           << (report.backend.supports_physical_page_compare_write
+                   ? "true" : "false");
+    stream << '}';
 
     stream << ",\"probe_before\":"; WriteProbe(stream, report.probe_before);
     stream << ",\"probe_after_write\":";
@@ -1057,8 +1233,22 @@ std::string ToJson(const VerificationReport& report) {
            << report.edit_offset
            << ",\"edit_length\":" << report.edit_length
            << ",\"apply_requested_bytes\":" << report.apply_requested_bytes
+           << (report.schema == "kdbg.live-verify.v2"
+                   ? ",\"user_dirty_bytes\":" : "")
+           << (report.schema == "kdbg.live-verify.v2"
+                   ? std::to_string(report.apply_requested_bytes) : "")
+           << (report.schema == "kdbg.live-verify.v2"
+                   ? ",\"apply_driver_transferred_bytes\":" : "")
+           << (report.schema == "kdbg.live-verify.v2"
+                   ? std::to_string(report.apply_driver_transferred_bytes)
+                   : "")
            << ",\"rollback_requested_bytes\":"
            << report.rollback_requested_bytes
+           << (report.schema == "kdbg.live-verify.v2"
+                   ? ",\"rollback_driver_transferred_bytes\":" : "")
+           << (report.schema == "kdbg.live-verify.v2"
+                   ? std::to_string(report.rollback_driver_transferred_bytes)
+                   : "")
            << ",\"rollback_attempted\":"
            << (report.rollback_attempted ? "true" : "false")
            << ",\"rollback_verified\":"

@@ -300,7 +300,7 @@ def build_manifest(run_dir: Path, output_manifest: Path, frames_dir: Path) -> di
     backend = readiness.get("backend")
     verifier = readiness.get("verifier")
     services = readiness.get("services")
-    _require(isinstance(backend, dict) and backend.get("connected") is True and backend.get("abi_version") == 6 and backend.get("gate_locked") is True,
+    _require(isinstance(backend, dict) and backend.get("connected") is True and backend.get("abi_version") in {6, 7} and backend.get("gate_locked") is True,
              "postboot backend readiness is incomplete")
     _require(isinstance(verifier, dict) and verifier.get("exit_code") == 0 and verifier.get("exited_before_gui") is True,
              "postboot verifier did not complete before the GUI")
@@ -311,8 +311,12 @@ def build_manifest(run_dir: Path, output_manifest: Path, frames_dir: Path) -> di
              "postboot read-only probe record is not successful")
     probe_backend = probe.get("backend")
     probe_cleanup = probe.get("write_cleanup")
-    _require(isinstance(probe_backend, dict) and probe_backend.get("connected") is True and probe_backend.get("abi_version") == 6,
+    _require(isinstance(probe_backend, dict) and probe_backend.get("connected") is True and probe_backend.get("abi_version") == backend.get("abi_version"),
              "postboot probe backend identity mismatch")
+    if backend.get("abi_version") == 7:
+        _require(backend.get("supports_physical_page_compare_write") is True and
+                 probe_backend.get("supports_physical_page_compare_write") is True,
+                 "ABI 7 postboot records lack exact-page compare/write capability")
     _require(isinstance(probe_cleanup, dict) and probe_cleanup.get("final_gate_locked") is True,
              "postboot probe did not finish with the write gate locked")
 

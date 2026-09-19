@@ -308,7 +308,7 @@ function New-KdbgWin11ValidationWorkspace {
             required_gate_scope = @(
                 'exact-package-and-source-hash',
                 'win11-x64-build-and-security-inventory',
-                'package-trust-install-start-and-abi6',
+                'package-trust-install-start-and-abi7',
                 'readonly-probe-discovery',
                 'single-probe-apply-readback-reload-rollback-relock',
                 'service-and-device-cleanup',
@@ -727,12 +727,14 @@ function Assert-KdbgReadOnlyReport {
     param([Parameter(Mandatory)]$Report, [Parameter(Mandatory)][string]$Label)
     if ($Report.schema -ne 'kdbg.live-verify.v1' -or $Report.success -ne $true -or
         $Report.mode -ne 'read-only' -or $Report.runtime_identity.verified -ne $true -or
-        $Report.backend.abi_version -ne 6 -or $Report.backend.is_mock -ne $false -or
+        $Report.backend.abi_version -ne 7 -or
+        $Report.backend.supports_physical_page_compare_write -ne $true -or
+        $Report.backend.is_mock -ne $false -or
         @($Report.operations | Where-Object passed -ne $true).Count -ne 0 -or
         @($Report.comparisons | Where-Object { $_.match -ne $true -or $_.byte_count -ne 4096 }).Count -ne 0 -or
         $Report.write_cleanup.final_gate_locked -ne $true -or
         $Report.session_final.write_enabled -ne $false) {
-        throw "$Label did not prove a real ABI 6 exact read and locked final gate."
+        throw "$Label did not prove a real ABI 7 exact read and locked final gate."
     }
 }
 
@@ -956,7 +958,9 @@ function Invoke-KdbgWin11GuestValidation {
             $writeReport.operator_confirmed_disposable_vm -ne $true -or
             $writeReport.snapshot_id -ne $CheckpointId -or
             $writeReport.runtime_identity.verified -ne $true -or
-            $writeReport.backend.abi_version -ne 6 -or $writeReport.backend.is_mock -ne $false -or
+            $writeReport.backend.abi_version -ne 7 -or
+            $writeReport.backend.supports_physical_page_compare_write -ne $true -or
+            $writeReport.backend.is_mock -ne $false -or
             [uint64]$writeReport.probe_before.pfn -ne $probePfn -or
             [uint64]$writeReport.probe_after_write.pfn -ne $probePfn -or
             [uint64]$writeReport.probe_after_rollback.pfn -ne $probePfn -or

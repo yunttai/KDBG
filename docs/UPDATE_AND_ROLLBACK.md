@@ -14,7 +14,9 @@ the new `SHA256SUMS.txt` files and ZIP sidecars, confirm matching
 files, then run `tools/diagnose.ps1 -VerifyPackage`.
 
 The normal product update path is to launch `KDBGSetup.exe` from the newly
-extracted package, confirm the dedicated VM and snapshot, and choose **Update**.
+extracted package and choose **Update**. `LocalHost` is the ordinary target;
+selecting the optional `DisposableVm` profile does not change the package
+transaction itself.
 Setup verifies source and staged packages, replaces the stable
 `%ProgramFiles%\KDBG\Product` directory, delegates the driver transition to the
 packaged lifecycle, and restores the prior product directory and service
@@ -29,13 +31,12 @@ known-good `.backup-<transaction>` directory instead of deleting it.
 
 ## Update procedure
 
-1. Restore or create the named disposable-VM snapshot.
-2. Run `tools/stop.ps1` and confirm both KDBG services are stopped.
-3. Extract the new main and symbols packages into new versioned source
+1. Close KDBG and run `tools/stop.ps1`; confirm both KDBG services are stopped.
+2. Extract the new main and symbols packages into new versioned source
    directories; never overwrite the retained previous distribution in place.
-4. Run `tools/install.ps1` to update the service paths, then
+3. Run `tools/install.ps1` to update the service paths, then
    `tools/start.ps1` and `tools/diagnose.ps1 -RequireRunning`.
-5. Re-run the read-only readiness checks before any Probe transaction.
+4. Re-run the read-only readiness checks before any evidence transaction.
 
 The installer records the previous service configuration and restores it when
 an update fails before commit. As a defense against a same-path repair hashing
@@ -52,11 +53,11 @@ version-named Program Files directories.
 ## Rollback procedure
 
 Stop both services, run the retained previous package's installer, start its
-services, and verify its exact hashes and ABI. Restore the VM snapshot if the
-guest bugchecked, a driver could not unload, service state is ambiguous, or a
-write/read-back/rollback check failed. Never continue a physical write after a
-verification mismatch.
+services, and verify its exact hashes and ABI. This package rollback procedure
+is the same for `LocalHost` and the optional `DisposableVm` profile. A VM
+snapshot may be used by the regression lane, but it is not a product update or
+rollback prerequisite.
 
 Record the failed and restored package hashes, commands, service paths, exit
 codes, and final locked state. The release is not commercial-ready until this
-update and rollback procedure passes on a clean supported guest.
+update and rollback procedure passes on a clean supported Windows instance.

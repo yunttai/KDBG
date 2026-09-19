@@ -5,6 +5,7 @@
 #include "core/memory/ProbeClient.h"
 
 #include <cstdint>
+#include <array>
 #include <functional>
 #include <optional>
 #include <span>
@@ -19,9 +20,11 @@ inline constexpr std::uint32_t kMinimumWindowsBuild = 19041U;
 struct Options {
     bool help{false};
     bool write{false};
+    bool baremetal_evidence{false};
     bool confirm_disposable_vm{false};
     std::optional<std::uint64_t> confirm_probe_pfn;
     std::string snapshot_id;
+    std::string artifact_directory;
     std::string output_path;
     bool output_explicit{false};
     std::string build_id{"development"};
@@ -110,6 +113,14 @@ struct ErrorRecord {
     std::uint64_t completed{0};
 };
 
+struct RawPageArtifactRecord {
+    std::string role;
+    std::string file_name;
+    std::string sha256;
+    std::array<std::uint8_t, 4096> bytes{};
+    bool written{false};
+};
+
 struct VerificationReport {
     std::string schema{"kdbg.live-verify.v1"};
     std::string mode{"read-only"};
@@ -117,6 +128,10 @@ struct VerificationReport {
     bool cancelled{false};
     bool operator_confirmed_disposable_vm{false};
     std::string snapshot_id;
+    std::string target_profile{"LocalHost"};
+    bool probe_identity_fresh_at_rollback{false};
+    bool rollback_suppressed_stale_identity{false};
+    std::vector<RawPageArtifactRecord> raw_page_artifacts;
     SystemRecord system;
     RuntimeIdentityRecord runtime_identity;
     BackendInfo backend;
@@ -134,7 +149,9 @@ struct VerificationReport {
     std::uint64_t edit_offset{0};
     std::uint64_t edit_length{0};
     std::uint64_t apply_requested_bytes{0};
+    std::uint64_t apply_driver_transferred_bytes{0};
     std::uint64_t rollback_requested_bytes{0};
+    std::uint64_t rollback_driver_transferred_bytes{0};
     bool rollback_attempted{false};
     bool rollback_verified{false};
     bool final_relock_attempted{false};

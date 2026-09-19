@@ -2,6 +2,12 @@
 
 KDBG는 Windows 10 build 19041+/Windows 11 x64에서 동작하는 고성능 커널 메모리 디버깅·편집 워크벤치다. PFN(Page Frame Number), 프로세스 VA, PTE와 페이지 테이블을 한 작업공간에서 연결하고, 4 KiB 물리 페이지를 읽어 Hex Editor에서 편집한 뒤 충돌 검사, 전체 페이지 read-back과 rollback까지 하나의 트랜잭션으로 처리한다.
 
+제품 대상은 `KDBG.exe`와 `KDbgDriver.sys`가 실행되는 동일 bare-metal
+Windows `runtime_host`의 local system physical RAM이다. `orchestrator_host`는
+수명주기와 증거 수집을 제어할 뿐 암묵적 메모리 대상이 아니며, Hyper-V
+`regression_guest`는 별도 회귀 lane이다. VM 결과는 runtime-host 결과로
+재표기하거나 승격하지 않는다.
+
 커널 메모리의 탐색, 귀속 분석, 편집과 재현 가능한 증거 수집을 위해 다음 기능을 하나의 프로그램에 통합했다.
 
 - PFN → PID/프로세스/VA/PTE 분석
@@ -16,7 +22,10 @@ KDBG는 Windows 10 build 19041+/Windows 11 x64에서 동작하는 고성능 커�
   트랜잭션과 Windows 앱 제거 등록
 - opt-in 로컬 runtime JSON의 scan region/byte/I/O/cancellation 및 GUI frame-stall 계측
 
-> 사용 범위는 본인이 관리하는 스냅샷 가능한 실습 VM이다. KDBG는 Code Integrity 우회, 취약 드라이버 로딩, 은닉, 안티치트 우회, 프로세스 주입, 임의 커널 가상주소 쓰기를 구현하지 않는다.
+> Raw PFN read/write는 runtime_host 제품 범위다. ProbeFixture는 자동
+> destructive evidence의 기본 target이며 일반 RawPfn 기능을 제한하지 않는다.
+> 현재 bare-metal runtime-host gate는 아직 미검증이고, 아래 기존 live 결과는
+> regression_guest의 historical evidence다.
 
 ## 구현된 핵심 경로
 
@@ -29,11 +38,16 @@ KDBG는 Windows 10 build 19041+/Windows 11 x64에서 동작하는 고성능 커�
 5. dirty byte와 연속 diff run을 검토한다.
 6. 동일 PFN을 다시 입력해 one-shot physical write를 해제한다.
 7. Apply 직전에 전체 페이지를 재조회해 외부 변경을 탐지한다.
-8. 변경 run만 기록한 후 write gate를 즉시 닫는다.
-9. 전체 4096바이트를 다시 읽어 expected page와 전수 비교한다.
+8. ABI 7 compare/write로 expected baseline과 desired page 전체 4096바이트를
+   한 번의 driver transaction으로 전달하고 write gate를 즉시 닫는다.
+9. UI의 `dirty_bytes`는 local diff 범위이며, 성공한 physical transaction의
+   `driver_transferred_bytes`는 4096이다. 전체 페이지 read-back을 expected
+   page와 전수 비교한다.
 10. 성공 전 baseline을 보관해 검증형 rollback을 지원한다.
 
-`KDbgProbe.sys`는 시연용으로 알려진 4 KiB contiguous page의 VA, PA, PFN, CRC32를 제공한다. 임의 시스템 페이지 대신 이 fixture를 사용한다.
+`KDbgProbe.sys`는 자동 destructive evidence용으로 알려진 4 KiB contiguous
+page의 VA, PA, PFN, CRC32를 제공한다. 이 fixture 사용은 자동 검증 대상을
+결정할 뿐 runtime_host RawPfn 제품 범위를 제한하지 않는다.
 
 ### 고속 메모리 분석 기능
 
@@ -138,15 +152,24 @@ Portable suite는 PFN/ABI 계산, x64/LA57 page walk, 4 KiB physical transaction
 .\src\tools\package_windows.ps1 -Configuration Release -Zip
 ```
 
-VM에서 서비스 관리:
+Bare-metal `LocalHost`가 제품 기본 profile이며, 아래 명령은 재현성을 위해
+명시적으로 적는다.
 
 ```powershell
-.\src\tools\manage_drivers.ps1 -Action Install -ConfirmDedicatedVm -ConfirmSnapshot
-.\src\tools\manage_drivers.ps1 -Action Start   -ConfirmDedicatedVm -ConfirmSnapshot
-.\src\tools\run.ps1 -NoBuild -ConfirmDisposableVm -ConfirmSnapshot
+.\src\tools\manage_drivers.ps1 -Action Install -TargetProfile LocalHost
+.\src\tools\manage_drivers.ps1 -Action Start   -TargetProfile LocalHost
+.\src\tools\run.ps1 -NoBuild -TargetProfile LocalHost
 ```
 
-드라이버 서명 우회는 포함하지 않는다. 테스트 서명 모드 또는 적절한 정식 인증서가 필요하다. `.github/workflows/validate.yml`의 Windows job은 user-mode GUI/bridge와 deterministic tests를 MSVC로 빌드하도록 구성되어 있으며, WDK sign/load와 live physical write는 disposable VM gate로 분리한다.
+별도 regression_guest lane:
+
+```powershell
+.\src\tools\manage_drivers.ps1 -Action Install -TargetProfile DisposableVm -ConfirmDedicatedVm -ConfirmSnapshot
+.\src\tools\manage_drivers.ps1 -Action Start   -TargetProfile DisposableVm -ConfirmDedicatedVm -ConfirmSnapshot
+.\src\tools\run.ps1 -NoBuild -TargetProfile DisposableVm -ConfirmDisposableVm -ConfirmSnapshot
+```
+
+드라이버 서명 우회는 포함하지 않는다. 테스트 서명 모드 또는 적절한 정식 인증서가 필요하다. `.github/workflows/validate.yml`의 Windows job은 user-mode GUI/bridge와 deterministic tests를 MSVC로 빌드하도록 구성되어 있다. 현재 WDK sign/load와 live physical write 자동화는 regression_guest gate이며, bare-metal runtime-host read-only/Probe-write/RawPfn gate는 별도 상태로 보고한다.
 
 ## 검증 Gate
 
@@ -165,6 +188,9 @@ package/source/evidence hash에만 결속된다. 최신 exact identity와 판정
 | Commercial operations docs | security/support/privacy/license/update/vulnerability/release notes | PASS (configured contract) — support/security routes configured; notification/acknowledgement evidence pending |
 | Live device/runtime | exact package install, ABI 6, Probe physical transaction, cleanup | PASS (disposable VM test trust) — 1.1.0 exact test-signed package의 apply/read-back/reload/rollback/cleanup 완료 |
 | Live VM evidence | PFN discovery/read/edit/diff/unlock/apply/read-back, ownership/PTView, MP4 | CANDIDATE-BOUND — automated capture와 presentation media는 각각의 formal review 상태와 분리해 기록 |
+| Bare-metal runtime-host read-only | 동일 OS local physical RAM range와 Raw PFN exact read | NOT RUN — VM/host smoke 근거로 승격하지 않음 |
+| Bare-metal runtime-host Probe write | host-bound ProbeFixture apply/read-back/reload/rollback | NOT RUN — 자동 destructive evidence gate |
+| Bare-metal RawPfn capability | 일반 RawPfn target의 runtime-host-bound transaction | SOURCE IMPLEMENTATION PENDING INTEGRATION/LIVE EVIDENCE — machine identity confirmation은 제품 전제 아님 |
 | Windows 11 readiness/live | static workspace, readiness, required-core, extended lifecycle/soak | PASS — 1.1.0 exact-package required-core, repeated lifecycle/reboot와 30-minute soak 완료 |
 | Commercial release | production trust, operational acknowledgement, supported-platform validation | BLOCKED — production signer/TSA/returned signed drivers와 route notification/ack evidence가 없음. VM 전용 test trust는 production trust를 대체하지 않음 |
 | Optional MemProcFS runtime | 격리 bridge의 실제 `vmm.dll`/acquisition backend | UNVERIFIED — helper-process 회귀만 PASS |

@@ -290,7 +290,8 @@ try {
             $Readiness.mode -cne "read-only" -or
             $Readiness.success -ne $true -or
             $Readiness.runtime_identity.verified -ne $true -or
-            $Readiness.backend.abi_version -ne 6 -or
+            $Readiness.backend.abi_version -ne 7 -or
+            $Readiness.backend.supports_physical_page_compare_write -ne $true -or
             $Readiness.probe_before.byte_count -ne 4096 -or
             $Readiness.write_cleanup.final_gate_locked -ne $true) {
             throw "Cycle $Cycle readiness report is incomplete or failed."

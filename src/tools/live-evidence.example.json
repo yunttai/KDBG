@@ -3,7 +3,7 @@
   "timestamp_utc": "<UTC timestamp>",
   "os_build": 19041,
   "package_version": "1.1.0",
-  "abi_version": 6,
+  "abi_version": 7,
   "pfn": "0x100",
   "physical_address": "0x100000",
   "page_size": 4096,

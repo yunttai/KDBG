@@ -1,5 +1,7 @@
 #include "app/ui/SnapshotPanel.h"
 
+#include "app/ui/Localization.h"
+
 #include <imgui.h>
 
 #include <algorithm>
@@ -15,6 +17,10 @@
 #include <string_view>
 
 namespace kdbg {
+
+using ui::UiLabel;
+using ui::UiText;
+
 namespace {
 
 bool ParseUnsigned(std::string_view text, std::uint64_t* value) {
@@ -57,14 +63,20 @@ std::string Preview(std::span<const std::uint8_t> bytes) {
 
 const char* PhaseName(SnapshotProgressPhase phase) {
     switch (phase) {
-    case SnapshotProgressPhase::CaptureRead: return "Reading memory";
-    case SnapshotProgressPhase::CaptureChecksum: return "Checksumming capture";
-    case SnapshotProgressPhase::Diff: return "Comparing snapshots";
-    case SnapshotProgressPhase::Save: return "Saving snapshot";
-    case SnapshotProgressPhase::LoadRead: return "Loading snapshot";
-    case SnapshotProgressPhase::LoadChecksum: return "Verifying checksum";
+    case SnapshotProgressPhase::CaptureRead:
+        return UiText("Reading memory");
+    case SnapshotProgressPhase::CaptureChecksum:
+        return UiText("Checksumming capture");
+    case SnapshotProgressPhase::Diff:
+        return UiText("Comparing snapshots");
+    case SnapshotProgressPhase::Save:
+        return UiText("Saving snapshot");
+    case SnapshotProgressPhase::LoadRead:
+        return UiText("Loading snapshot");
+    case SnapshotProgressPhase::LoadChecksum:
+        return UiText("Verifying checksum");
     }
-    return "Working";
+    return UiText("Working");
 }
 
 }  // namespace
@@ -96,8 +108,13 @@ void SnapshotPanel::Attach(IProcessMemory* memory) {
     Reset();
     memory_ = memory;
     if (memory_ != nullptr) {
-        status_ = "Snapshot workspace ready for PID " +
-            std::to_string(memory_->ProcessId()) + ".";
+        char status[128]{};
+        std::snprintf(
+            status,
+            sizeof(status),
+            UiText("Snapshot workspace ready for PID %u."),
+            memory_->ProcessId());
+        status_ = status;
     }
 }
 
@@ -198,12 +215,14 @@ void SnapshotPanel::StartCapture(CaptureTarget target) {
     if (!ParseUnsigned(address_.data(), &address) ||
         !ParseUnsigned(size_.data(), &size) ||
         address == 0 || size == 0) {
-        status_ = "Enter a non-zero address and size in decimal or 0x-prefixed hexadecimal.";
+        status_ = UiText(
+            "Enter a non-zero address and size in decimal or 0x-prefixed hexadecimal.");
         return;
     }
     if (size > MemorySnapshot::kMaxSnapshotBytes ||
         address > std::numeric_limits<std::uint64_t>::max() - size) {
-        status_ = "Snapshot range is invalid or exceeds the 512 MiB UI limit.";
+        status_ = UiText(
+            "Snapshot range is invalid or exceeds the 512 MiB UI limit.");
         return;
     }
 
@@ -214,8 +233,8 @@ void SnapshotPanel::StartCapture(CaptureTarget target) {
     StartWorker(
         operation,
         target == CaptureTarget::Baseline
-            ? "Capturing baseline snapshot..."
-            : "Capturing current snapshot...",
+            ? UiText("Capturing baseline snapshot...")
+            : UiText("Capturing current snapshot..."),
         [memory, address, size, target](
             std::stop_token stop_token,
             const SnapshotProgressCallback& progress) {
@@ -230,8 +249,8 @@ void SnapshotPanel::StartCapture(CaptureTarget target) {
             if (result) {
                 completed.snapshot = result.TakeValue();
                 completed.success_status = target == CaptureTarget::Baseline
-                    ? "Baseline snapshot captured."
-                    : "Current snapshot captured.";
+                    ? UiText("Baseline snapshot captured.")
+                    : UiText("Current snapshot captured.");
             } else {
                 completed.error = result.GetError();
             }
@@ -289,8 +308,13 @@ void SnapshotPanel::ConsumeWorkerResult() {
     if (!result->success_status.empty()) {
         status_ = std::move(result->success_status);
     } else if (result->operation == WorkerOperation::Diff) {
-        status_ = "Snapshot diff complete: " + std::to_string(diffs_.size()) +
-            " changed run(s).";
+        char status[160]{};
+        std::snprintf(
+            status,
+            sizeof(status),
+            UiText("Snapshot diff complete: %llu changed run(s)."),
+            static_cast<unsigned long long>(diffs_.size()));
+        status_ = status;
     }
 }
 
@@ -299,17 +323,17 @@ void SnapshotPanel::DrawSnapshotSummary(
     const std::optional<MemorySnapshot>& snapshot) const {
     ImGui::TextUnformatted(label);
     if (!snapshot.has_value()) {
-        ImGui::TextDisabled("Not captured or loaded.");
+        ImGui::TextDisabled(UiText("Not captured or loaded."));
         return;
     }
     ImGui::Text("PID: %u", snapshot->Space().pid);
     ImGui::Text(
-        "Range: 0x%016llX - 0x%016llX",
+        UiText("Range: 0x%016llX - 0x%016llX"),
         static_cast<unsigned long long>(snapshot->Address()),
         static_cast<unsigned long long>(
             snapshot->Address() + snapshot->Bytes().size()));
     ImGui::Text(
-        "Bytes: %llu | CRC32: %08X",
+        UiText("Bytes: %llu | CRC32: %08X"),
         static_cast<unsigned long long>(snapshot->Bytes().size()),
         snapshot->Checksum());
 }
@@ -317,7 +341,7 @@ void SnapshotPanel::DrawSnapshotSummary(
 void SnapshotPanel::SaveSnapshot(CaptureTarget target, const char* path) {
     const auto& snapshot = target == CaptureTarget::Baseline ? baseline_ : current_;
     if (!snapshot.has_value()) {
-        status_ = "There is no snapshot to save.";
+        status_ = UiText("There is no snapshot to save.");
         return;
     }
     const MemorySnapshot* const source = &*snapshot;
@@ -327,14 +351,14 @@ void SnapshotPanel::SaveSnapshot(CaptureTarget target, const char* path) {
         : WorkerOperation::SaveCurrent;
     StartWorker(
         operation,
-        "Saving snapshot...",
+        UiText("Saving snapshot..."),
         [source, destination](
             std::stop_token stop_token,
             const SnapshotProgressCallback& progress) {
             WorkerResult completed{};
             const auto result = source->Save(destination, stop_token, progress);
             if (result) {
-                completed.success_status = "Snapshot saved.";
+                completed.success_status = UiText("Snapshot saved.");
             } else {
                 completed.error = result.GetError();
             }
@@ -349,7 +373,7 @@ void SnapshotPanel::LoadSnapshot(CaptureTarget target, const char* path) {
         : WorkerOperation::LoadCurrent;
     StartWorker(
         operation,
-        "Loading snapshot...",
+        UiText("Loading snapshot..."),
         [source](
             std::stop_token stop_token,
             const SnapshotProgressCallback& progress) {
@@ -358,7 +382,7 @@ void SnapshotPanel::LoadSnapshot(CaptureTarget target, const char* path) {
             if (result) {
                 completed.snapshot = result.TakeValue();
                 completed.success_status =
-                    "Snapshot loaded and checksum verified.";
+                    UiText("Snapshot loaded and checksum verified.");
             } else {
                 completed.error = result.GetError();
             }
@@ -368,7 +392,8 @@ void SnapshotPanel::LoadSnapshot(CaptureTarget target, const char* path) {
 
 void SnapshotPanel::ComputeDiff() {
     if (!baseline_.has_value() || !current_.has_value()) {
-        status_ = "Capture or load both baseline and current snapshots first.";
+        status_ = UiText(
+            "Capture or load both baseline and current snapshots first.");
         return;
     }
     const MemorySnapshot* const baseline = &*baseline_;
@@ -377,7 +402,7 @@ void SnapshotPanel::ComputeDiff() {
         static_cast<std::size_t>(std::max(max_diff_runs_, 1));
     StartWorker(
         WorkerOperation::Diff,
-        "Comparing snapshots...",
+        UiText("Comparing snapshots..."),
         [baseline, current, max_runs](
             std::stop_token stop_token,
             const SnapshotProgressCallback& progress) {
@@ -400,31 +425,46 @@ void SnapshotPanel::ComputeDiff() {
 void SnapshotPanel::Draw() {
     ConsumeWorkerResult();
     if (memory_ == nullptr || !memory_->IsOpen()) {
-        ImGui::TextDisabled("Attach to a process to capture live snapshots.");
-        ImGui::TextWrapped(
+        ImGui::TextDisabled(UiText(
+            "Attach to a process to capture live snapshots."));
+        ImGui::TextWrapped(UiText(
             "Previously saved .kdbgmem files are loaded only after a process is attached, "
-            "so PID and range mismatches remain visible before comparison.");
+            "so PID and range mismatches remain visible before comparison."));
         return;
     }
 
     ImGui::Text(
-        "Attached PID: %u | Snapshot reads do not require the process write gate.",
+        UiText(
+            "Attached PID: %u | Snapshot reads do not require the process write gate."),
         memory_->ProcessId());
     ImGui::SetNextItemWidth(220.0F);
-    ImGui::InputText("Start Address", address_.data(), address_.size());
+    ImGui::InputText(
+        UiLabel("Start Address", "Snapshots.StartAddress").c_str(),
+        address_.data(), address_.size());
     ImGui::SameLine();
     ImGui::SetNextItemWidth(180.0F);
-    ImGui::InputText("Byte Count", size_.data(), size_.size());
+    ImGui::InputText(
+        UiLabel("Byte Count", "Snapshots.ByteCount").c_str(),
+        size_.data(), size_.size());
 
     const bool running = running_.load(std::memory_order_acquire);
     if (running) ImGui::BeginDisabled();
-    if (ImGui::Button("Capture Baseline")) StartCapture(CaptureTarget::Baseline);
+    if (ImGui::Button(UiLabel(
+            "Capture Baseline", "Snapshots.CaptureBaseline").c_str())) {
+        StartCapture(CaptureTarget::Baseline);
+    }
     ImGui::SameLine();
-    if (ImGui::Button("Capture Current")) StartCapture(CaptureTarget::Current);
+    if (ImGui::Button(UiLabel(
+            "Capture Current", "Snapshots.CaptureCurrent").c_str())) {
+        StartCapture(CaptureTarget::Current);
+    }
     if (running) ImGui::EndDisabled();
     if (running) {
         ImGui::SameLine();
-        if (ImGui::Button("Cancel Operation")) worker_.request_stop();
+        if (ImGui::Button(UiLabel(
+                "Cancel Operation", "Snapshots.CancelOperation").c_str())) {
+            worker_.request_stop();
+        }
         SnapshotProgress progress;
         {
             std::scoped_lock lock(result_mutex_);
@@ -452,24 +492,30 @@ void SnapshotPanel::Draw() {
         ImGui::TableNextColumn();
         DrawSnapshotSummary("Baseline", baseline_);
         ImGui::InputText(
-            "Baseline File", baseline_path_.data(), baseline_path_.size());
-        if (ImGui::Button("Save Baseline")) {
+            UiLabel("Baseline File", "Snapshots.BaselineFile").c_str(),
+            baseline_path_.data(), baseline_path_.size());
+        if (ImGui::Button(UiLabel(
+                "Save Baseline", "Snapshots.SaveBaseline").c_str())) {
             SaveSnapshot(CaptureTarget::Baseline, baseline_path_.data());
         }
         ImGui::SameLine();
-        if (ImGui::Button("Load Baseline")) {
+        if (ImGui::Button(UiLabel(
+                "Load Baseline", "Snapshots.LoadBaseline").c_str())) {
             LoadSnapshot(CaptureTarget::Baseline, baseline_path_.data());
         }
 
         ImGui::TableNextColumn();
         DrawSnapshotSummary("Current", current_);
         ImGui::InputText(
-            "Current File", current_path_.data(), current_path_.size());
-        if (ImGui::Button("Save Current")) {
+            UiLabel("Current File", "Snapshots.CurrentFile").c_str(),
+            current_path_.data(), current_path_.size());
+        if (ImGui::Button(UiLabel(
+                "Save Current", "Snapshots.SaveCurrent").c_str())) {
             SaveSnapshot(CaptureTarget::Current, current_path_.data());
         }
         ImGui::SameLine();
-        if (ImGui::Button("Load Current")) {
+        if (ImGui::Button(UiLabel(
+                "Load Current", "Snapshots.LoadCurrent").c_str())) {
             LoadSnapshot(CaptureTarget::Current, current_path_.data());
         }
         ImGui::EndTable();
@@ -477,32 +523,38 @@ void SnapshotPanel::Draw() {
 
     ImGui::Separator();
     ImGui::SetNextItemWidth(160.0F);
-    ImGui::InputInt("Max diff runs", &max_diff_runs_);
+    ImGui::InputInt(
+        UiLabel("Max diff runs", "Snapshots.MaxDiffRuns").c_str(),
+        &max_diff_runs_);
     max_diff_runs_ = std::clamp(max_diff_runs_, 1, 1'000'000);
     ImGui::SameLine();
-    if (ImGui::Button("Compare Snapshots")) ComputeDiff();
+    if (ImGui::Button(UiLabel(
+            "Compare Snapshots", "Snapshots.Compare").c_str())) {
+        ComputeDiff();
+    }
     ImGui::SameLine();
-    if (ImGui::Button("Clear Snapshots")) {
+    if (ImGui::Button(UiLabel(
+            "Clear Snapshots", "Snapshots.Clear").c_str())) {
         baseline_.reset();
         current_.reset();
         diffs_.clear();
-        status_ = "Snapshot workspace cleared.";
+        status_ = UiText("Snapshot workspace cleared.");
     }
     if (running) ImGui::EndDisabled();
 
     ImGui::Text(
-        "Changed runs: %llu",
+        UiText("Changed runs: %llu"),
         static_cast<unsigned long long>(diffs_.size()));
     if (!diffs_.empty() && ImGui::BeginTable(
             "snapshot-diffs", 5,
             ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
                 ImGuiTableFlags_Resizable | ImGuiTableFlags_ScrollY,
             ImVec2(0.0F, 330.0F))) {
-        ImGui::TableSetupColumn("Offset");
-        ImGui::TableSetupColumn("Address");
-        ImGui::TableSetupColumn("Length");
-        ImGui::TableSetupColumn("Before");
-        ImGui::TableSetupColumn("After");
+        ImGui::TableSetupColumn(UiLabel("Offset", "Offset").c_str());
+        ImGui::TableSetupColumn(UiLabel("Address", "Address").c_str());
+        ImGui::TableSetupColumn(UiLabel("Length", "Length").c_str());
+        ImGui::TableSetupColumn(UiLabel("Before", "Before").c_str());
+        ImGui::TableSetupColumn(UiLabel("After", "After").c_str());
         ImGui::TableHeadersRow();
         ImGuiListClipper clipper;
         clipper.Begin(static_cast<int>(std::min<std::size_t>(

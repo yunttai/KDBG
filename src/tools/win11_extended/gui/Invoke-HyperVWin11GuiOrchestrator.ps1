@@ -467,7 +467,8 @@ try {
             [uint32]$report.runtime_identity.probe_service.service_type -ne 1 -or
             [uint32]$report.runtime_identity.probe_service.current_state -ne 4 -or
             $report.runtime_identity.probe_service.running_kernel_driver -ne $true -or
-            $report.backend.connected -ne $true -or [uint32]$report.backend.abi_version -ne 6 -or
+            $report.backend.connected -ne $true -or [uint32]$report.backend.abi_version -ne 7 -or
+            $report.backend.supports_physical_page_compare_write -ne $true -or
             $report.backend.is_mock -ne $false -or $report.backend.write_enabled -ne $false -or
             [uint32]$report.probe_before.byte_count -ne 4096 -or
             [uint64]$report.probe_before.pfn -eq 0 -or
@@ -479,7 +480,7 @@ try {
             @($report.comparisons | Where-Object {
                     $_.match -ne $true -or [uint32]$_.mismatch_count -ne 0
                 }).Count -ne 0) {
-            throw 'Postboot verifier did not prove exact packaged driver identity, connected ABI 6, Probe read, and locked gate.'
+            throw 'Postboot verifier did not prove exact packaged driver identity, connected ABI 7, Probe read, and locked gate.'
         }
 
         $completedUtc = [DateTime]::UtcNow.ToString('o')
@@ -516,7 +517,10 @@ try {
                 sha256=$expectedVerifierSha
             }
             drivers=[ordered]@{ kdbg_sha256=$expectedDriverSha; probe_sha256=$expectedProbeSha }
-            backend=[ordered]@{ connected=$true; abi_version=6; gate_locked=$true }
+            backend=[ordered]@{
+                connected=$true; abi_version=7; gate_locked=$true
+                supports_physical_page_compare_write=$true
+            }
             probe=[ordered]@{
                 pfn=[uint64]$report.probe_before.pfn
                 pfn_hex=('0x{0:X}' -f [uint64]$report.probe_before.pfn)
@@ -534,7 +538,8 @@ try {
     $postbootReadinessSucceeded = $postbootReadiness.success -eq $true -and
         $postbootReadiness.verifier.exited_before_gui -eq $true -and
         $postbootReadiness.backend.connected -eq $true -and
-        [uint32]$postbootReadiness.backend.abi_version -eq 6 -and
+        [uint32]$postbootReadiness.backend.abi_version -eq 7 -and
+        $postbootReadiness.backend.supports_physical_page_compare_write -eq $true -and
         $postbootReadiness.backend.gate_locked -eq $true
     if (-not $postbootReadinessSucceeded) { throw 'Postboot driver readiness did not complete successfully.' }
     $timer.Stop(); $phases.Add([ordered]@{ phase='postboot-driver-readiness'; elapsed_ms=$timer.ElapsedMilliseconds })

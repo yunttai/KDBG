@@ -9,8 +9,10 @@ The builder fails closed unless all of these facts agree:
 
 - the host orchestrator succeeded in `full` mode with status
   `CAPTURED_UNREVIEWED`;
-- postboot readiness completed before the GUI, both driver services ran, ABI 6
-  was connected, and the write gate was locked;
+- postboot readiness completed before the GUI, both driver services ran, the
+  current ABI 7 (or a preserved historical ABI 6 record) matched the Probe
+  report, ABI 7 advertised exact-page compare/write capability, and the write
+  gate was locked;
 - guest cleanup succeeded with no remaining harness tasks, services, or
   AutoLogon secret;
 - the exact checkpoint was restored and the final VM state was Off;

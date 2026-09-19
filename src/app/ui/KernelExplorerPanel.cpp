@@ -1,5 +1,7 @@
 #include "app/ui/KernelExplorerPanel.h"
 
+#include "app/ui/Localization.h"
+
 #include <imgui.h>
 
 #include <algorithm>
@@ -14,6 +16,10 @@
 #include <string_view>
 
 namespace kdbg {
+
+using ui::UiLabel;
+using ui::UiText;
+
 namespace {
 
 bool ParseAddress(const char* input, std::uint64_t& value) {
@@ -153,14 +159,14 @@ void KernelExplorerPanel::CancelAndWait() noexcept {
 void KernelExplorerPanel::StartModuleRefresh() {
     if (module_future_.valid()) return;
     if (symbol_future_.valid() || resolve_future_.valid()) {
-        module_status_ =
-            "Finish the current local-symbol operation before refreshing modules.";
+        module_status_ = UiText(
+            "Finish the current local-symbol operation before refreshing modules.");
         return;
     }
     module_cancel_.store(false, std::memory_order_relaxed);
     module_completed_.store(0, std::memory_order_relaxed);
     module_total_.store(0, std::memory_order_relaxed);
-    module_status_ = "Enumerating loaded x64 kernel modules...";
+    module_status_ = UiText("Enumerating loaded x64 kernel modules...");
     const bool la57 = backend_ != nullptr && backend_->Info().supports_la57;
     module_future_ = std::async(std::launch::async, [this, la57] {
         ModuleOutcome outcome;
@@ -188,28 +194,30 @@ void KernelExplorerPanel::StartModuleRefresh() {
 void KernelExplorerPanel::StartRead() {
     if (read_future_.valid()) return;
     if (backend_ == nullptr || !backend_->Info().connected) {
-        read_status_ =
-            "Kernel virtual read unavailable: KDBG backend is disconnected.";
+        read_status_ = UiText(
+            "Kernel virtual read unavailable: KDBG backend is disconnected.");
         return;
     }
     std::uint64_t address = 0;
     const bool la57 = backend_->Info().supports_la57;
     if (!ParseAddress(address_.data(), address) ||
         !IsCanonicalX64KernelAddress(address, la57)) {
-        read_status_ = "Enter a canonical x64 kernel virtual address.";
+        read_status_ = UiText(
+            "Enter a canonical x64 kernel virtual address.");
         return;
     }
     byte_count_ = std::clamp(
         byte_count_, 16, static_cast<int>(kMaximumKernelReadBytes));
     const auto length = static_cast<std::uint32_t>(byte_count_);
     if (address > std::numeric_limits<std::uint64_t>::max() - (length - 1U)) {
-        read_status_ = "Kernel virtual read range overflows 64-bit address space.";
+        read_status_ = UiText(
+            "Kernel virtual read range overflows 64-bit address space.");
         return;
     }
 
     read_cancel_.store(false, std::memory_order_relaxed);
     read_progress_.store(0, std::memory_order_relaxed);
-    read_status_ = "Reading kernel virtual memory...";
+    read_status_ = UiText("Reading kernel virtual memory...");
     IMemoryBackend* const backend = backend_;
     read_future_ = std::async(std::launch::async, [this, backend, address, length] {
         ReadOutcome outcome;
@@ -269,12 +277,13 @@ void KernelExplorerPanel::StartRead() {
 void KernelExplorerPanel::StartSymbolLoad() {
     if (symbol_future_.valid()) return;
     if (module_future_.valid() || resolve_future_.valid()) {
-        symbol_status_ =
-            "Finish the current module refresh or symbol lookup before loading local symbols.";
+        symbol_status_ = UiText(
+            "Finish the current module refresh or symbol lookup before loading local symbols.");
         return;
     }
     if (modules_.empty()) {
-        symbol_status_ = "Enumerate modules before loading local symbols.";
+        symbol_status_ = UiText(
+            "Enumerate modules before loading local symbols.");
         return;
     }
     const std::string path(symbol_path_.data());
@@ -282,7 +291,8 @@ void KernelExplorerPanel::StartSymbolLoad() {
     symbol_cancel_.store(false, std::memory_order_relaxed);
     symbol_completed_.store(0, std::memory_order_relaxed);
     symbol_total_.store(modules.size(), std::memory_order_relaxed);
-    symbol_status_ = "Loading explicitly configured local symbols...";
+    symbol_status_ = UiText(
+        "Loading explicitly configured local symbols...");
     symbol_future_ = std::async(std::launch::async, [this, path, modules] {
         SymbolOutcome outcome;
         try {
@@ -316,16 +326,18 @@ void KernelExplorerPanel::StartSymbolLoad() {
 void KernelExplorerPanel::StartAddressResolve(std::uint64_t address) {
     if (resolve_future_.valid() || symbol_future_.valid() ||
         module_future_.valid()) {
-        resolve_status_ =
-            "Finish the current module or symbol operation before resolving an address.";
+        resolve_status_ = UiText(
+            "Finish the current module or symbol operation before resolving an address.");
         return;
     }
     if (symbols_ == nullptr || !symbols_->Ready()) {
-        resolve_status_ = "Load exact-signature local symbols before resolving an address.";
+        resolve_status_ = UiText(
+            "Load exact-signature local symbols before resolving an address.");
         return;
     }
     LocalSymbolResolver* const resolver = symbols_.get();
-    resolve_status_ = "Resolving address through the local symbol session...";
+    resolve_status_ = UiText(
+        "Resolving address through the local symbol session...");
     resolve_future_ = std::async(std::launch::async, [resolver, address] {
         SymbolResolveOutcome outcome;
         outcome.query_address = address;
@@ -355,21 +367,24 @@ void KernelExplorerPanel::StartAddressResolve(std::uint64_t address) {
 void KernelExplorerPanel::StartNameResolve() {
     if (resolve_future_.valid() || symbol_future_.valid() ||
         module_future_.valid()) {
-        resolve_status_ =
-            "Finish the current module or symbol operation before resolving a name.";
+        resolve_status_ = UiText(
+            "Finish the current module or symbol operation before resolving a name.");
         return;
     }
     if (symbols_ == nullptr || !symbols_->Ready()) {
-        resolve_status_ = "Load exact-signature local symbols before resolving a name.";
+        resolve_status_ = UiText(
+            "Load exact-signature local symbols before resolving a name.");
         return;
     }
     const std::string query(symbol_name_.data());
     if (query.empty()) {
-        resolve_status_ = "Enter a symbol name such as nt!KeBugCheckEx.";
+        resolve_status_ = UiText(
+            "Enter a symbol name such as nt!KeBugCheckEx.");
         return;
     }
     LocalSymbolResolver* const resolver = symbols_.get();
-    resolve_status_ = "Resolving symbol name through the local symbol session...";
+    resolve_status_ = UiText(
+        "Resolving symbol name through the local symbol session...");
     resolve_future_ = std::async(std::launch::async, [resolver, query] {
         SymbolResolveOutcome outcome;
         outcome.query = query;
@@ -409,10 +424,15 @@ void KernelExplorerPanel::PollJobs() {
             resolved_symbol_evidence_.reset();
             resolved_query_address_.reset();
             resolve_status_.clear();
-            symbol_status_ =
-                "Module catalog changed; reload exact-signature local symbols.";
-            module_status_ = "Enumerated " + std::to_string(modules_.size()) +
-                " loaded x64 kernel module(s).";
+            symbol_status_ = UiText(
+                "Module catalog changed; reload exact-signature local symbols.");
+            char status[192]{};
+            std::snprintf(
+                status,
+                sizeof(status),
+                UiText("Enumerated %llu loaded x64 kernel module(s)."),
+                static_cast<unsigned long long>(modules_.size()));
+            module_status_ = status;
         }
     }
     if (read_future_.valid() && read_future_.wait_for(0ms) == std::future_status::ready) {
@@ -433,16 +453,21 @@ void KernelExplorerPanel::PollJobs() {
             read_bytes_ = std::move(outcome.bytes);
             last_disassembly_ = std::move(outcome.disassembly);
             instructions_ = last_disassembly_.instructions;
-            read_status_ = "Read " + std::to_string(read_bytes_.size()) +
-                " byte(s); decoded " + std::to_string(instructions_.size()) +
-                " instruction(s).";
+            char status[192]{};
+            std::snprintf(
+                status,
+                sizeof(status),
+                UiText("Read %llu byte(s); decoded %llu instruction(s)."),
+                static_cast<unsigned long long>(read_bytes_.size()),
+                static_cast<unsigned long long>(instructions_.size()));
+            read_status_ = status;
             resolved_symbol_.clear();
             resolved_address_.reset();
             resolved_symbol_evidence_.reset();
             resolved_query_address_.reset();
             if (symbol_future_.valid() || resolve_future_.valid()) {
-                resolve_status_ =
-                    "A local symbol operation is in progress; address resolution is deferred.";
+                resolve_status_ = UiText(
+                    "A local symbol operation is in progress; address resolution is deferred.");
             } else {
                 StartAddressResolve(last_read_address_);
             }
@@ -454,11 +479,17 @@ void KernelExplorerPanel::PollJobs() {
             symbol_status_ = ErrorText(outcome.error);
         } else {
             symbols_ = std::move(outcome.resolver);
-            symbol_status_ = "Loaded exact-signature local-image symbols for " +
-                std::to_string(outcome.report->loaded_modules) +
-                " module(s); unavailable for " +
-                std::to_string(outcome.report->failed_modules) +
-                ". Live in-memory PE identity is not independently attested.";
+            char status[320]{};
+            std::snprintf(
+                status,
+                sizeof(status),
+                UiText(
+                    "Loaded exact-signature local-image symbols for %llu module(s); "
+                    "unavailable for %llu. Live in-memory PE identity is not "
+                    "independently attested."),
+                static_cast<unsigned long long>(outcome.report->loaded_modules),
+                static_cast<unsigned long long>(outcome.report->failed_modules));
+            symbol_status_ = status;
             if (last_read_address_ != 0 && !resolve_future_.valid()) {
                 StartAddressResolve(last_read_address_);
             }
@@ -486,11 +517,19 @@ void KernelExplorerPanel::PollJobs() {
             resolved_query_address_ = outcome.by_name
                 ? std::optional<std::uint64_t>{}
                 : std::optional<std::uint64_t>{outcome.query_address};
-            resolve_status_ = outcome.by_name
-                ? "Resolved local symbol '" + outcome.query +
-                    "' to an address. Live in-memory PE identity remains unverified."
-                : "Resolved address " + outcome.query +
-                    " in the local symbol session. Live in-memory PE identity remains unverified.";
+            char status[640]{};
+            std::snprintf(
+                status,
+                sizeof(status),
+                outcome.by_name
+                    ? UiText(
+                        "Resolved local symbol '%s' to an address. Live in-memory "
+                        "PE identity remains unverified.")
+                    : UiText(
+                        "Resolved address %s in the local symbol session. Live "
+                        "in-memory PE identity remains unverified."),
+                outcome.query.c_str());
+            resolve_status_ = status;
             if (outcome.by_name) {
                 std::snprintf(
                     address_.data(), address_.size(), "0x%016llX",
@@ -518,24 +557,32 @@ const KernelModule* KernelExplorerPanel::ModuleForAddress(
 void KernelExplorerPanel::Draw() {
     PollJobs();
     const auto info = backend_ == nullptr ? BackendInfo{} : backend_->Info();
-    ImGui::TextUnformatted("Kernel Explorer (read-only inspection)");
-    ImGui::Text("Memory space: KERNEL VIRTUAL | PID: N/A | Backend: %s",
-        info.name.empty() ? "unavailable" : info.name.c_str());
-    ImGui::Text("Connection: %s | Write controls: not exposed in this panel",
+    ImGui::TextUnformatted(UiText(
+        "Kernel Explorer (read-only inspection)"));
+    ImGui::Text(UiText(
+        "Memory space: KERNEL VIRTUAL | PID: N/A | Backend: %s"),
+        info.name.empty() ? UiText("unavailable") : info.name.c_str());
+    ImGui::Text(UiText(
+        "Connection: %s | Write controls: not exposed in this panel"),
         info.connected ? "LIVE KDBG" : "DISCONNECTED");
     if (!info.connected) {
         ImGui::TextColored(
             ImVec4(1.0F, 0.60F, 0.25F, 1.0F),
-            "Kernel reads are unavailable until the KDBG device is connected.");
+            UiText(
+                "Kernel reads are unavailable until the KDBG device is connected."));
     }
 
-    ImGui::SeparatorText("Loaded kernel modules");
+    ImGui::SeparatorText(UiText("Loaded kernel modules"));
     ImGui::BeginDisabled(symbol_future_.valid() || resolve_future_.valid());
-    if (ImGui::Button("Refresh Modules")) StartModuleRefresh();
+    if (ImGui::Button(UiLabel(
+            "Refresh Modules", "KernelExplorer.RefreshModules").c_str())) {
+        StartModuleRefresh();
+    }
     ImGui::EndDisabled();
     if (module_future_.valid()) {
         ImGui::SameLine();
-        if (ImGui::Button("Cancel Refresh")) {
+        if (ImGui::Button(UiLabel(
+                "Cancel Refresh", "KernelExplorer.CancelRefresh").c_str())) {
             module_cancel_.store(true, std::memory_order_relaxed);
         }
         const auto total = module_total_.load(std::memory_order_relaxed);
@@ -547,7 +594,8 @@ void KernelExplorerPanel::Draw() {
     if (!module_status_.empty()) ImGui::TextWrapped("%s", module_status_.c_str());
     ImGui::SetNextItemWidth(-1.0F);
     ImGui::InputTextWithHint(
-        "##kernel-module-filter", "filter module name or local image path",
+        "##kernel-module-filter",
+        UiText("filter module name or local image path"),
         module_filter_.data(), module_filter_.size());
 
     if (ImGui::BeginTable(
@@ -555,11 +603,20 @@ void KernelExplorerPanel::Draw() {
             ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
                 ImGuiTableFlags_Resizable | ImGuiTableFlags_ScrollY,
             ImVec2(0.0F, 260.0F))) {
-        ImGui::TableSetupColumn("Module", ImGuiTableColumnFlags_WidthFixed, 160.0F);
-        ImGui::TableSetupColumn("Base", ImGuiTableColumnFlags_WidthFixed, 150.0F);
-        ImGui::TableSetupColumn("Size", ImGuiTableColumnFlags_WidthFixed, 90.0F);
-        ImGui::TableSetupColumn("Timestamp", ImGuiTableColumnFlags_WidthFixed, 95.0F);
-        ImGui::TableSetupColumn("Local image / metadata");
+        ImGui::TableSetupColumn(
+            UiLabel("Module", "Module").c_str(),
+            ImGuiTableColumnFlags_WidthFixed, 160.0F);
+        ImGui::TableSetupColumn(
+            UiLabel("Base", "Base").c_str(),
+            ImGuiTableColumnFlags_WidthFixed, 150.0F);
+        ImGui::TableSetupColumn(
+            UiLabel("Size", "Size").c_str(),
+            ImGuiTableColumnFlags_WidthFixed, 90.0F);
+        ImGui::TableSetupColumn(
+            UiLabel("Timestamp", "Timestamp").c_str(),
+            ImGuiTableColumnFlags_WidthFixed, 95.0F);
+        ImGui::TableSetupColumn(
+            UiLabel("Local image / metadata", "Local image / metadata").c_str());
         ImGui::TableHeadersRow();
         const auto filter = Lower(module_filter_.data());
         std::vector<std::size_t> visible;
@@ -594,32 +651,42 @@ void KernelExplorerPanel::Draw() {
                 ImGui::Text("0x%08X", module.timestamp);
                 ImGui::TableNextColumn();
                 const auto path = module.image_path.string();
-                ImGui::TextWrapped("%s | %s", path.empty() ? "<unavailable>" : path.c_str(),
+                ImGui::TextWrapped("%s | %s",
+                    path.empty() ? UiText("<unavailable>") : path.c_str(),
                     module.metadata_status.c_str());
             }
         }
         ImGui::EndTable();
     }
     if (!module_diagnostics_.empty()) {
-        ImGui::TextDisabled("Enumeration diagnostics: %zu", module_diagnostics_.size());
+        ImGui::TextDisabled(
+            UiText("Enumeration diagnostics: %zu"),
+            module_diagnostics_.size());
     }
 
-    ImGui::SeparatorText("Local symbols");
-    ImGui::TextWrapped(
+    ImGui::SeparatorText(UiText("Local symbols"));
+    ImGui::TextWrapped(UiText(
         "Configure absolute local directories or PDB files separated by ';'. "
         "A PDB entry selects its parent directory; DbgHelp must match the exact "
         "PDB identity recorded in the OS-reported local PE image. Remote "
-        "symbol-server syntax is intentionally not used.");
+        "symbol-server syntax is intentionally not used."));
     ImGui::SetNextItemWidth(-1.0F);
-    ImGui::InputText("Local symbol path", symbol_path_.data(), symbol_path_.size());
+    ImGui::InputText(
+        UiLabel("Local symbol path", "KernelExplorer.SymbolPath").c_str(),
+        symbol_path_.data(), symbol_path_.size());
     const bool symbol_busy =
         symbol_future_.valid() || module_future_.valid() || resolve_future_.valid();
     ImGui::BeginDisabled(symbol_busy);
-    if (ImGui::Button("Load Local Symbols")) StartSymbolLoad();
+    if (ImGui::Button(UiLabel(
+            "Load Local Symbols", "KernelExplorer.LoadSymbols").c_str())) {
+        StartSymbolLoad();
+    }
     ImGui::EndDisabled();
     if (symbol_future_.valid()) {
         ImGui::SameLine();
-        if (ImGui::Button("Cancel Symbol Load")) {
+        if (ImGui::Button(UiLabel(
+                "Cancel Symbol Load",
+                "KernelExplorer.CancelSymbolLoad").c_str())) {
             symbol_cancel_.store(true, std::memory_order_relaxed);
         }
         const auto total = symbol_total_.load(std::memory_order_relaxed);
@@ -632,29 +699,39 @@ void KernelExplorerPanel::Draw() {
 
     ImGui::SetNextItemWidth(-1.0F);
     ImGui::InputTextWithHint(
-        "##kernel-symbol-name", "symbol name, for example nt!KeBugCheckEx",
+        "##kernel-symbol-name",
+        UiText("symbol name, for example nt!KeBugCheckEx"),
         symbol_name_.data(), symbol_name_.size());
     const bool can_resolve = symbols_ != nullptr && symbols_->Ready() &&
         !resolve_future_.valid() && !symbol_future_.valid() &&
         !module_future_.valid();
     ImGui::BeginDisabled(!can_resolve);
-    if (ImGui::Button("Resolve Symbol -> Address")) StartNameResolve();
+    if (ImGui::Button(UiLabel(
+            "Resolve Symbol -> Address",
+            "KernelExplorer.ResolveSymbol").c_str())) {
+        StartNameResolve();
+    }
     ImGui::EndDisabled();
     if (resolve_future_.valid()) {
         ImGui::SameLine();
-        ImGui::TextDisabled("Resolving...");
+        ImGui::TextDisabled(UiText("Resolving..."));
     }
     if (!resolve_status_.empty()) ImGui::TextWrapped("%s", resolve_status_.c_str());
     if (resolved_address_.has_value()) {
         ImGui::Text(
-            "Resolved local-symbol address: 0x%016llX (%s)",
+            UiText("Resolved local-symbol address: 0x%016llX (%s)"),
             static_cast<unsigned long long>(*resolved_address_),
-            resolved_symbol_.empty() ? "unnamed" : resolved_symbol_.c_str());
-        if (ImGui::Button("Open Resolved VA in Page Tables")) {
+            resolved_symbol_.empty()
+                ? UiText("unnamed") : resolved_symbol_.c_str());
+        if (ImGui::Button(UiLabel(
+                "Open Resolved VA in Page Tables",
+                "KernelExplorer.OpenResolvedVa").c_str())) {
             page_table_navigation_ = *resolved_address_;
         }
         ImGui::SameLine();
-        if (ImGui::Button("Copy Resolved VA")) {
+        if (ImGui::Button(UiLabel(
+                "Copy Resolved VA",
+                "KernelExplorer.CopyResolvedVa").c_str())) {
             char value[32]{};
             std::snprintf(
                 value, sizeof(value), "0x%016llX",
@@ -663,11 +740,15 @@ void KernelExplorerPanel::Draw() {
         }
     }
 
-    ImGui::SeparatorText("Read and disassemble");
+    ImGui::SeparatorText(UiText("Read and disassemble"));
     ImGui::SetNextItemWidth(280.0F);
-    ImGui::InputText("Kernel VA", address_.data(), address_.size());
+    ImGui::InputText(
+        UiLabel("Kernel VA", "KernelExplorer.KernelVa").c_str(),
+        address_.data(), address_.size());
     ImGui::SetNextItemWidth(160.0F);
-    ImGui::InputInt("Transfer bytes", &byte_count_);
+    ImGui::InputInt(
+        UiLabel("Transfer bytes", "KernelExplorer.TransferBytes").c_str(),
+        &byte_count_);
     byte_count_ = std::clamp(
         byte_count_, 16, static_cast<int>(kMaximumKernelReadBytes));
     std::uint64_t parsed_address = 0;
@@ -675,16 +756,20 @@ void KernelExplorerPanel::Draw() {
     if (address_parsed) {
         const auto* module = ModuleForAddress(parsed_address);
         if (module != nullptr) {
-            ImGui::Text("Target: %s+0x%llX", module->name.c_str(),
+            ImGui::Text(UiText("Target: %s+0x%llX"), module->name.c_str(),
                 static_cast<unsigned long long>(parsed_address - module->base));
         } else {
-            ImGui::TextDisabled("Target is not within a module with verified local size metadata.");
+            ImGui::TextDisabled(UiText(
+                "Target is not within a module with verified local size metadata."));
         }
-        if (ImGui::Button("Open VA in Page Tables")) {
+        if (ImGui::Button(UiLabel(
+                "Open VA in Page Tables",
+                "KernelExplorer.OpenVa").c_str())) {
             page_table_navigation_ = parsed_address;
         }
         ImGui::SameLine();
-        if (ImGui::Button("Copy Kernel VA")) {
+        if (ImGui::Button(UiLabel(
+                "Copy Kernel VA", "KernelExplorer.CopyKernelVa").c_str())) {
             char value[32]{};
             std::snprintf(
                 value, sizeof(value), "0x%016llX",
@@ -693,41 +778,53 @@ void KernelExplorerPanel::Draw() {
         }
         ImGui::SameLine();
         ImGui::BeginDisabled(!can_resolve);
-        if (ImGui::Button("Resolve Address -> Symbol")) {
+        if (ImGui::Button(UiLabel(
+                "Resolve Address -> Symbol",
+                "KernelExplorer.ResolveAddress").c_str())) {
             StartAddressResolve(parsed_address);
         }
         ImGui::EndDisabled();
     }
     const bool read_busy = read_future_.valid();
     ImGui::BeginDisabled(read_busy || !info.connected);
-    if (ImGui::Button("Read + Disassemble")) StartRead();
+    if (ImGui::Button(UiLabel(
+            "Read + Disassemble", "KernelExplorer.ReadDisassemble").c_str())) {
+        StartRead();
+    }
     ImGui::EndDisabled();
     if (read_busy) {
         ImGui::SameLine();
-        if (ImGui::Button("Cancel Read")) {
+        if (ImGui::Button(UiLabel(
+                "Cancel Read", "KernelExplorer.CancelRead").c_str())) {
             read_cancel_.store(true, std::memory_order_relaxed);
         }
         const auto progress = read_progress_.load(std::memory_order_relaxed);
-        ImGui::ProgressBar(static_cast<float>(progress) / 2.0F, ImVec2(-1.0F, 0.0F),
-            progress == 0 ? "reading" : "decoding");
+        ImGui::ProgressBar(
+            static_cast<float>(progress) / 2.0F,
+            ImVec2(-1.0F, 0.0F),
+            UiText(progress == 0 ? "reading" : "decoding"));
     }
     if (!read_status_.empty()) ImGui::TextWrapped("%s", read_status_.c_str());
     if (!read_bytes_.empty()) {
         const auto last_byte = last_read_address_ + read_bytes_.size() - 1U;
         ImGui::Text(
-            "Displayed read result: 0x%016llX-0x%016llX (%zu byte(s))",
+            UiText(
+                "Displayed read result: 0x%016llX-0x%016llX (%zu byte(s))"),
             static_cast<unsigned long long>(last_read_address_),
             static_cast<unsigned long long>(last_byte),
             read_bytes_.size());
         if (!address_parsed || parsed_address != last_read_address_) {
             ImGui::TextColored(
                 ImVec4(1.0F, 0.75F, 0.25F, 1.0F),
-                "The input address changed; the table below still belongs to the displayed result range.");
+                UiText(
+                    "The input address changed; the table below still belongs "
+                    "to the displayed result range."));
         }
     }
     if (!resolved_symbol_.empty()) {
         ImGui::TextWrapped(
-            "Local-image symbol result (live PE identity unverified): %s",
+            UiText(
+                "Local-image symbol result (live PE identity unverified): %s"),
             resolved_symbol_.c_str());
     }
 
@@ -736,9 +833,14 @@ void KernelExplorerPanel::Draw() {
             ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
                 ImGuiTableFlags_Resizable | ImGuiTableFlags_ScrollY,
             ImVec2(0.0F, 480.0F))) {
-        ImGui::TableSetupColumn("Kernel VA", ImGuiTableColumnFlags_WidthFixed, 155.0F);
-        ImGui::TableSetupColumn("Bytes", ImGuiTableColumnFlags_WidthFixed, 230.0F);
-        ImGui::TableSetupColumn("x64 instruction");
+        ImGui::TableSetupColumn(
+            UiLabel("Kernel VA", "Kernel VA").c_str(),
+            ImGuiTableColumnFlags_WidthFixed, 155.0F);
+        ImGui::TableSetupColumn(
+            UiLabel("Bytes", "Bytes").c_str(),
+            ImGuiTableColumnFlags_WidthFixed, 230.0F);
+        ImGui::TableSetupColumn(
+            UiLabel("x64 instruction", "x64 instruction").c_str());
         ImGui::TableHeadersRow();
         ImGuiListClipper clipper;
         clipper.Begin(static_cast<int>(instructions_.size()));

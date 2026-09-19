@@ -3,14 +3,32 @@
 #include "core/common/Result.h"
 #include "core/model/BackendInfo.h"
 #include "core/model/MemorySpace.h"
+#include "core/model/PhysicalPage.h"
 #include "core/model/PhysicalRange.h"
 #include "core/paging/X64PageTable.h"
 
 #include <cstdint>
+#include <limits>
 #include <span>
 #include <vector>
 
 namespace kdbg {
+
+enum class PhysicalPageCompareWriteOutcome {
+    Applied,
+    Conflict,
+    Failure,
+};
+
+struct PhysicalPageCompareWriteResult {
+    PhysicalPageCompareWriteOutcome outcome{
+        PhysicalPageCompareWriteOutcome::Conflict};
+    std::uint32_t transferred{0};
+    std::uint32_t first_mismatch_offset{
+        std::numeric_limits<std::uint32_t>::max()};
+    std::uint32_t native_status{0};
+    std::array<std::uint8_t, kPhysicalPageSize> readback{};
+};
 
 class IMemoryBackend {
 public:
@@ -44,6 +62,19 @@ public:
     virtual Result<std::uint32_t> WritePhysical(
         std::uint64_t physical_address,
         std::span<const std::uint8_t> data) = 0;
+
+    virtual Result<PhysicalPageCompareWriteResult> CompareWritePhysicalPage(
+        std::uint64_t physical_address,
+        std::span<const std::uint8_t> expected_before,
+        std::span<const std::uint8_t> desired) {
+        (void)physical_address;
+        (void)expected_before;
+        (void)desired;
+        return Result<PhysicalPageCompareWriteResult>::Failure(MakeError(
+            ErrorCode::Unsupported,
+            "This backend does not provide physical page compare/write",
+            "IMemoryBackend::CompareWritePhysicalPage"));
+    }
 
     virtual Result<ProcessContext> GetProcessContext(std::uint32_t pid) {
         (void)pid;

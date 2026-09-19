@@ -14,6 +14,7 @@ import shutil
 import struct
 import subprocess
 import sys
+import zipfile
 import zlib
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
@@ -137,6 +138,7 @@ MAIN_REQUIRED = (
     "tools/diagnose.ps1",
     "tools/setup.ps1",
     "tools/setup_contract.psm1",
+    "tools/TargetProfile.psm1",
     "tools/kdbg_live_verify.exe",
     "tools/kdbg_process_fixture.exe",
     "tools/new_live_evidence.ps1",
@@ -184,6 +186,10 @@ SOURCE_REQUIRED = (
     "licenses/MIT-Zydis.txt", "licenses/MIT-Zycore.txt",
     "licenses/THIRD-PARTY-NOTICES.txt",
     "src/tools/package/diagnose.ps1", "src/tools/package/install.ps1",
+    "src/tools/package/TargetProfile.psm1",
+    "src/tools/win11_baremetal_validation/README.md",
+    "src/tools/win11_baremetal_validation/Invoke-Win11BareMetalValidation.ps1",
+    "src/tools/win11_baremetal_validation/Win11BareMetalValidation.Contract.Tests.ps1",
     "src/tools/package/start.ps1", "src/tools/package/run.ps1",
     "src/tools/package/stop.ps1", "src/tools/package/uninstall.ps1",
     "src/tools/setup/main.cpp", "src/tools/setup/setup.ps1",
@@ -269,6 +275,12 @@ TRUE_EVIDENCE_FIELDS = (
     "preflight_match", "write_gate_relocked", "full_readback_match",
     "independent_reload_match", "rollback_match", "private_paths_redacted",
     "unrelated_process_data_redacted", "video_reviewed",
+)
+BAREMETAL_EVIDENCE_SCHEMA = "kdbg.win11-baremetal-validation.v1"
+BAREMETAL_REQUIRED_ARTIFACTS = (
+    "baseline", "preflight", "expected_after", "readback",
+    "independent_reload", "rollback", "package_archive", "signature_report",
+    "cleanup_report", "live_run_report",
 )
 DEMO_SCENE_ORDER = (
     "driver_probe_ready", "probe_pfn_discovery", "physical_read_4096",
@@ -491,6 +503,8 @@ def validate_source(root: Path, errors: list[str]) -> None:
             root / "src/tools/setup/setup.ps1",
             root / "src/tools/setup/setup_contract.psm1",
             root / "src/tests/setup_contract_tests.ps1",
+            root / "src/tools/win11_baremetal_validation/Invoke-Win11BareMetalValidation.ps1",
+            root / "src/tools/win11_baremetal_validation/Win11BareMetalValidation.Contract.Tests.ps1",
             *(root / relative for relative in SOURCE_REQUIRED
               if relative.startswith("src/tools/package/") and relative.endswith(".ps1")),
         ],
@@ -506,17 +520,25 @@ def validate_source(root: Path, errors: list[str]) -> None:
     markers = {
         "src/shared/KDbgIoctl.h": (
             "IOCTL_KDBG_READ_PHYSICAL", "IOCTL_KDBG_WRITE_PHYSICAL",
-            "KDBG_WRITE_ACK_MAGIC",
+            "KDBG_WRITE_ACK_MAGIC", "IOCTL_KDBG_COMPARE_WRITE_PHYSICAL_PAGE",
+            "KDBG_VERSION_FLAG_PHYSICAL_PAGE_COMPARE_WRITE",
         ),
         "src/driver/KDbgDriver/Driver.cpp": (
             "IoCreateDeviceSecure", "MmGetPhysicalMemoryRanges",
             "IOCTL_KDBG_WRITE_PROCESS_MEMORY",
+            "IOCTL_KDBG_COMPARE_WRITE_PHYSICAL_PAGE",
         ),
         "src/driver/KDbgProbe/Driver.cpp": (
             "MmAllocateContiguousMemorySpecifyCache", "IOCTL_KDBG_PROBE_GET_INFO",
         ),
         "src/core/memory/PhysicalPageSession.cpp": (
             "Preflight", "ApplyAndVerify", "RollbackBaseline",
+            "CompareWritePhysicalPage",
+        ),
+        "src/core/memory/KDbgBackend.cpp": (
+            "KDBG_VERSION_FLAG_PHYSICAL_PAGE_COMPARE_WRITE",
+            "IOCTL_KDBG_COMPARE_WRITE_PHYSICAL_PAGE",
+            "KDbgBackend::CompareWritePhysicalPage",
         ),
         "src/core/memory/ProbeEvidencePattern.h": (
             "kProbeEvidenceEditOffset", "0x100U",
@@ -1217,6 +1239,10 @@ def validate_sbom(package: Path, errors: list[str]) -> None:
 
 def validate_lifecycle(package: Path, errors: list[str]) -> None:
     required_tokens = {
+        "tools/TargetProfile.psm1": (
+            "Assert-KdbgTargetProfile", "Get-KdbgMachineBindingSha256",
+            "DisposableVm", "LocalHost",
+        ),
         "tools/diagnose.ps1": (
             "VerifyPackage", "RequireInstalled", "RequireRunning",
             "SHA256SUMS.txt", "Get-AuthenticodeSignature",
@@ -1817,6 +1843,7 @@ def validate_analysis_metadata(
     symbols: Path | None,
     final_timestamp: datetime | None,
     probe_pfn: int | None,
+    expected_abi: int | None,
     errors: list[str],
 ) -> dict[str, int | None]:
     """Validate the independent user mapping and Kernel Explorer proof."""
@@ -1829,8 +1856,9 @@ def validate_analysis_metadata(
         return result
     if data.get("schema") != "kdbg-analysis-live-evidence-v1":
         errors.append("analysis metadata schema must be kdbg-analysis-live-evidence-v1")
-    if data.get("driver_abi_version") != 6:
-        errors.append("analysis metadata driver ABI must be 6")
+    if (expected_abi not in {6, 7} or
+            data.get("driver_abi_version") != expected_abi):
+        errors.append("analysis metadata driver ABI does not match final evidence")
     try:
         captured = datetime.fromisoformat(
             str(data.get("captured_utc", "")).replace("Z", "+00:00"))
@@ -2416,7 +2444,9 @@ def validate_live(
         errors.append("--live-evidence requires --symbols-package")
     if evidence.get("schema") != "kdbg.live-evidence.v4":
         errors.append("live evidence schema must be kdbg.live-evidence.v4")
-    if evidence.get("package_version") != VERSION or evidence.get("abi_version") != 6:
+    evidence_abi = evidence.get("abi_version")
+    if (evidence.get("package_version") != VERSION or
+            evidence_abi not in {6, 7}):
         errors.append("live evidence product or ABI version mismatch")
     timestamp: datetime | None = None
     try:
@@ -2631,7 +2661,8 @@ def validate_live(
     if (analysis_path is not None and not analysis_path.is_symlink() and
             analysis_path.is_file() and analysis_path.stat().st_size > 0):
         analysis_values = validate_analysis_metadata(
-            analysis_path, package, symbols, timestamp, pfn, errors)
+            analysis_path, package, symbols, timestamp, pfn,
+            evidence_abi if evidence_abi in {6, 7} else None, errors)
 
     gui_metadata: dict | None = None
     gui_path = artifact_paths.get("gui_metadata_file")
@@ -2648,7 +2679,7 @@ def validate_live(
                 errors.append(f"invalid GUI metadata timestamp_utc: {exc}")
             if (gui_metadata.get("schema") != "kdbg-physical-live-evidence-v1" or
                     gui_metadata.get("page_size") != 4096 or
-                    gui_metadata.get("driver_abi_version") != 6 or
+                    gui_metadata.get("driver_abi_version") != evidence_abi or
                     gui_metadata.get("edit_offset") != PROBE_EDIT_OFFSET or
                     gui_metadata.get("edit_length") != len(PROBE_EDIT_MASK) or
                     gui_metadata.get("edit_xor_mask") != PROBE_EDIT_MASK.hex() or
@@ -2765,6 +2796,10 @@ def validate_live(
                         not isinstance(before, dict) or
                         integer(before.get("pfn"), "live_run.probe_before.pfn", errors) != pfn):
                     errors.append("final evidence and live run Probe PFN/mode do not match")
+                live_backend = live_run.get("backend")
+                if (not isinstance(live_backend, dict) or
+                        live_backend.get("abi_version") != evidence_abi):
+                    errors.append("final evidence ABI does not match the live run")
                 system = live_run.get("system")
                 if (not isinstance(system, dict) or
                         system.get("os_build") != evidence.get("os_build")):
@@ -2898,14 +2933,21 @@ def validate_live_run(path: Path, errors: list[str]) -> None:
     validate_runtime_identity(report, errors)
 
     backend = report.get("backend")
+    backend_abi: int | None = None
     if not isinstance(backend, dict):
         errors.append("live run backend record is missing")
     elif (not isinstance(backend.get("name"), str) or not backend.get("name") or
           backend.get("connected") is not True or
           backend.get("is_mock") is not False or
           backend.get("write_enabled") is not False or
-          backend.get("abi_version") != 6):
-        errors.append("live run requires a connected, locked, non-mock ABI v6 backend")
+          backend.get("abi_version") not in {6, 7}):
+        errors.append("live run requires a connected, locked, non-mock ABI v6/v7 backend")
+    else:
+        backend_abi = backend.get("abi_version")
+        if (backend_abi == 7 and
+                backend.get("supports_physical_page_compare_write") is not True):
+            errors.append(
+                "ABI v7 live run lacks the exact-page compare/write capability")
 
     def checked_probe(name: str) -> dict | None:
         probe = report.get(name)
@@ -3099,10 +3141,13 @@ def validate_live_run(path: Path, errors: list[str]) -> None:
                 errors.append("write run session counters do not prove apply plus rollback")
             if session_final.get("last_physical_write_transferred") != 4096:
                 errors.append("write run final driver acknowledgement is not a full-page rollback")
+            expected_apply_transfer = 4096 if backend_abi == 7 else 8
             if (session_after_apply.get("last_physical_write_status") != 0 or
                     session_after_apply.get("last_physical_write_stage") != 4 or
-                    session_after_apply.get("last_physical_write_transferred") != 8):
-                errors.append("write run apply acknowledgement is not a completed 8-byte write")
+                    session_after_apply.get("last_physical_write_transferred") !=
+                        expected_apply_transfer):
+                errors.append(
+                    "write run apply acknowledgement does not match its ABI transaction")
             if (session_final.get("last_physical_write_status") != 0 or
                     session_final.get("last_physical_write_stage") != 4):
                 errors.append("write run rollback acknowledgement is not complete")
@@ -3110,11 +3155,13 @@ def validate_live_run(path: Path, errors: list[str]) -> None:
             applied_reads = session_after_apply.get("successful_reads")
             final_reads = session_final.get("successful_reads")
             sample_count = len(samples) if isinstance(samples, list) else 0
+            apply_read_delta = sample_count + (1 if backend_abi == 7 else 3)
+            rollback_read_delta = 2 if backend_abi == 7 else 4
             if (not isinstance(before_reads, int) or
                     not isinstance(applied_reads, int) or
                     not isinstance(final_reads, int) or
-                    applied_reads < before_reads + sample_count + 3 or
-                    final_reads < applied_reads + 4):
+                    applied_reads < before_reads + apply_read_delta or
+                    final_reads < applied_reads + rollback_read_delta):
                 errors.append("write run read counters do not cover every independent full-page read")
             if not (
                 session_before.get("rejected_writes") ==
@@ -3124,6 +3171,529 @@ def validate_live_run(path: Path, errors: list[str]) -> None:
                 errors.append("write run unexpectedly changed the rejected-write counter")
     elif report.get("operator_confirmed_disposable_vm") is not False:
         errors.append("read-only run must not assert write-mode confirmation")
+
+
+def validate_baremetal_package_archive(
+    archive: Path, package: Path, errors: list[str],
+) -> None:
+    """Bind the archived release bytes to the extracted package tree."""
+    try:
+        with zipfile.ZipFile(archive, "r") as bundle:
+            records: dict[str, zipfile.ZipInfo] = {}
+            for item in bundle.infolist():
+                if item.is_dir():
+                    continue
+                name = item.filename.replace("\\", "/")
+                safe = safe_relative(name)
+                if safe is None or item.flag_bits & 0x1:
+                    raise ValueError("unsafe or encrypted archive entry")
+                parts = PurePosixPath(safe).parts
+                if parts and parts[0] == PACKAGE_NAME:
+                    parts = parts[1:]
+                if not parts:
+                    raise ValueError("empty package-relative archive entry")
+                relative = PurePosixPath(*parts).as_posix()
+                if relative in records:
+                    raise ValueError("duplicate package-relative archive entry")
+                records[relative] = item
+            actual = file_set(package)
+            if set(records) != actual:
+                errors.append(
+                    "bare-metal package archive file set does not match the "
+                    "extracted Windows package"
+                )
+                return
+            for relative, item in records.items():
+                digest = hashlib.sha256(bundle.read(item)).hexdigest()
+                if digest != sha256(package / PurePosixPath(relative)):
+                    errors.append(
+                        "bare-metal package archive content mismatch: " + relative
+                    )
+                    return
+    except (OSError, ValueError, zipfile.BadZipFile) as exc:
+        errors.append(f"invalid bare-metal package archive: {exc}")
+
+
+def validate_baremetal_host_evidence(
+    path: Path,
+    package: Path | None,
+    errors: list[str],
+) -> None:
+    """Validate a completed bare-metal runtime-host Probe transaction.
+
+    This gate is intentionally independent from the Hyper-V guest gate.  A
+    skeleton/dry-run report, a guest report, or an unbound set of page files
+    can never satisfy it.
+    """
+    evidence = load_json(path, "bare-metal host evidence JSON", errors)
+    if evidence is None:
+        return
+    if evidence.get("schema") != BAREMETAL_EVIDENCE_SCHEMA:
+        errors.append(
+            f"bare-metal evidence schema must be {BAREMETAL_EVIDENCE_SCHEMA}"
+        )
+    if evidence.get("lane") != "bare-metal-runtime-host":
+        errors.append("bare-metal evidence lane must be bare-metal-runtime-host")
+    if evidence.get("success") is not True or evidence.get("dry_run") is not False:
+        errors.append("bare-metal evidence must be a successful non-dry-run record")
+    if evidence.get("errors") != []:
+        errors.append("bare-metal evidence contains one or more recorded errors")
+    if any(field in evidence for field in (
+        "guest", "guest_validation_passed", "vm_name", "checkpoint",
+        "operator_confirmed_disposable_vm", "snapshot_id",
+    )):
+        errors.append("guest/VM evidence cannot masquerade as bare-metal evidence")
+    serialized = path.read_text(encoding="utf-8-sig", errors="ignore")
+    if PRIVATE_PATH_RE.search(serialized):
+        errors.append("bare-metal evidence leaks a private user path")
+
+    try:
+        completed = datetime.fromisoformat(
+            str(evidence.get("completed_utc", "")).replace("Z", "+00:00")
+        )
+        if (completed.tzinfo is None or
+                completed.utcoffset() != timezone.utc.utcoffset(completed)):
+            raise ValueError("not UTC")
+        if completed.timestamp() > datetime.now(timezone.utc).timestamp() + 300:
+            raise ValueError("timestamp is in the future")
+    except ValueError as exc:
+        errors.append(f"invalid bare-metal completed_utc: {exc}")
+
+    roles = evidence.get("roles")
+    if not isinstance(roles, dict):
+        errors.append("bare-metal evidence roles must be an object")
+        roles = {}
+    runtime_host = roles.get("runtime_host")
+    orchestrator_host = roles.get("orchestrator_host")
+    if not isinstance(runtime_host, dict):
+        errors.append("bare-metal runtime_host identity is missing")
+        runtime_host = {}
+    if not isinstance(orchestrator_host, dict):
+        errors.append("bare-metal orchestrator_host identity is missing")
+        orchestrator_host = {}
+    runtime_identity = runtime_host.get("machine_identity_sha256")
+    orchestrator_identity = orchestrator_host.get("machine_identity_sha256")
+    require_sha(runtime_identity, "roles.runtime_host.machine_identity_sha256", errors)
+    require_sha(
+        orchestrator_identity,
+        "roles.orchestrator_host.machine_identity_sha256",
+        errors,
+    )
+    if (runtime_host.get("role") != "runtime_host" or
+            runtime_host.get("execution_context") != "bare-metal" or
+            runtime_host.get("is_virtual_machine") is not False):
+        errors.append("runtime_host is not bound to a bare-metal execution context")
+    if not isinstance(runtime_host.get("hypervisor_present"), bool):
+        errors.append("runtime_host hypervisor_present observation is missing")
+    if (runtime_host.get("os_name") != "Windows" or
+            runtime_host.get("architecture") != "x64" or
+            not isinstance(runtime_host.get("os_build"), int) or
+            isinstance(runtime_host.get("os_build"), bool) or
+            runtime_host.get("os_build", 0) < MIN_WINDOWS_BUILD):
+        errors.append(
+            f"runtime_host must be Windows x64 build {MIN_WINDOWS_BUILD} or newer"
+        )
+    if orchestrator_host.get("role") != "orchestrator_host":
+        errors.append("orchestrator_host role is invalid")
+    boot_before = runtime_host.get("boot_id_before_sha256")
+    require_sha(boot_before, "roles.runtime_host.boot_id_before_sha256", errors)
+
+    package_record = evidence.get("package")
+    if not isinstance(package_record, dict):
+        errors.append("bare-metal package binding is missing")
+        package_record = {}
+    for field in (
+        "package_sha256", "manifest_sha256", "source_snapshot_sha256",
+        "signer_certificate_sha256",
+    ):
+        require_sha(package_record.get(field), f"package.{field}", errors)
+    thumbprint = package_record.get("signer_thumbprint")
+    if (not isinstance(thumbprint, str) or
+            re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", thumbprint) is None):
+        errors.append("package.signer_thumbprint must be lowercase SHA-1/SHA-256 hex")
+    if package_record.get("signature_status") != "Valid":
+        errors.append("bare-metal package signer status is not Valid")
+    if package is None:
+        errors.append("--baremetal-host-evidence requires --windows-package")
+    else:
+        metadata = load_json(
+            package / "BUILD-METADATA.json", "bare-metal package metadata", errors
+        )
+        if metadata is not None and (
+            package_record.get("source_snapshot_sha256") !=
+            metadata.get("source_snapshot_sha256")
+        ):
+            errors.append("bare-metal source hash does not match the Windows package")
+        manifest = package / "SHA256SUMS.txt"
+        if (manifest.is_file() and
+                package_record.get("manifest_sha256") != sha256(manifest)):
+            errors.append("bare-metal manifest hash does not match the Windows package")
+
+    binding = evidence.get("binding")
+    if not isinstance(binding, dict):
+        errors.append("bare-metal evidence binding is missing")
+        binding = {}
+    binding_pairs = (
+        ("runtime_host_machine_identity_sha256", runtime_identity),
+        ("boot_id_before_sha256", boot_before),
+        ("package_sha256", package_record.get("package_sha256")),
+        ("source_snapshot_sha256", package_record.get("source_snapshot_sha256")),
+        ("signer_thumbprint", thumbprint),
+    )
+    for field, expected in binding_pairs:
+        if binding.get(field) != expected:
+            errors.append(f"bare-metal binding identity mismatch: {field}")
+
+    target = evidence.get("target")
+    if not isinstance(target, dict):
+        errors.append("bare-metal Probe target is missing")
+        target = {}
+    pfn = integer(target.get("pfn"), "target.pfn", errors)
+    physical = integer(target.get("physical_address"), "target.physical_address", errors)
+    if (pfn is not None and (pfn <= 0 or pfn > ((1 << 64) - 1) >> 12)):
+        errors.append("bare-metal Probe PFN is zero or overflows PFN << 12")
+    if pfn is not None and physical is not None and physical != pfn << 12:
+        errors.append("bare-metal target physical_address does not equal PFN << 12")
+    if (target.get("provider") != "KDbgProbe" or
+            target.get("discovery") != "IOCTL_KDBG_PROBE_GET_INFO" or
+            target.get("ownership") != "KDbgProbe-owned contiguous page" or
+            target.get("probe_derived") is not True or
+            target.get("raw_user_pfn") is not False or
+            target.get("page_size") != 4096 or
+            not isinstance(target.get("generation"), int) or
+            isinstance(target.get("generation"), bool) or
+            target.get("generation", 0) <= 0):
+        errors.append("bare-metal live evidence target is not a Probe-derived 4 KiB PFN")
+
+    backend = evidence.get("backend")
+    if not isinstance(backend, dict):
+        errors.append("bare-metal backend capability record is missing")
+        backend = {}
+    if (backend.get("name") != "KDbgDriver" or
+            backend.get("connected") is not True or
+            backend.get("is_mock") is not False or
+            backend.get("abi_version") != 7 or
+            backend.get("write_enabled_final") is not False or
+            backend.get("capabilities") != ["compare-write-page-v1"]):
+        errors.append(
+            "bare-metal evidence requires locked non-mock ABI v7 compare-write-page-v1"
+        )
+
+    artifacts = evidence.get("artifacts")
+    if not isinstance(artifacts, dict):
+        errors.append("bare-metal evidence artifacts must be an object")
+        artifacts = {}
+    artifact_paths: dict[str, Path] = {}
+    for name in BAREMETAL_REQUIRED_ARTIFACTS:
+        record = artifacts.get(name)
+        if not isinstance(record, dict):
+            errors.append(f"bare-metal artifact record is missing: {name}")
+            continue
+        require_sha(record.get("sha256"), f"artifacts.{name}.sha256", errors)
+        artifact = _safe_evidence_file(
+            path.parent, record.get("file"), f"bare-metal artifact {name}", errors
+        )
+        if artifact is None:
+            continue
+        artifact_paths[name] = artifact
+        if artifact.stat().st_size != record.get("bytes"):
+            errors.append(f"bare-metal artifact byte count mismatch: {name}")
+        if sha256(artifact) != record.get("sha256"):
+            errors.append(f"bare-metal artifact hash mismatch: {name}")
+        if (name in {
+                "baseline", "preflight", "expected_after", "readback",
+                "independent_reload", "rollback",
+            } and
+                artifact.stat().st_size != 4096):
+            errors.append(f"bare-metal page artifact must be exactly 4096 bytes: {name}")
+
+    package_archive = artifact_paths.get("package_archive")
+    if (package_archive is not None and
+            sha256(package_archive) != package_record.get("package_sha256")):
+        errors.append("bare-metal package archive hash does not match package binding")
+    if package_archive is not None and package is not None:
+        validate_baremetal_package_archive(package_archive, package, errors)
+
+    signature_report_path = artifact_paths.get("signature_report")
+    if signature_report_path is not None:
+        signature_report = load_json(
+            signature_report_path, "bare-metal signature report", errors
+        )
+        if signature_report is not None:
+            if (signature_report.get("schema") !=
+                    "kdbg.win11-baremetal-signature-report.v1" or
+                    signature_report.get("verified") is not True or
+                    signature_report.get("status") != "Valid" or
+                    signature_report.get("verification_command") !=
+                    "Get-AuthenticodeSignature" or
+                    signature_report.get("exit_code") != 0):
+                errors.append("bare-metal signature report did not prove Valid status")
+            for field in (
+                "package_sha256", "signer_thumbprint",
+                "signer_certificate_sha256",
+            ):
+                if signature_report.get(field) != package_record.get(field):
+                    errors.append(
+                        f"bare-metal signature report binding mismatch: {field}"
+                    )
+            catalogs = signature_report.get("catalogs")
+            expected_catalog_paths = set(EXPECTED_CATALOGS)
+            if not isinstance(catalogs, list) or len(catalogs) != 2:
+                errors.append("bare-metal signature report must bind both driver catalogs")
+            else:
+                seen_catalogs: set[str] = set()
+                for record in catalogs:
+                    if not isinstance(record, dict):
+                        errors.append("bare-metal signature catalog record is invalid")
+                        continue
+                    relative = record.get("package_relative_path")
+                    digest = record.get("sha256")
+                    if relative not in expected_catalog_paths or relative in seen_catalogs:
+                        errors.append("bare-metal signature catalog path is invalid")
+                        continue
+                    seen_catalogs.add(relative)
+                    catalog_path = package / PurePosixPath(relative) if package else None
+                    if (catalog_path is None or not catalog_path.is_file() or
+                            digest != sha256(catalog_path)):
+                        errors.append(
+                            f"bare-metal signature catalog hash mismatch: {relative}"
+                        )
+                if seen_catalogs != expected_catalog_paths:
+                    errors.append("bare-metal signature report catalog set is incomplete")
+
+    baseline = artifact_paths.get("baseline")
+    preflight = artifact_paths.get("preflight")
+    expected_after = artifact_paths.get("expected_after")
+    readback = artifact_paths.get("readback")
+    independent_reload = artifact_paths.get("independent_reload")
+    rollback = artifact_paths.get("rollback")
+    if baseline and preflight and baseline.read_bytes() != preflight.read_bytes():
+        errors.append("bare-metal preflight page does not match baseline")
+    if expected_after and readback and expected_after.read_bytes() != readback.read_bytes():
+        errors.append("bare-metal full read-back does not match expected page")
+    if expected_after and independent_reload and (
+            expected_after.read_bytes() != independent_reload.read_bytes()):
+        errors.append("bare-metal independent reload does not match expected page")
+    if baseline and rollback and baseline.read_bytes() != rollback.read_bytes():
+        errors.append("bare-metal rollback does not restore the full baseline page")
+    if baseline and expected_after:
+        before = baseline.read_bytes()
+        after = expected_after.read_bytes()
+        differences = [index for index, pair in enumerate(zip(before, after))
+                       if pair[0] != pair[1]]
+        if differences != list(range(PROBE_EDIT_OFFSET, PROBE_EDIT_OFFSET + 8)):
+            errors.append("bare-metal expected page is not the exact 8-byte Probe edit")
+        elif bytes(before[index] ^ after[index] for index in differences) != PROBE_EDIT_MASK:
+            errors.append("bare-metal expected page does not use the fixed Probe edit mask")
+
+    live_report: dict | None = None
+    live_report_path = artifact_paths.get("live_run_report")
+    if live_report_path is not None:
+        live_report = load_json(
+            live_report_path, "bare-metal live verifier report", errors
+        )
+        if live_report is not None:
+            if (live_report.get("schema") != "kdbg.live-verify.v2" or
+                    live_report.get("mode") !=
+                    "baremetal-probe-write-rollback" or
+                    live_report.get("success") is not True or
+                    live_report.get("cancelled") is not False or
+                    live_report.get("errors") != [] or
+                    live_report.get("operator_confirmed_disposable_vm") is not False or
+                    live_report.get("snapshot_id") != ""):
+                errors.append("bare-metal live verifier report is not a successful v2 run")
+            contract = live_report.get("baremetal_contract")
+            if not isinstance(contract, dict):
+                errors.append("bare-metal live verifier contract is missing")
+                contract = {}
+            if (contract.get("target_profile") != "LocalHost" or
+                    contract.get("probe_identity_fresh_at_rollback") is not True or
+                    contract.get("rollback_suppressed_stale_identity") is not False):
+                errors.append("bare-metal live verifier contract binding is invalid")
+            report_backend = live_report.get("backend")
+            if not isinstance(report_backend, dict) or (
+                report_backend.get("name") != "KDbgDriver" or
+                report_backend.get("abi_version") != 7 or
+                report_backend.get("connected") is not True or
+                report_backend.get("is_mock") is not False or
+                report_backend.get("write_enabled") is not False or
+                report_backend.get(
+                    "supports_physical_page_compare_write") is not True
+            ):
+                errors.append("bare-metal live verifier backend is not locked ABI v7")
+            probes = [
+                live_report.get(name) for name in (
+                    "probe_before", "probe_after_write", "probe_after_rollback")
+            ]
+            if (not all(isinstance(probe, dict) for probe in probes) or
+                    any(probe.get("pfn") != pfn for probe in probes
+                        if isinstance(probe, dict)) or
+                    any(probe.get("generation") != target.get("generation")
+                        for probe in probes if isinstance(probe, dict)) or
+                    any(probe.get("byte_count") != 4096 for probe in probes
+                        if isinstance(probe, dict))):
+                errors.append("bare-metal live verifier Probe identity mismatch")
+            report_cleanup = live_report.get("write_cleanup")
+            if not isinstance(report_cleanup, dict) or (
+                report_cleanup.get("edit_offset") != PROBE_EDIT_OFFSET or
+                report_cleanup.get("edit_length") != 8 or
+                report_cleanup.get("user_dirty_bytes") != 8 or
+                report_cleanup.get("apply_driver_transferred_bytes") != 4096 or
+                report_cleanup.get("rollback_requested_bytes") != 4096 or
+                report_cleanup.get("rollback_driver_transferred_bytes") != 4096 or
+                report_cleanup.get("rollback_attempted") is not True or
+                report_cleanup.get("rollback_verified") is not True or
+                report_cleanup.get("final_relock_attempted") is not True or
+                report_cleanup.get("final_gate_locked") is not True
+            ):
+                errors.append("bare-metal live verifier write/rollback contract is invalid")
+            raw_page_records = live_report.get("raw_page_artifacts")
+            report_pages: dict[str, dict] = {}
+            if not isinstance(raw_page_records, list):
+                errors.append("bare-metal live verifier raw_page_artifacts are missing")
+            else:
+                for record in raw_page_records:
+                    if (not isinstance(record, dict) or
+                            not isinstance(record.get("role"), str) or
+                            record["role"] in report_pages):
+                        errors.append("bare-metal live verifier raw page record is invalid")
+                        continue
+                    report_pages[record["role"]] = record
+            for name in (
+                "baseline", "preflight", "expected_after", "readback",
+                "independent_reload", "rollback",
+            ):
+                raw_record = artifacts.get(name)
+                report_record = report_pages.get(name)
+                if not isinstance(raw_record, dict) or not isinstance(report_record, dict):
+                    errors.append(
+                        f"bare-metal live verifier page artifact is missing: {name}"
+                    )
+                    continue
+                raw_path = artifact_paths.get(name)
+                expected_crc = (
+                    zlib.crc32(raw_path.read_bytes()) & 0xFFFFFFFF
+                    if raw_path is not None else None
+                )
+                if (report_record.get("file_name") != raw_record.get("file") or
+                        report_record.get("sha256") != raw_record.get("sha256") or
+                        report_record.get("byte_count") != 4096 or
+                        report_record.get("written") is not True or
+                        ("crc32" in report_record and
+                         report_record.get("crc32") != expected_crc)):
+                    errors.append(
+                        f"bare-metal live verifier page binding mismatch: {name}"
+                    )
+            comparison_by_name = {
+                item.get("name"): item
+                for item in live_report.get("comparisons", [])
+                if isinstance(item, dict) and isinstance(item.get("name"), str)
+            }
+            crc_pairs = {
+                "baseline_vs_preflight": ("baseline", "preflight"),
+                "expected_vs_write_readback": ("expected_after", "readback"),
+                "expected_vs_independent_reload":
+                    ("expected_after", "independent_reload"),
+                "baseline_vs_rollback_readback": ("baseline", "rollback"),
+            }
+            for comparison_name, (expected_name, actual_name) in crc_pairs.items():
+                comparison_record = comparison_by_name.get(comparison_name)
+                expected_path = artifact_paths.get(expected_name)
+                actual_path = artifact_paths.get(actual_name)
+                if (not isinstance(comparison_record, dict) or
+                        expected_path is None or actual_path is None or
+                        comparison_record.get("byte_count") != 4096 or
+                        comparison_record.get("mismatch_count") != 0 or
+                        comparison_record.get("match") is not True or
+                        comparison_record.get("expected_crc32") !=
+                        zlib.crc32(expected_path.read_bytes()) & 0xFFFFFFFF or
+                        comparison_record.get("actual_crc32") !=
+                        zlib.crc32(actual_path.read_bytes()) & 0xFFFFFFFF):
+                    errors.append(
+                        "bare-metal live verifier comparison binding mismatch: "
+                        + comparison_name
+                    )
+
+    transaction = evidence.get("transaction")
+    if not isinstance(transaction, dict):
+        errors.append("bare-metal transaction record is missing")
+        transaction = {}
+    required_transaction = {
+        "physical_read_4096": True,
+        "preflight_full_match": True,
+        "one_shot_unlock": True,
+        "unlock_consumed": True,
+        "dirty_bytes": 8,
+        "driver_requested_bytes": 4096,
+        "driver_transferred_bytes": 4096,
+        "full_readback_match": True,
+        "independent_reload_match": True,
+        "rollback_requested_bytes": 4096,
+        "rollback_completed_bytes": 4096,
+        "rollback_full_match": True,
+        "final_gate_locked": True,
+    }
+    for field, expected in required_transaction.items():
+        if transaction.get(field) != expected:
+            errors.append(f"bare-metal transaction contract mismatch: {field}")
+    if (transaction.get("edit_offset") != PROBE_EDIT_OFFSET or
+            transaction.get("edit_length") != 8 or
+            transaction.get("edit_xor_mask") != PROBE_EDIT_MASK.hex()):
+        errors.append("bare-metal transaction edit identity is invalid")
+    if transaction.get("runtime_host_machine_identity_sha256") != runtime_identity:
+        errors.append("bare-metal transaction runtime-host identity mismatch")
+    if transaction.get("boot_id_sha256") != boot_before:
+        errors.append("bare-metal transaction boot identity mismatch")
+    if (transaction.get("abi_version") != 7 or
+            transaction.get("operation") != "compare-write-page-v1" or
+            transaction.get("compare_bytes") != 4096):
+        errors.append("bare-metal transaction lacks ABI v7 compare-write evidence")
+    if live_report is not None:
+        live_cleanup = live_report.get("write_cleanup")
+        if not isinstance(live_cleanup, dict) or (
+            transaction.get("dirty_bytes") !=
+            live_cleanup.get("user_dirty_bytes") or
+            transaction.get("driver_transferred_bytes") !=
+            live_cleanup.get("apply_driver_transferred_bytes") or
+            transaction.get("rollback_completed_bytes") !=
+            live_cleanup.get("rollback_driver_transferred_bytes") or
+            transaction.get("final_gate_locked") !=
+            live_cleanup.get("final_gate_locked")
+        ):
+            errors.append("bare-metal transaction summary does not match live report")
+
+    cleanup = evidence.get("cleanup")
+    if not isinstance(cleanup, dict):
+        errors.append("bare-metal cleanup record is missing")
+        cleanup = {}
+    for field in (
+        "uninstall_completed", "services_absent", "devices_absent",
+    ):
+        if cleanup.get(field) is not True:
+            errors.append(f"bare-metal cleanup did not prove: {field}")
+    if cleanup.get("errors") != []:
+        errors.append("bare-metal cleanup contains recorded errors")
+
+    cleanup_report_path = artifact_paths.get("cleanup_report")
+    if cleanup_report_path is not None:
+        cleanup_report = load_json(
+            cleanup_report_path, "bare-metal cleanup report", errors
+        )
+        if cleanup_report is not None and (
+            cleanup_report.get("schema") !=
+            "kdbg.win11-baremetal-cleanup-report.v1" or
+            cleanup_report.get("success") is not True or
+            cleanup_report.get("runtime_host_machine_identity_sha256") !=
+            runtime_identity or
+            cleanup_report.get("boot_id_sha256") != boot_before or
+            cleanup_report.get("final_gate_locked") is not True or
+            cleanup_report.get("services") != {
+                "KDBG": "absent", "KDBGProbe": "absent"} or
+            cleanup_report.get("devices") != {
+                "KDBG": "absent", "KDBGProbe": "absent"} or
+            cleanup_report.get("errors") != []
+        ):
+            errors.append("bare-metal cleanup observation report is invalid")
 
 
 def infer_default_validation_targets(
@@ -3142,6 +3712,14 @@ def main() -> int:
     parser.add_argument("--symbols-package", type=Path)
     parser.add_argument("--live-evidence", type=Path)
     parser.add_argument("--live-run-report", type=Path)
+    parser.add_argument(
+        "--baremetal-host-evidence",
+        type=Path,
+        help=(
+            "validate a completed kdbg.win11-baremetal-validation.v1 "
+            "runtime-host evidence record"
+        ),
+    )
     parser.add_argument("--artifact", action="append", default=[])
     parser.add_argument(
         "--forbid-symbol-path",
@@ -3157,7 +3735,8 @@ def main() -> int:
     root = script_path.parents[2]
     errors: list[str] = []
     if not any((args.source_complete, args.windows_package, args.symbols_package,
-                args.live_evidence, args.live_run_report)):
+                args.live_evidence, args.live_run_report,
+                args.baremetal_host_evidence)):
         (args.source_complete, args.windows_package,
          args.symbols_package) = infer_default_validation_targets(script_path)
     if args.source_complete:
@@ -3183,6 +3762,10 @@ def main() -> int:
         validate_live(args.live_evidence.resolve(), package, symbols, errors)
     if args.live_run_report:
         validate_live_run(args.live_run_report.resolve(), errors)
+    if args.baremetal_host_evidence:
+        validate_baremetal_host_evidence(
+            args.baremetal_host_evidence.resolve(), package, errors
+        )
     hashes: dict[str, str] = {}
     for value in args.artifact:
         artifact = Path(value)
@@ -3205,6 +3788,9 @@ def main() -> int:
     if args.symbols_package: gates.append("symbols-package")
     if args.live_evidence: gates.append("live-VM-verified")
     if args.live_run_report: gates.append("live-device-run-report")
+    if args.baremetal_host_evidence:
+        gates.append("bare-metal-host-read-only-verified")
+        gates.append("bare-metal-host-probe-write-verified")
     print("Release validation PASS: " + ", ".join(gates))
     print("Gate table:")
     print(f" - source-complete: {'PASS' if args.source_complete else 'NOT RUN'}")
@@ -3215,6 +3801,15 @@ def main() -> int:
     )
     print(f" - live-VM-verified: {'PASS' if args.live_evidence else 'NOT RUN'}")
     print(f" - live-device-run-report: {'PASS' if args.live_run_report else 'NOT RUN'}")
+    print(
+        " - bare-metal-host-read-only-verified: "
+        + ("PASS" if args.baremetal_host_evidence else "NOT RUN")
+    )
+    print(
+        " - bare-metal-host-probe-write-verified: "
+        + ("PASS" if args.baremetal_host_evidence else "NOT RUN")
+    )
+    print(" - bare-metal-host-raw-pfn-live-write: NOT RUN")
     return 0
 
 

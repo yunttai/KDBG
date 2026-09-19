@@ -73,29 +73,42 @@ std::string FirstOffsetMessage(
 Result<void> PhysicalPageSession::Load(
     IMemoryBackend& backend,
     const PfnAddress& address) {
+    return Load(backend, PhysicalWriteTarget::RawPfn(address));
+}
+
+Result<void> PhysicalPageSession::Load(
+    IMemoryBackend& backend,
+    const PhysicalWriteTarget& target) {
     LockWrite();
     ClearPageData();
     state_ = PageSessionState::Loading;
-    if (!address.IsConsistent()) {
+    if (!target.address.IsConsistent()) {
         state_ = PageSessionState::Error;
         return Result<void>::Failure(MakeError(
             ErrorCode::InvalidPfn,
             "PFN and physical address do not identify the same complete page",
             "PhysicalPageSession::Load"));
     }
-    address_ = address;
+    if (!target.IsConsistent()) {
+        state_ = PageSessionState::Error;
+        return Result<void>::Failure(MakeError(
+            ErrorCode::InvalidArgument,
+            "Physical write target metadata is incomplete or inconsistent",
+            "PhysicalPageSession::Load"));
+    }
+    target_ = target;
 
     const auto range_result = ValidatePageRange(backend);
     if (!range_result) {
         state_ = PageSessionState::Error;
-        address_.reset();
+        target_.reset();
         return range_result;
     }
 
     const auto read_result = ReadExactPage(backend);
     if (!read_result) {
         state_ = PageSessionState::Error;
-        address_.reset();
+        target_.reset();
         return Result<void>::Failure(read_result.GetError());
     }
 
@@ -109,13 +122,13 @@ Result<void> PhysicalPageSession::Load(
 
 Result<void> PhysicalPageSession::ReloadPreservingRollback(
     IMemoryBackend& backend) {
-    if (!address_) {
+    if (!target_) {
         return Result<void>::Failure(MakeError(
             ErrorCode::InvalidArgument,
             "No physical page is loaded",
             "PhysicalPageSession::ReloadPreservingRollback"));
     }
-    if (dirty_.any()) {
+    if (dirty_.any() && !recovery_observation_required_) {
         return Result<void>::Failure(MakeError(
             ErrorCode::InvalidArgument,
             "Revert or apply staged edits before an independent reload",
@@ -142,6 +155,11 @@ Result<void> PhysicalPageSession::ReloadPreservingRollback(
     last_mismatches_.clear();
     const auto range_result = ValidatePageRange(backend);
     if (!range_result) {
+        const auto error = range_result.GetError();
+        if (error.code == ErrorCode::BackendDisconnected) {
+            Invalidate();
+            return Result<void>::Failure(error);
+        }
         state_ = PageSessionState::Error;
         return range_result;
     }
@@ -149,12 +167,34 @@ Result<void> PhysicalPageSession::ReloadPreservingRollback(
     state_ = PageSessionState::Verifying;
     const auto reload_result = ReadExactPage(backend);
     if (!reload_result) {
+        const auto error = reload_result.GetError();
+        if (error.code == ErrorCode::BackendDisconnected) {
+            Invalidate();
+            return Result<void>::Failure(error);
+        }
         state_ = PageSessionState::VerificationFailed;
-        return Result<void>::Failure(reload_result.GetError());
+        return Result<void>::Failure(error);
     }
 
     const auto& reloaded = *reload_result.Value();
     evidence_.independent_reload = reloaded;
+    if (recovery_observation_required_) {
+        rollback_expected_ = reloaded;
+        recovery_observation_required_ = false;
+        baseline_ = reloaded;
+        working_ = reloaded;
+        dirty_.reset();
+        undo_stack_.clear();
+        redo_stack_.clear();
+        ++revision_;
+        state_ = PageSessionState::Clean;
+
+        if (rollback_snapshot_ && reloaded == *rollback_snapshot_) {
+            rollback_snapshot_.reset();
+            rollback_expected_.reset();
+        }
+        return Result<void>::Success();
+    }
     for (std::size_t offset = 0; offset < kPhysicalPageSize; ++offset) {
         if (reloaded[offset] != baseline_[offset]) {
             last_mismatches_.push_back(offset);
@@ -180,11 +220,18 @@ Result<void> PhysicalPageSession::ReloadPreservingRollback(
     return Result<void>::Success();
 }
 
+void PhysicalPageSession::Invalidate() noexcept {
+    LockWrite();
+    ClearPageData();
+    ++revision_;
+    state_ = PageSessionState::Empty;
+}
+
 Result<void> PhysicalPageSession::ApplyLocalEdit(
     std::size_t offset,
     std::uint8_t value,
     bool record_history) {
-    if (!address_) {
+    if (!target_) {
         return Result<void>::Failure(MakeError(
             ErrorCode::InvalidArgument,
             "No physical page is loaded",
@@ -244,7 +291,7 @@ Result<void> PhysicalPageSession::EditByte(
 }
 
 Result<void> PhysicalPageSession::RevertByte(std::size_t offset) {
-    if (!address_ || offset >= kPhysicalPageSize) {
+    if (!target_ || offset >= kPhysicalPageSize) {
         return Result<void>::Failure(MakeError(
             ErrorCode::InvalidArgument,
             "Cannot revert the requested byte",
@@ -314,7 +361,7 @@ Result<void> PhysicalPageSession::Redo() {
 }
 
 void PhysicalPageSession::RevertAll() noexcept {
-    if (!address_) {
+    if (!target_) {
         return;
     }
     working_ = baseline_;
@@ -330,7 +377,7 @@ void PhysicalPageSession::RevertAll() noexcept {
 
 Result<void> PhysicalPageSession::UnlockForOneApply(
     std::uint64_t retyped_pfn) {
-    if (!address_) {
+    if (!target_) {
         return Result<void>::Failure(MakeError(
             ErrorCode::InvalidArgument,
             "No physical page is loaded",
@@ -342,7 +389,7 @@ Result<void> PhysicalPageSession::UnlockForOneApply(
             "There are no changes to apply",
             "PhysicalPageSession::UnlockForOneApply"));
     }
-    if (retyped_pfn != address_->pfn) {
+    if (retyped_pfn != target_->address.pfn) {
         return Result<void>::Failure(MakeError(
             ErrorCode::WriteLocked,
             "Retyped PFN does not match the current page",
@@ -356,13 +403,13 @@ Result<void> PhysicalPageSession::UnlockForOneApply(
 
 Result<void> PhysicalPageSession::UnlockForRollback(
     std::uint64_t retyped_pfn) {
-    if (!address_ || !rollback_snapshot_) {
+    if (!target_ || !rollback_snapshot_ || !rollback_expected_) {
         return Result<void>::Failure(MakeError(
             ErrorCode::InvalidArgument,
             "No previous successful apply is available for rollback",
             "PhysicalPageSession::UnlockForRollback"));
     }
-    if (retyped_pfn != address_->pfn) {
+    if (retyped_pfn != target_->address.pfn) {
         return Result<void>::Failure(MakeError(
             ErrorCode::WriteLocked,
             "Retyped PFN does not match the current page",
@@ -375,7 +422,7 @@ Result<void> PhysicalPageSession::UnlockForRollback(
 
 Result<void> PhysicalPageSession::ApplyAndVerify(
     IMemoryBackend& backend) {
-    if (!address_) {
+    if (!target_) {
         return Result<void>::Failure(MakeError(
             ErrorCode::InvalidArgument,
             "No physical page is loaded",
@@ -395,6 +442,8 @@ Result<void> PhysicalPageSession::ApplyAndVerify(
     }
 
     LockWrite();
+    last_apply_verified_ = false;
+    recovery_observation_required_ = false;
     last_conflicts_.clear();
     last_mismatches_.clear();
     ClearEvidence();
@@ -402,25 +451,74 @@ Result<void> PhysicalPageSession::ApplyAndVerify(
 
     const auto range_result = ValidatePageRange(backend);
     if (!range_result) {
+        const auto error = range_result.GetError();
+        if (error.code == ErrorCode::BackendDisconnected) {
+            Invalidate();
+            return Result<void>::Failure(error);
+        }
         state_ = PageSessionState::Error;
         return range_result;
     }
 
-    state_ = PageSessionState::Preflight;
-    const auto preflight_result = ReadExactPage(backend);
-    if (!preflight_result) {
+    rollback_snapshot_ = baseline_;
+    rollback_expected_.reset();
+    evidence_.expected_after = working_;
+
+    WriteGateGuard gate(backend);
+    const auto gate_result = gate.Enable();
+    if (!gate_result) {
+        rollback_snapshot_.reset();
+        if (gate_result.GetError().code == ErrorCode::BackendDisconnected) {
+            const auto error = gate_result.GetError();
+            Invalidate();
+            return Result<void>::Failure(error);
+        }
         state_ = PageSessionState::Error;
-        return Result<void>::Failure(preflight_result.GetError());
+        return gate_result;
     }
 
-    const auto& live = *preflight_result.Value();
-    evidence_.preflight = live;
-    for (std::size_t offset = 0; offset < kPhysicalPageSize; ++offset) {
-        if (live[offset] != baseline_[offset]) {
-            last_conflicts_.push_back(offset);
+    state_ = PageSessionState::Writing;
+    const auto transaction = backend.CompareWritePhysicalPage(
+        target_->address.physical_address,
+        std::span<const std::uint8_t>(baseline_.data(), baseline_.size()),
+        std::span<const std::uint8_t>(working_.data(), working_.size()));
+    if (!transaction) {
+        rollback_expected_.reset();
+        recovery_observation_required_ = true;
+        state_ = PageSessionState::VerificationFailed;
+        const auto close_result = gate.Close();
+        if (!close_result) {
+            return close_result;
         }
+        return Result<void>::Failure(transaction.GetError());
     }
-    if (!last_conflicts_.empty()) {
+
+    const auto& result = transaction.Value();
+    evidence_.readback = result.readback;
+    if (result.outcome == PhysicalPageCompareWriteOutcome::Conflict) {
+        evidence_.preflight = result.readback;
+        rollback_snapshot_.reset();
+        recovery_observation_required_ = false;
+        for (std::size_t offset = 0; offset < kPhysicalPageSize; ++offset) {
+            if (result.readback[offset] != baseline_[offset]) {
+                last_conflicts_.push_back(offset);
+            }
+        }
+    } else {
+        // The kernel transaction established that expected-before matched as
+        // one complete page before attempting the write.
+        evidence_.preflight = baseline_;
+        rollback_expected_ = result.readback;
+        recovery_observation_required_ = false;
+    }
+
+    const auto close_result = gate.Close();
+    if (!close_result) {
+        state_ = PageSessionState::Error;
+        return close_result;
+    }
+
+    if (result.outcome == PhysicalPageCompareWriteOutcome::Conflict) {
         state_ = PageSessionState::Conflict;
         return Result<void>::Failure(MakeError(
             ErrorCode::ConcurrentModification,
@@ -430,84 +528,38 @@ Result<void> PhysicalPageSession::ApplyAndVerify(
             "PhysicalPageSession::ApplyAndVerify"));
     }
 
-    rollback_snapshot_ = baseline_;
-    rollback_expected_ = working_;
-    rollback_allows_partial_ = true;
-    evidence_.expected_after = working_;
-
-    state_ = PageSessionState::Writing;
-    for (const auto& run : DiffRuns()) {
-        WriteGateGuard gate(backend);
-        const auto gate_result = gate.Enable();
-        if (!gate_result) {
-            state_ = PageSessionState::Error;
-            return gate_result;
-        }
-        const auto physical_address =
-            address_->physical_address +
-            static_cast<std::uint64_t>(run.offset);
-        const auto write_result = backend.WritePhysical(
-            physical_address,
-            std::span<const std::uint8_t>(run.after.data(), run.after.size()));
-        if (!write_result) {
-            state_ = PageSessionState::Error;
-            const auto close_result = gate.Close();
-            if (!close_result) {
-                return close_result;
-            }
-            return Result<void>::Failure(write_result.GetError());
-        }
-        if (write_result.Value() != run.after.size()) {
-            state_ = PageSessionState::Error;
-            const auto close_result = gate.Close();
-            if (!close_result) {
-                return close_result;
-            }
-            return Result<void>::Failure(MakeError(
-                ErrorCode::ShortWrite,
-                "Backend completed fewer bytes than requested",
-                "PhysicalPageSession::ApplyAndVerify",
-                0,
-                run.after.size(),
-                write_result.Value()));
-        }
-        const auto close_result = gate.Close();
-        if (!close_result) {
-            state_ = PageSessionState::Error;
-            return close_result;
-        }
-    }
-
     state_ = PageSessionState::Verifying;
-    const auto readback_result = ReadExactPage(backend);
-    if (!readback_result) {
-        state_ = PageSessionState::VerificationFailed;
-        return Result<void>::Failure(readback_result.GetError());
-    }
-
-    const auto& readback = *readback_result.Value();
-    evidence_.readback = readback;
     for (std::size_t offset = 0; offset < kPhysicalPageSize; ++offset) {
-        if (readback[offset] != working_[offset]) {
+        if (result.readback[offset] != working_[offset]) {
             last_mismatches_.push_back(offset);
         }
     }
-    if (!last_mismatches_.empty()) {
+    if (result.outcome != PhysicalPageCompareWriteOutcome::Applied ||
+        result.transferred != kPhysicalPageSize ||
+        !last_mismatches_.empty()) {
         state_ = PageSessionState::VerificationFailed;
+        const auto error_code =
+            result.transferred != 0U &&
+                result.transferred != kPhysicalPageSize
+            ? ErrorCode::ShortWrite
+            : ErrorCode::VerificationMismatch;
         return Result<void>::Failure(MakeError(
-            ErrorCode::VerificationMismatch,
+            error_code,
             FirstOffsetMessage(
-                "Read-back does not match the requested bytes",
+                "Verified physical transaction did not produce the requested page",
                 last_mismatches_),
-            "PhysicalPageSession::ApplyAndVerify"));
+            "PhysicalPageSession::ApplyAndVerify",
+            result.native_status,
+            kPhysicalPageSize,
+            result.transferred));
     }
 
-    baseline_ = readback;
-    working_ = readback;
+    baseline_ = result.readback;
+    working_ = result.readback;
     dirty_.reset();
     undo_stack_.clear();
     redo_stack_.clear();
-    rollback_allows_partial_ = false;
+    last_apply_verified_ = true;
     ++revision_;
     state_ = PageSessionState::Clean;
     return Result<void>::Success();
@@ -515,13 +567,13 @@ Result<void> PhysicalPageSession::ApplyAndVerify(
 
 Result<void> PhysicalPageSession::RollbackBaseline(
     IMemoryBackend& backend) {
-    if (!address_) {
+    if (!target_) {
         return Result<void>::Failure(MakeError(
             ErrorCode::InvalidArgument,
             "No physical page is loaded",
             "PhysicalPageSession::RollbackBaseline"));
     }
-    if (!rollback_snapshot_) {
+    if (!rollback_snapshot_ || !rollback_expected_) {
         return Result<void>::Failure(MakeError(
             ErrorCode::InvalidArgument,
             "No previous baseline snapshot is available for rollback",
@@ -540,29 +592,63 @@ Result<void> PhysicalPageSession::RollbackBaseline(
     evidence_.rollback.reset();
     const auto range_result = ValidatePageRange(backend);
     if (!range_result) {
+        const auto error = range_result.GetError();
+        if (error.code == ErrorCode::BackendDisconnected) {
+            Invalidate();
+            return Result<void>::Failure(error);
+        }
         state_ = PageSessionState::Error;
         return range_result;
     }
 
 
-    state_ = PageSessionState::Preflight;
-    const auto preflight_result = ReadExactPage(backend);
-    if (!preflight_result) {
+    WriteGateGuard gate(backend);
+    const auto gate_result = gate.Enable();
+    if (!gate_result) {
+        if (gate_result.GetError().code == ErrorCode::BackendDisconnected) {
+            const auto error = gate_result.GetError();
+            Invalidate();
+            return Result<void>::Failure(error);
+        }
         state_ = PageSessionState::Error;
-        return Result<void>::Failure(preflight_result.GetError());
+        return gate_result;
     }
-    const auto& live = *preflight_result.Value();
-    for (std::size_t offset = 0; offset < kPhysicalPageSize; ++offset) {
-        bool expected = live[offset] == baseline_[offset];
-        if (rollback_allows_partial_ && rollback_expected_) {
-            expected = live[offset] == (*rollback_snapshot_)[offset] ||
-                live[offset] == (*rollback_expected_)[offset];
+
+    state_ = PageSessionState::Writing;
+    const auto transaction = backend.CompareWritePhysicalPage(
+        target_->address.physical_address,
+        std::span<const std::uint8_t>(
+            rollback_expected_->data(), rollback_expected_->size()),
+        std::span<const std::uint8_t>(
+            rollback_snapshot_->data(), rollback_snapshot_->size()));
+    if (!transaction) {
+        rollback_expected_.reset();
+        recovery_observation_required_ = true;
+        state_ = PageSessionState::VerificationFailed;
+        const auto close_result = gate.Close();
+        if (!close_result) {
+            return close_result;
         }
-        if (!expected) {
-            last_conflicts_.push_back(offset);
-        }
+        return Result<void>::Failure(transaction.GetError());
     }
-    if (!last_conflicts_.empty()) {
+
+    const auto& result = transaction.Value();
+    evidence_.rollback = result.readback;
+    if (result.outcome != PhysicalPageCompareWriteOutcome::Conflict) {
+        rollback_expected_ = result.readback;
+    }
+    const auto close_result = gate.Close();
+    if (!close_result) {
+        state_ = PageSessionState::Error;
+        return close_result;
+    }
+
+    if (result.outcome == PhysicalPageCompareWriteOutcome::Conflict) {
+        for (std::size_t offset = 0; offset < kPhysicalPageSize; ++offset) {
+            if (result.readback[offset] != (*rollback_expected_)[offset]) {
+                last_conflicts_.push_back(offset);
+            }
+        }
         state_ = PageSessionState::Conflict;
         return Result<void>::Failure(MakeError(
             ErrorCode::ConcurrentModification,
@@ -572,84 +658,41 @@ Result<void> PhysicalPageSession::RollbackBaseline(
             "PhysicalPageSession::RollbackBaseline"));
     }
 
-    WriteGateGuard gate(backend);
-    const auto gate_result = gate.Enable();
-    if (!gate_result) {
-        state_ = PageSessionState::Error;
-        return gate_result;
-    }
-
-    rollback_expected_ = live;
-    rollback_allows_partial_ = true;
-    state_ = PageSessionState::Writing;
-    const auto write_result = backend.WritePhysical(
-        address_->physical_address,
-        std::span<const std::uint8_t>(
-            rollback_snapshot_->data(),
-            rollback_snapshot_->size()));
-    if (!write_result) {
-        state_ = PageSessionState::Error;
-        const auto close_result = gate.Close();
-        if (!close_result) {
-            return close_result;
-        }
-        return Result<void>::Failure(write_result.GetError());
-    }
-    if (write_result.Value() != rollback_snapshot_->size()) {
-        state_ = PageSessionState::Error;
-        const auto close_result = gate.Close();
-        if (!close_result) {
-            return close_result;
-        }
-        return Result<void>::Failure(MakeError(
-            ErrorCode::ShortWrite,
-            "Rollback write was short",
-            "PhysicalPageSession::RollbackBaseline",
-            0,
-            rollback_snapshot_->size(),
-            write_result.Value()));
-    }
-
-
-    const auto close_result = gate.Close();
-    if (!close_result) {
-        state_ = PageSessionState::Error;
-        return close_result;
-    }
-
     state_ = PageSessionState::Verifying;
-    const auto readback_result = ReadExactPage(backend);
-    if (!readback_result) {
-        state_ = PageSessionState::VerificationFailed;
-        return Result<void>::Failure(readback_result.GetError());
-    }
     for (std::size_t offset = 0; offset < kPhysicalPageSize; ++offset) {
-        if ((*readback_result.Value())[offset] !=
-            (*rollback_snapshot_)[offset]) {
+        if (result.readback[offset] != (*rollback_snapshot_)[offset]) {
             last_mismatches_.push_back(offset);
         }
     }
-    evidence_.rollback = *readback_result.Value();
-    if (!last_mismatches_.empty()) {
+    if (result.outcome != PhysicalPageCompareWriteOutcome::Applied ||
+        result.transferred != kPhysicalPageSize ||
+        !last_mismatches_.empty()) {
+        // A failed transaction still returns a complete observed page.  Bind
+        // the next retry to that exact page; never accept a per-byte mixture.
+        rollback_expected_ = result.readback;
         state_ = PageSessionState::VerificationFailed;
         return Result<void>::Failure(MakeError(
             ErrorCode::RollbackFailed,
             FirstOffsetMessage(
                 "Rollback read-back does not match the baseline",
                 last_mismatches_),
-            "PhysicalPageSession::RollbackBaseline"));
+            "PhysicalPageSession::RollbackBaseline",
+            result.native_status,
+            kPhysicalPageSize,
+            result.transferred));
     }
 
     baseline_ = *rollback_snapshot_;
     working_ = baseline_;
     rollback_snapshot_.reset();
     rollback_expected_.reset();
-    rollback_allows_partial_ = false;
+    recovery_observation_required_ = false;
     dirty_.reset();
     last_conflicts_.clear();
     last_mismatches_.clear();
     undo_stack_.clear();
     redo_stack_.clear();
+    last_apply_verified_ = false;
     ++revision_;
     state_ = PageSessionState::Clean;
     return Result<void>::Success();
@@ -660,7 +703,7 @@ PageSessionState PhysicalPageSession::State() const noexcept {
 }
 
 bool PhysicalPageSession::HasPage() const noexcept {
-    return address_.has_value();
+    return target_.has_value();
 }
 
 bool PhysicalPageSession::IsDirty() const noexcept {
@@ -676,14 +719,15 @@ bool PhysicalPageSession::WriteUnlocked() const noexcept {
 }
 
 bool PhysicalPageSession::CanRollback() const noexcept {
-    return rollback_snapshot_.has_value();
+    return rollback_snapshot_.has_value() && rollback_expected_.has_value();
+}
+
+bool PhysicalPageSession::RecoveryObservationRequired() const noexcept {
+    return recovery_observation_required_;
 }
 
 bool PhysicalPageSession::LastApplyVerified() const noexcept {
-    return rollback_snapshot_.has_value() &&
-        evidence_.expected_after.has_value() &&
-        evidence_.readback.has_value() &&
-        *evidence_.readback == *evidence_.expected_after;
+    return last_apply_verified_;
 }
 
 bool PhysicalPageSession::CanUndo() const noexcept {
@@ -707,10 +751,17 @@ std::uint64_t PhysicalPageSession::Revision() const noexcept {
 }
 
 const PfnAddress& PhysicalPageSession::Address() const {
-    if (!address_) {
+    if (!target_) {
         throw std::logic_error("No physical page is loaded");
     }
-    return *address_;
+    return target_->address;
+}
+
+const PhysicalWriteTarget& PhysicalPageSession::Target() const {
+    if (!target_) {
+        throw std::logic_error("No physical write target is loaded");
+    }
+    return *target_;
 }
 
 const std::array<std::uint8_t, kPhysicalPageSize>&
@@ -788,7 +839,7 @@ std::vector<DiffRun> PhysicalPageSession::DiffRuns() const {
 
 Result<void> PhysicalPageSession::ValidatePageRange(
     IMemoryBackend& backend) const {
-    if (!address_) {
+    if (!target_) {
         return Result<void>::Failure(MakeError(
             ErrorCode::InvalidArgument,
             "No physical page is selected",
@@ -805,7 +856,7 @@ Result<void> PhysicalPageSession::ValidatePageRange(
         ranges_result.Value().end(),
         [this](const PhysicalRange& range) {
             return range.Contains(
-                address_->physical_address,
+                target_->address.physical_address,
                 kPhysicalPageSize);
         });
 
@@ -821,7 +872,7 @@ Result<void> PhysicalPageSession::ValidatePageRange(
 Result<std::unique_ptr<std::array<std::uint8_t, kPhysicalPageSize>>>
 PhysicalPageSession::ReadExactPage(IMemoryBackend& backend) const {
     using Page = std::array<std::uint8_t, kPhysicalPageSize>;
-    if (!address_) {
+    if (!target_) {
         return Result<std::unique_ptr<Page>>::Failure(
             MakeError(
                 ErrorCode::InvalidArgument,
@@ -830,7 +881,7 @@ PhysicalPageSession::ReadExactPage(IMemoryBackend& backend) const {
     }
 
     const auto read_result = backend.ReadPhysical(
-        address_->physical_address,
+        target_->address.physical_address,
         static_cast<std::uint32_t>(kPhysicalPageSize));
     if (!read_result) {
         return Result<std::unique_ptr<Page>>::Failure(
@@ -863,12 +914,13 @@ void PhysicalPageSession::ClearEvidence() noexcept {
 }
 
 void PhysicalPageSession::ClearPageData() noexcept {
-    address_.reset();
+    target_.reset();
     baseline_.fill(0);
     working_.fill(0);
     rollback_snapshot_.reset();
     rollback_expected_.reset();
-    rollback_allows_partial_ = false;
+    last_apply_verified_ = false;
+    recovery_observation_required_ = false;
     ClearEvidence();
     dirty_.reset();
     last_conflicts_.clear();

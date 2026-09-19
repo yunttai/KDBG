@@ -2,7 +2,36 @@
 
 Status date: 2026-09-19 KST
 
-This report's current boundary is Git commit
+## Current working-tree gate summary (authoritative)
+
+The product target is the local physical RAM exposed to the same bare-metal
+Windows `runtime_host` that runs `KDBG.exe` and `KDbgDriver.sys`.
+`orchestrator_host` is a lifecycle/evidence controller, not an implicit memory
+target, and `regression_guest` is an independent regression lane.
+
+| Gate | State | Current evidence boundary |
+|---|---|---|
+| Source-complete | PASS | layout, core configure/build, CTest 11/11, and `validate_release.py --source-complete` PASS |
+| Release validator tests | PASS | `python -m unittest src.tests.test_validate_release`: 88/88 |
+| ABI 7 exact-page transaction | SOURCE PASS | 4096-byte compare/write/full read-back implementation and deterministic coverage are present |
+| Windows WDK driver build | BLOCKED / NOT VERIFIED | required WDK toolset is unavailable on this host; MSBuild reports `MSB8020` |
+| Bare-metal runtime-host read-only | NOT RUN | no same-host read-only evidence artifact was produced |
+| Bare-metal Probe-write | NOT RUN | producer/validator source exists, but no same-host Probe transaction was executed |
+| Bare-metal RawPfn live write | NOT RUN | no actual runtime-host PFN write or read-back success is claimed |
+| Historical regression-guest evidence | PRESERVED | remains bound to its recorded source/package identity and does not establish a current bare-metal gate |
+
+LocalHost RawPfn is the ordinary product path. ProbeFixture is the default
+destructive evidence target, not a restriction on product capability. Optional
+machine/boot/session provenance is captured automatically when available; it is
+not a manual confirmation or product prerequisite. No dedicated-machine,
+recovery-plan, Probe-only, or equivalent new product usage restriction was added.
+
+The remainder of this report preserves the RC4/RC1 and earlier evidence as
+historical records. Its PASS results are not rebound to the current working tree.
+
+## Historical RC4 report boundary
+
+This report's RC4 boundary is Git commit
 `4b376bb0d61eab232af8a2f7f29033238b911022`, unsigned epoch
 `product-1.1.0-rc4-final-20260919`, and VM-only test derivative
 `product-1.1.0-rc4-test1-20260919`. Source, Windows build/package, and exact
@@ -26,7 +55,7 @@ submission occurred. Annotated source-freeze tag `v1.1.0-rc4` is published to
 `origin` at the recorded commit; stable tag `v1.1.0` and public release remain blocked. DEF
 CON submission is explicitly outside this work scope.
 
-## 1.1.0 gate summary
+## Historical RC4 1.1.0 gate summary
 
 | Gate | State | Evidence in this workspace |
 |---|---|---|

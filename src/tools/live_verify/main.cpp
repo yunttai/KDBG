@@ -10,11 +10,13 @@
 #include <winsvc.h>
 #include <winternl.h>
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <bit>
 #include <cstddef>
 #include <cstdio>
+#include <cwctype>
 #include <exception>
 #include <filesystem>
 #include <fstream>
@@ -317,6 +319,37 @@ kdbg::Result<std::string> Sha256ForHandle(
     if (status < 0) {
         return kdbg::Result<std::string>::Failure(CngError(
             "Unable to finish a Windows SHA-256 hash",
+            std::string(operation), status));
+    }
+    constexpr char digits[] = "0123456789abcdef";
+    std::string hexadecimal(digest.size() * 2U, '0');
+    for (std::size_t index = 0; index < digest.size(); ++index) {
+        hexadecimal[index * 2U] = digits[digest[index] >> 4U];
+        hexadecimal[index * 2U + 1U] = digits[digest[index] & 0x0FU];
+    }
+    return kdbg::Result<std::string>::Success(std::move(hexadecimal));
+}
+
+kdbg::Result<std::string> Sha256ForBytes(
+    std::span<const std::uint8_t> bytes,
+    std::string_view operation) {
+    BCRYPT_ALG_HANDLE raw_algorithm = nullptr;
+    NTSTATUS status = BCryptOpenAlgorithmProvider(
+        &raw_algorithm, BCRYPT_SHA256_ALGORITHM, nullptr, 0);
+    if (status < 0) {
+        return kdbg::Result<std::string>::Failure(CngError(
+            "Unable to open the Windows SHA-256 provider",
+            std::string(operation), status));
+    }
+    UniqueAlgorithmHandle algorithm(raw_algorithm);
+    std::array<UCHAR, 32> digest{};
+    status = BCryptHash(
+        algorithm.Get(), nullptr, 0,
+        const_cast<PUCHAR>(bytes.data()), static_cast<ULONG>(bytes.size()),
+        digest.data(), static_cast<ULONG>(digest.size()));
+    if (status < 0) {
+        return kdbg::Result<std::string>::Failure(CngError(
+            "Unable to hash the machine binding material",
             std::string(operation), status));
     }
     constexpr char digits[] = "0123456789abcdef";
@@ -752,6 +785,108 @@ bool WriteEvidence(
     return true;
 }
 
+std::optional<kdbg::Error> WriteBaremetalArtifacts(
+    const std::string& directory,
+    kdbg::live_verify::VerificationReport& report) {
+    const std::filesystem::path root = Utf8Path(directory);
+    if (root.empty()) {
+        return kdbg::MakeError(
+            kdbg::ErrorCode::InvalidArgument,
+            "Bare-metal artifact directory is empty",
+            "live_verify::write_raw_pages");
+    }
+    std::error_code ec;
+    std::filesystem::create_directories(root, ec);
+    if (ec) {
+        return kdbg::MakeError(
+            kdbg::ErrorCode::IoFailure,
+            "Unable to create the bare-metal artifact directory",
+            "live_verify::write_raw_pages",
+            static_cast<std::uint32_t>(ec.value()));
+    }
+    const DWORD root_attributes = GetFileAttributesW(root.c_str());
+    if (root_attributes == INVALID_FILE_ATTRIBUTES ||
+        (root_attributes & FILE_ATTRIBUTE_DIRECTORY) == 0 ||
+        (root_attributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0) {
+        return kdbg::MakeError(
+            kdbg::ErrorCode::AccessDenied,
+            "Bare-metal artifact directory must be a non-reparse directory",
+            "live_verify::write_raw_pages");
+    }
+
+    for (auto& artifact : report.raw_page_artifacts) {
+        const auto digest = Sha256ForBytes(
+            std::span<const std::uint8_t>(
+                artifact.bytes.data(), artifact.bytes.size()),
+            "live_verify::write_raw_pages");
+        if (!digest) return digest.GetError();
+        const auto target = root / Utf8Path(artifact.file_name);
+        const DWORD existing = GetFileAttributesW(target.c_str());
+        if (existing != INVALID_FILE_ATTRIBUTES &&
+            ((existing & FILE_ATTRIBUTE_DIRECTORY) != 0 ||
+             (existing & FILE_ATTRIBUTE_REPARSE_POINT) != 0)) {
+            return kdbg::MakeError(
+                kdbg::ErrorCode::AccessDenied,
+                "A raw-page artifact target is not a regular file",
+                "live_verify::write_raw_pages");
+        }
+        auto temporary = target;
+        temporary += L".tmp-" + std::to_wstring(GetCurrentProcessId());
+        std::filesystem::remove(temporary, ec);
+        ec.clear();
+        std::ofstream output(temporary, std::ios::binary | std::ios::trunc);
+        if (!output) {
+            return kdbg::MakeError(
+                kdbg::ErrorCode::IoFailure,
+                "Unable to create a raw-page artifact",
+                "live_verify::write_raw_pages");
+        }
+        output.write(
+            reinterpret_cast<const char*>(artifact.bytes.data()),
+            static_cast<std::streamsize>(artifact.bytes.size()));
+        output.flush();
+        output.close();
+        if (!output || !MoveFileExW(
+                temporary.c_str(), target.c_str(),
+                MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+            std::filesystem::remove(temporary, ec);
+            return Win32Error(
+                "Unable to publish a raw-page artifact",
+                "live_verify::write_raw_pages");
+        }
+        const auto published = CaptureFileIdentity(
+            target.native(), "live_verify::verify_raw_page");
+        const auto published_size = std::filesystem::file_size(target, ec);
+        if (!published || ec || published_size != artifact.bytes.size() ||
+            published.Value().sha256 != digest.Value()) {
+            return published
+                ? kdbg::MakeError(
+                    kdbg::ErrorCode::VerificationMismatch,
+                    "Published raw-page artifact did not match its 4 KiB source",
+                    "live_verify::verify_raw_page",
+                    0, artifact.bytes.size(),
+                    ec ? 0U : published_size)
+                : published.GetError();
+        }
+        artifact.sha256 = published.Value().sha256;
+        artifact.written = true;
+    }
+    if (report.raw_page_artifacts.size() != 6U ||
+        std::any_of(
+            report.raw_page_artifacts.begin(),
+            report.raw_page_artifacts.end(),
+            [](const kdbg::live_verify::RawPageArtifactRecord& artifact) {
+                return !artifact.written || artifact.sha256.size() != 64U;
+            })) {
+        return kdbg::MakeError(
+            kdbg::ErrorCode::VerificationMismatch,
+            "Bare-metal evidence did not produce all six raw 4 KiB pages",
+            "live_verify::write_raw_pages",
+            0, 6, report.raw_page_artifacts.size());
+    }
+    return std::nullopt;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -798,11 +933,15 @@ int main(int argc, char** argv) {
             "Runtime identity attestation failed with a non-standard exception",
             "live_verify::attest_runtime");
     }
-    if (identity_capture.package_root.has_value() && IsPathWithin(
-            *identity_capture.package_root,
-            Utf8Path(options.output_path))) {
+    if (identity_capture.package_root.has_value() &&
+        (IsPathWithin(
+             *identity_capture.package_root,
+             Utf8Path(options.output_path)) ||
+         (options.baremetal_evidence && IsPathWithin(
+             *identity_capture.package_root,
+             Utf8Path(options.artifact_directory))))) {
         std::cerr <<
-            "Evidence output must be outside the validated package directory\n";
+            "Evidence output and raw pages must be outside the validated package directory\n";
         SetConsoleCtrlHandler(&ConsoleHandler, FALSE);
         return 2;
     }
@@ -881,6 +1020,21 @@ int main(int argc, char** argv) {
     probe.Close();
     backend.Close();
     SetConsoleCtrlHandler(&ConsoleHandler, FALSE);
+
+    if (options.baremetal_evidence) {
+        const auto artifact_error = WriteBaremetalArtifacts(
+            options.artifact_directory, report);
+        if (artifact_error) {
+            report.success = false;
+            report.errors.push_back(kdbg::live_verify::ErrorRecord{
+                "io_failure",
+                artifact_error->operation,
+                artifact_error->message,
+                artifact_error->native_code,
+                artifact_error->requested,
+                artifact_error->completed});
+        }
+    }
 
     if (!WriteEvidence(options.output_path, report)) {
         std::cerr << "Unable to write JSON evidence: "

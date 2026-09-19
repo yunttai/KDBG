@@ -3,6 +3,7 @@
 #include "app/ui/DisassemblyPanel.h"
 #include "app/ui/HexEditorPanel.h"
 #include "app/ui/KernelExplorerPanel.h"
+#include "app/ui/Localization.h"
 #include "app/ui/MemoryMapPanel.h"
 #include "app/ui/PageTablePanel.h"
 #include "app/ui/PfnInputPanel.h"
@@ -130,6 +131,8 @@ private:
     void LockAllWrites();
     bool ValidateProbeTargetForWrite();
     bool ValidateProbeTargetForRollback();
+    bool ValidateRawPfnTarget(bool rollback);
+    bool ValidateCurrentPhysicalTargetForObservation();
     bool ValidateCurrentPhysicalTargetForWrite();
     bool ValidateCurrentPhysicalTargetForRollback();
     void CapturePhysicalReadback(
@@ -142,6 +145,9 @@ private:
     [[nodiscard]] std::optional<VerifiedProcessPhysicalTarget>
     CurrentPageProcessTarget() const noexcept;
     [[nodiscard]] bool CurrentPageIsVerifiedWriteTarget() const noexcept;
+    [[nodiscard]] bool CurrentPageBoundToRuntimeHost() const noexcept;
+    [[nodiscard]] std::string RuntimeHostIdentityLabel() const;
+    void BindCurrentPageToRuntimeHost() noexcept;
     [[nodiscard]] bool LifecycleBusy() const noexcept;
     [[nodiscard]] bool ProcessIoBusy() const noexcept;
     [[nodiscard]] bool BackendIoBusy() const noexcept;
@@ -153,6 +159,11 @@ private:
     int selected_process_index_{-1};
     std::unique_ptr<Win32ProcessMemory> process_memory_;
     std::array<char, 128> process_filter_{};
+    std::string runtime_host_machine_;
+    std::string runtime_host_boot_id_;
+    std::string runtime_host_process_session_id_;
+    std::uint64_t runtime_backend_session_generation_{0};
+    std::uint64_t physical_target_backend_session_{0};
 
     PhysicalPageSession physical_session_;
     PfnInputPanel pfn_input_;
@@ -204,6 +215,7 @@ private:
     bool select_physical_memory_tab_{false};
     bool select_page_tables_tab_{false};
     bool select_pfn_ownership_tab_{false};
+    std::optional<ui::UiLanguage> pending_language_;
     bool about_open_requested_{false};
     bool dock_layout_checked_{false};
 };

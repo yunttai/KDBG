@@ -127,7 +127,9 @@ $verify = Invoke-Captured 'readonly-probe-discovery' $verifier @('--output',$rea
 if ($verify.exit_code -ne 0) { throw 'Read-only Probe discovery failed.' }
 $report = Get-Content -LiteralPath $readOnlyPath -Raw -Encoding UTF8 | ConvertFrom-Json
 if ($report.success -ne $true -or $report.runtime_identity.verified -ne $true -or
-    [uint32]$report.backend.abi_version -ne 6 -or $report.backend.is_mock -ne $false -or
+    [uint32]$report.backend.abi_version -ne 7 -or
+    $report.backend.supports_physical_page_compare_write -ne $true -or
+    $report.backend.is_mock -ne $false -or
     [uint32]$report.probe_before.byte_count -ne 4096 -or
     $report.write_cleanup.final_gate_locked -ne $true) {
     throw 'Read-only Probe discovery report did not satisfy the live contract.'

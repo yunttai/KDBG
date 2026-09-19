@@ -116,19 +116,16 @@ command log, media와 최종 evidence JSON은 immutable package directory 내부
 
 전제:
 
-- dedicated/disposable VM
-- 복원 가능한 snapshot
 - Administrator PowerShell
 - KDBG/KDBGProbe binary와 ABI가 같은 build
+- 제품 기본 target은 동일 Windows 시스템의 `LocalHost`
 
 ```powershell
 .\src\tools\manage_drivers.ps1 `
-  -Action Install -Configuration Debug `
-  -ConfirmDedicatedVm -ConfirmSnapshot
+  -Action Install -Configuration Debug -TargetProfile LocalHost
 
 .\src\tools\manage_drivers.ps1 `
-  -Action Start -Configuration Debug `
-  -ConfirmDedicatedVm -ConfirmSnapshot
+  -Action Start -Configuration Debug -TargetProfile LocalHost
 
 .\src\tools\manage_drivers.ps1 -Action Status
 ```
@@ -144,9 +141,11 @@ Stop/Remove:
 
 ```powershell
 .\src\tools\run.ps1 `
-  -Configuration Debug -NoBuild `
-  -ConfirmDisposableVm -ConfirmSnapshot
+  -Configuration Debug -NoBuild -TargetProfile LocalHost
 ```
+
+`DisposableVm`와 해당 confirmation switch는 별도 regression_guest lane에서만
+사용하며 `LocalHost` 설치, 실행 또는 RawPfn 편집의 전제 조건이 아니다.
 
 ## 7. MemProcFS 선택 구성
 

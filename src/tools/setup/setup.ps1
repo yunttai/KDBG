@@ -7,6 +7,9 @@ param(
     [switch]$ConfirmDedicatedVm,
     [switch]$ConfirmSnapshot,
 
+    [ValidateSet("DisposableVm", "LocalHost")]
+    [string]$TargetProfile,
+
     [ValidateRange(0, 2147483647)]
     [int]$HostProcessId = 0,
 
@@ -17,12 +20,22 @@ $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
 Import-Module (Join-Path $PSScriptRoot "setup_contract.psm1") -Force
+Import-Module (Join-Path $PSScriptRoot "TargetProfile.psm1") -Force
 $Contract = Get-KdbgSetupContract
 $Plan = Get-KdbgSetupPlan -Action $Action
 
-if (-not $ConfirmDedicatedVm -or -not $ConfirmSnapshot) {
+$ResolvedTargetProfile = if ([string]::IsNullOrWhiteSpace($TargetProfile)) {
+    if ($ConfirmDedicatedVm -and $ConfirmSnapshot) { "DisposableVm" }
+    else { "LocalHost" }
+} else { $TargetProfile }
+if ($ResolvedTargetProfile -eq "DisposableVm" -and
+    (-not $ConfirmDedicatedVm -or -not $ConfirmSnapshot)) {
     throw "Setup requires dedicated disposable-VM and snapshot confirmations."
 }
+$null = Assert-KdbgTargetProfile `
+    -TargetProfile $ResolvedTargetProfile `
+    -ConfirmDedicatedVm:$ConfirmDedicatedVm `
+    -ConfirmSnapshot:$ConfirmSnapshot
 $Identity = [Security.Principal.WindowsIdentity]::GetCurrent()
 $Principal = [Security.Principal.WindowsPrincipal]::new($Identity)
 if (-not $Principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
@@ -91,6 +104,7 @@ function Assert-ExactPackageRoot(
     foreach ($Relative in @(
             "KDBG.exe", "KDBGSetup.exe", "BUILD-METADATA.json",
             "SHA256SUMS.txt", "tools\diagnose.ps1", "tools\install.ps1",
+            "tools\TargetProfile.psm1",
             "tools\uninstall.ps1", "tools\setup.ps1",
             "tools\setup_contract.psm1")) {
         $Required = Join-Path $Full $Relative
@@ -547,9 +561,16 @@ $Result = Invoke-KdbgSetupFileTransaction `
     -ApplyLifecycle {
         param($Root)
         Assert-ExactPackageRoot $Root -Mode InstalledProduct | Out-Null
-        & (Join-Path $Root "tools\install.ps1") `
-            -Start -ConfirmDedicatedVm -ConfirmSnapshot `
-            -PackageRootMode InstalledProduct
+        $InstallArguments = @{
+            Start = $true
+            TargetProfile = $ResolvedTargetProfile
+            PackageRootMode = "InstalledProduct"
+        }
+        if ($ResolvedTargetProfile -eq "DisposableVm") {
+            $InstallArguments.ConfirmDedicatedVm = $true
+            $InstallArguments.ConfirmSnapshot = $true
+        }
+        & (Join-Path $Root "tools\install.ps1") @InstallArguments
         if ($LASTEXITCODE -ne 0) {
             throw "Transactional package driver lifecycle failed."
         }

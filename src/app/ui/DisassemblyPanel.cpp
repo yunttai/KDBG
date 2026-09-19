@@ -1,4 +1,5 @@
 #include "app/ui/DisassemblyPanel.h"
+#include "app/ui/Localization.h"
 
 #include <imgui.h>
 
@@ -87,7 +88,7 @@ void DisassemblyPanel::StartDecode(
     progress_instructions_.store(0, std::memory_order_relaxed);
     const auto generation = ++generation_;
     IProcessMemory* const memory = memory_;
-    status_ = "Reading and decoding process memory asynchronously...";
+    status_ = ui::UiText("Reading and decoding process memory asynchronously...");
     decode_future_ = std::async(
         std::launch::async,
         [this, memory, address, byte_count, generation, stop_token] {
@@ -169,16 +170,20 @@ void DisassemblyPanel::PollDecode() {
     result_report_ = std::move(outcome.report);
     instructions_ = std::move(result_report_.instructions);
     result_address_ = outcome.address;
-    status_ = "Decoded " + std::to_string(instructions_.size()) +
-        " instruction(s), consumed " +
-        std::to_string(result_report_.consumed_bytes) + " of " +
-        std::to_string(result_report_.read_bytes) + " byte(s).";
+    status_ = std::string(ui::UiText("Decoded")) + " " +
+        std::to_string(instructions_.size()) + " " +
+        ui::UiText("instruction(s), consumed") + " " +
+        std::to_string(result_report_.consumed_bytes) + " " +
+        ui::UiText("of") + " " +
+        std::to_string(result_report_.read_bytes) + " " +
+        ui::UiText("byte(s).");
     if (result_report_.truncated) {
-        status_ += " Result truncated at the 10,000 instruction cap.";
+        status_ += std::string(" ") +
+            ui::UiText("Result truncated at the 10,000 instruction cap.");
     }
     if (result_report_.fallback_bytes != 0) {
-        status_ += " " + std::to_string(result_report_.fallback_bytes) +
-            " undecodable byte(s) were rendered as db.";
+        status_ += " " + std::to_string(result_report_.fallback_bytes) + " " +
+            ui::UiText("undecodable byte(s) were rendered as db.");
     }
 }
 
@@ -186,23 +191,28 @@ void DisassemblyPanel::Draw() {
     PollDecode();
     const bool decode_busy = Busy();
     if (memory_ == nullptr || (!decode_busy && !memory_->IsOpen())) {
-        ImGui::TextDisabled("Attach to a process to disassemble memory.");
+        ImGui::TextDisabled(
+            "%s", ui::UiText("Attach to a process to disassemble memory."));
         return;
     }
     ImGui::TextWrapped(
-        "The disassembly view uses Zydis and reads the target through the same "
-        "Win32/KDBG fallback process backend as the scanner.");
+        "%s", ui::UiText(
+            "The disassembly view uses Zydis and reads the target through the same "
+            "Win32/KDBG fallback process backend as the scanner."));
     ImGui::SetNextItemWidth(260.0F);
-    ImGui::InputText("Start Address", address_.data(), address_.size());
+    ImGui::InputText(
+        ui::UiLabel("Start Address", "Start Address").c_str(),
+        address_.data(), address_.size());
     ImGui::SetNextItemWidth(140.0F);
-    ImGui::InputInt("Bytes", &byte_count_);
+    ImGui::InputInt(ui::UiLabel("Bytes", "Bytes").c_str(), &byte_count_);
     byte_count_ = std::clamp(byte_count_, 16, 1024 * 1024);
     ImGui::SameLine();
     ImGui::BeginDisabled(decode_busy);
-    if (ImGui::Button("Disassemble")) {
+    if (ImGui::Button(
+            ui::UiLabel("Disassemble", "Disassemble").c_str())) {
         std::uint64_t address = 0;
         if (!ParseAddress(address_.data(), address)) {
-            status_ = "Invalid disassembly address.";
+            status_ = ui::UiText("Invalid disassembly address.");
         } else {
             StartDecode(address, static_cast<std::uint32_t>(byte_count_));
         }
@@ -210,9 +220,11 @@ void DisassemblyPanel::Draw() {
     ImGui::EndDisabled();
     if (decode_busy) {
         ImGui::SameLine();
-        if (ImGui::Button("Cancel Disassembly")) {
+        if (ImGui::Button(
+                ui::UiLabel(
+                    "Cancel Disassembly", "Cancel Disassembly").c_str())) {
             stop_source_.request_stop();
-            status_ = "Disassembly cancellation requested.";
+            status_ = ui::UiText("Disassembly cancellation requested.");
         }
         const auto progress = progress_.load(std::memory_order_relaxed);
         const auto consumed =
@@ -228,14 +240,16 @@ void DisassemblyPanel::Draw() {
                 1.0F)
             : static_cast<float>(progress) / 2.0F;
         const std::string overlay = progress == 0
-            ? "queued"
+            ? ui::UiText("queued")
             : (progress == 1
                 ? (consumed == 0
-                    ? "reading"
-                    : "decoding " + std::to_string(consumed) + " / " +
-                        std::to_string(total) + " bytes, " +
-                        std::to_string(instructions) + " instructions")
-                : "publishing");
+                    ? std::string(ui::UiText("reading"))
+                    : std::string(ui::UiText("decoding")) + " " +
+                        std::to_string(consumed) + " / " +
+                        std::to_string(total) + " " + ui::UiText("bytes,") +
+                        " " + std::to_string(instructions) + " " +
+                        ui::UiText("instructions"))
+                : ui::UiText("publishing"));
         ImGui::ProgressBar(
             fraction,
             ImVec2(-1.0F, 0.0F),
@@ -247,7 +261,8 @@ void DisassemblyPanel::Draw() {
     const bool input_valid = ParseAddress(address_.data(), input_address);
     if (result_address_.has_value()) {
         ImGui::Text(
-            "Displayed result: 0x%016llX | requested %u | read %llu | consumed %llu | fallback %llu | %s",
+            ui::UiText(
+                "Displayed result: 0x%016llX | requested %u | read %llu | consumed %llu | fallback %llu | %s"),
             static_cast<unsigned long long>(*result_address_),
             result_report_.requested_bytes,
             static_cast<unsigned long long>(result_report_.read_bytes),
@@ -256,8 +271,9 @@ void DisassemblyPanel::Draw() {
             result_report_.truncated ? "TRUNCATED" : "COMPLETE");
         if (!input_valid || input_address != *result_address_) {
             ImGui::TextColored(
-                ImVec4(1.0F, 0.75F, 0.25F, 1.0F),
-                "The input address changed; the table still shows the published result above.");
+                ImVec4(1.0F, 0.75F, 0.25F, 1.0F), "%s",
+                ui::UiText(
+                    "The input address changed; the table still shows the published result above."));
         }
     }
 
@@ -267,9 +283,14 @@ void DisassemblyPanel::Draw() {
             ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
                 ImGuiTableFlags_Resizable | ImGuiTableFlags_ScrollY,
             ImVec2(0.0F, 650.0F))) {
-        ImGui::TableSetupColumn("Address", ImGuiTableColumnFlags_WidthFixed, 150.0F);
-        ImGui::TableSetupColumn("Bytes", ImGuiTableColumnFlags_WidthFixed, 240.0F);
-        ImGui::TableSetupColumn("Instruction");
+        ImGui::TableSetupColumn(
+            ui::UiLabel("Address", "Address").c_str(),
+            ImGuiTableColumnFlags_WidthFixed, 150.0F);
+        ImGui::TableSetupColumn(
+            ui::UiLabel("Bytes", "Bytes").c_str(),
+            ImGuiTableColumnFlags_WidthFixed, 240.0F);
+        ImGui::TableSetupColumn(
+            ui::UiLabel("Instruction", "Instruction").c_str());
         ImGui::TableHeadersRow();
         ImGuiListClipper clipper;
         clipper.Begin(static_cast<int>(instructions_.size()));

@@ -54,9 +54,11 @@ Do not retry blindly.
 
 ## Read-back or rollback mismatch
 
-Perform no additional writes. Save the mismatch offsets and log, confirm the
-target is KDbgProbe, attempt only the explicit verified rollback, and restore
-the disposable VM snapshot if the baseline cannot be recovered.
+Save the target kind, PFN, mismatch offsets, observed full page, and log. The
+GUI keeps the result in recovery observation state so the operator can decide
+whether the exact observed page still matches the recorded transaction. A
+Probe evidence run may attempt its explicit verified rollback; RawPfn product
+operation is not converted into a Probe-only or VM-snapshot workflow.
 
 ## PFN ownership has no result
 
@@ -74,7 +76,7 @@ address. Ownership PFN and final translated PFN must agree in live evidence.
 ## Update or uninstall recovery
 
 If stop times out, close the GUI and other controller handles, retry stop, then
-reboot the guest. If a service is pending deletion, reboot before reinstalling.
+reboot the Windows instance. If a service is pending deletion, reboot before reinstalling.
 The uninstaller retains `%LOCALAPPDATA%\KDBG` and user-selected address lists or
 snapshots. Restore those only after package readiness passes; Freeze remains off
 until explicitly reviewed and enabled.

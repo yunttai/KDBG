@@ -2,7 +2,34 @@
 
 기준: 2026-09-19 KST
 
-## RC4 현재 판정 (authoritative)
+## 현재 working-tree 판정 (authoritative)
+
+제품 목표는 `KDBG.exe`와 `KDbgDriver.sys`가 실행되는 동일 bare-metal Windows
+`runtime_host`의 local physical RAM을 Raw PFN으로 읽고 편집하는 것이다.
+`orchestrator_host`는 lifecycle/evidence controller이며 implicit memory target이
+아니다. Hyper-V `regression_guest`는 별도 회귀 lane이다.
+
+ABI 7 exact 4 KiB compare/write/read-back, RawPfn page session, LocalHost runtime
+profile, target-aware GUI와 bare-metal evidence harness가 working tree에 구현됐다.
+ProbeFixture는 destructive evidence의 기본 fixture일 뿐 일반 LocalHost RawPfn
+제품 동작을 제한하지 않는다.
+
+| Gate | 현재 상태 | 근거/경계 |
+|---|---|---|
+| Source-complete | PASS | `verify_layout.py`, core configure/build, CTest 11/11, source validator PASS |
+| Release validator unit tests | PASS | `python -m unittest src.tests.test_validate_release`: 88/88 |
+| ABI 7 physical transaction source | PASS | exact 4096-byte baseline compare, desired-page write, full read-back result/capability implemented and deterministically tested |
+| Windows WDK driver build | BLOCKED / NOT VERIFIED | required WDK toolset unavailable; MSBuild `MSB8020` |
+| Bare-metal runtime-host read-only | NOT RUN | same-host runtime evidence 없음 |
+| Bare-metal Probe transaction | NOT RUN | harness/validator implementation만 존재; actual transaction evidence 없음 |
+| Bare-metal RawPfn live write | NOT RUN | actual host PFN write를 실행하거나 성공으로 주장하지 않음 |
+| Historical regression-guest evidence | PRESERVED | 해당 historical source/package identity에만 결속; current bare-metal gate로 승격하지 않음 |
+
+machine/boot/session 값은 확보 가능한 경우 자동 provenance로 기록할 수 있지만
+수동 확인이나 LocalHost RawPfn 제품 전제는 아니다. 이번 구현은 dedicated-machine,
+recovery-plan, Probe-only 같은 새 제품 사용 제한을 추가하지 않았다.
+
+## Historical RC4 판정
 
 RC4 product-source commit은
 `4b376bb0d61eab232af8a2f7f29033238b911022`이다. Unsigned epoch

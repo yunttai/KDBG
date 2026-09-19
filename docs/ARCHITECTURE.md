@@ -9,7 +9,19 @@ KDBG는 하나의 대형 메모리 조작 코드로 구성하지 않고, 다음 
 3. **Windows adapter**: Win32 프로세스 메모리와 SCM/DeviceIoControl
 4. **WDM driver**: 제한된 물리·프로세스 메모리 primitive
 5. **분석 provider**: MemProcFS PFN 정보 또는 선택 프로세스 reverse mapping
-6. **검증 체계**: portable test, source gate, Windows build gate, live-VM gate
+6. **검증 체계**: portable/source/Windows build, VM regression, bare-metal
+   runtime-host read-only/Probe-write/RawPfn gate
+
+Target role은 다음처럼 고정한다.
+
+- `runtime_host`: `KDBG.exe`와 `KDbgDriver.sys`가 실행되고 동일 OS의 local
+  system physical RAM이 편집되는 bare-metal Windows
+- `orchestrator_host`: build/deploy/lifecycle/evidence controller; memory target 아님
+- `regression_guest`: Hyper-V regression lane; runtime-host 증거를 대체하지 않음
+
+물리 target kind는 `RawPfn`, `ProbeFixture`, `ProcessMapping`으로 구분한다.
+`RawPfn`은 일반 제품 경로이고 `ProbeFixture`는 자동 destructive evidence의
+결정적 target일 뿐 RawPfn 기능을 제한하지 않는다.
 
 ```text
 ┌────────────────────────────────────────────────────────────────────┐
@@ -100,6 +112,9 @@ ABI 방어 규칙:
 ## 4. 물리 페이지 트랜잭션
 
 `PhysicalPageSession`은 커널 메모리와 UI working copy를 분리한다.
+backend의 physical address space는 항상 드라이버가 로드된 동일
+`runtime_host` 커널이 보고한 local RAM range다. Hyper-V parent, 원격 머신,
+orchestrator_host로 전달되는 별도 address path는 현재 구조에 없다.
 
 ```text
 Empty → Loading → Clean → Dirty
@@ -136,11 +151,16 @@ Apply 순서:
 4. 전체 페이지를 preflight read한다.
 5. baseline과 한 바이트라도 다르면 중단한다.
 6. driver write gate를 RAII로 연다.
-7. contiguous dirty run만 bounded write한다.
+7. expected baseline과 desired page 전체를 ABI 7 exact 4096-byte
+   compare/write transaction 한 번으로 전달한다.
 8. 전체 페이지를 다시 읽는다.
 9. 요청한 working copy와 비교한다.
 10. 성공한 read-back만 새 baseline으로 승격한다.
 11. driver write gate를 닫는다.
+
+dirty bitmap과 contiguous diff run은 UI local review/evidence 범위다.
+`dirty_bytes`는 변경된 local byte 수이고 successful physical transaction의
+`driver_transferred_bytes`는 항상 4096이다.
 
 Rollback도 PFN 재입력, 전체 write, 전체 read-back을 거친다.
 
@@ -255,14 +275,15 @@ GUI는 level-aware decoder로 Present, RW, US, Accessed, Dirty/PS, Global, NX, P
 
 ## 11. Probe fixture
 
-`KDbgProbe.sys`는 제출 시연을 위한 known-good target이다.
+`KDbgProbe.sys`는 자동 destructive evidence를 위한 known-good target이다.
 
 - contiguous 4 KiB allocation
 - deterministic pattern
 - Query: VA, PA, PFN, generation, CRC32
 - Reset/Fill
 
-임의 커널 코드·페이지 테이블·파일 캐시 페이지 대신 Probe PFN을 사용해 end-to-end write 검증을 수행한다.
+자동 end-to-end write evidence는 exact current Probe PFN을 사용한다. 이는
+`RawPfn` 제품 기능의 범위를 제한하지 않는다.
 
 별도 `kdbg_process_fixture.exe`는 page-aligned/`VirtualLock`된 4096-byte
 user page, run nonce, process-start identity, generation/CRC와 local named-pipe
@@ -330,9 +351,14 @@ KDBG가 방어하는 대상은 외부 공격자만이 아니라, 오래된 화�
 | rollback 실패 | 원래 값으로 보이는 일부 화면 | 원본 4 KiB snapshot 전체 write/read-back/CRC |
 | 캡처가 다른 실행에서 옴 | 영상의 시각적 유사성 | package/report/media SHA-256과 ordered scene review |
 
-신뢰 경계 밖에는 임의의 third-party target, 바뀐 guest snapshot, production
-publisher identity가 확인되지 않은 package, 그리고 사람이 아직 검토하지 않은
-화면 캡처가 있다. 이런 입력은 자동 증거와 분리된 상태로 보고한다.
+신뢰 경계 밖에는 target role이 불명확한 결과, 바뀐 guest snapshot,
+production publisher identity가 확인되지 않은 package, 그리고
+사람이 아직 검토하지 않은 화면 캡처가 있다. 이런 입력은 자동 증거와 분리된
+상태로 보고한다.
+
+machine/boot/session 값은 도구가 가능한 경우 자동 provenance와 stale-backend-
+session 진단으로 수집한다. 수동 확인을 요구하거나 값의 부재를 LocalHost RawPfn
+read/write 또는 완료 gate의 blocker로 사용하지 않는다.
 
 ## 14. 검증 Gate
 
@@ -359,4 +385,27 @@ publisher identity가 확인되지 않은 package, 그리고 사람이 아직 �
 - rollback/read-back
 - PFN owner/page walk 화면 증거
 
-각 Gate는 독립적으로 보고한다. Linux source test 통과를 Windows driver live 동작으로 표현하지 않는다.
+이 명칭은 historical compatibility를 위해 유지하며 `regression_guest` gate를
+뜻한다. 다음 bare-metal gate와 독립적이다.
+
+### Bare-Metal-Runtime-Host-Read-Only
+
+- runtime_host role 및 package/driver/ABI identity
+- local RAM range와 Raw PFN exact 4096-byte read
+- target role이 분명한 evidence
+- machine/boot/session provenance는 자동 수집 가능한 경우의 보조 정보이며 필수 아님
+
+### Bare-Metal-Runtime-Host-Probe-Verified
+
+- ProbeFixture의 one-shot Apply/full read-back/independent reload/rollback
+- final gate locked 및 동일 runtime-host identity
+
+### Bare-Metal-RawPfn-Capability-Verified
+
+- RawPfn target kind 및 runtime-host identity 표시
+- RAM range/page bound, full baseline preflight, explicit Apply, full read-back,
+  rollback correctness
+- Probe-only 또는 regression_guest 결과로 대체 금지
+
+각 Gate는 독립적으로 보고한다. Linux source test나 regression_guest PASS를
+bare-metal Windows driver live 동작으로 표현하지 않는다.

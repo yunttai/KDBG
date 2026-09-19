@@ -1,5 +1,7 @@
 #include "app/ui/ProcessMemoryPanel.h"
 
+#include "app/ui/Localization.h"
+
 #include <algorithm>
 #include <charconv>
 #include <chrono>
@@ -12,6 +14,10 @@
 #include <utility>
 
 namespace kdbg {
+
+using ui::UiLabel;
+using ui::UiText;
+
 namespace {
 
 bool ParseUnsigned(std::string_view text, std::uint64_t* value) {
@@ -106,8 +112,13 @@ void ProcessMemoryPanel::Attach(IProcessMemory* memory) {
     if (memory_ != nullptr) {
         attached_pid_ = memory_->ProcessId();
         cached_writes_armed_ = memory_->WritesArmed();
-        status_ = "Process memory browser ready for PID " +
-            std::to_string(attached_pid_) + ".";
+        char status[128]{};
+        std::snprintf(
+            status,
+            sizeof(status),
+            UiText("Process memory browser ready for PID %u."),
+            attached_pid_);
+        status_ = status;
     }
 }
 
@@ -139,8 +150,8 @@ void ProcessMemoryPanel::Navigate(
             ++generation_;
             pending_navigation_ = std::pair{address, bounded_length};
             cancel_requested_.store(true, std::memory_order_relaxed);
-            status_ =
-                "Navigation queued; cancelling the superseded process-memory operation.";
+            status_ = UiText(
+                "Navigation queued; cancelling the superseded process-memory operation.");
         } else {
             StartLoad(address, bounded_length, Operation::Load);
         }
@@ -175,8 +186,8 @@ void ProcessMemoryPanel::StartLoad(
     const auto generation = ++generation_;
     IProcessMemory* const memory = memory_;
     status_ = operation == Operation::Reload
-        ? "Reloading the process-memory view asynchronously..."
-        : "Reading the process-memory view asynchronously...";
+        ? UiText("Reloading the process-memory view asynchronously...")
+        : UiText("Reading the process-memory view asynchronously...");
     operation_future_ = std::async(
         std::launch::async,
         [this, memory, address, length, operation, generation] {
@@ -235,8 +246,10 @@ void ProcessMemoryPanel::StartSessionOperation(Operation operation) {
     IProcessMemory* const memory = memory_;
     ProcessMemorySession snapshot = session_;
     status_ = operation == Operation::Apply
-        ? "Applying staged process-memory changes and verifying read-back asynchronously..."
-        : "Rolling back process-memory changes and verifying read-back asynchronously...";
+        ? UiText(
+            "Applying staged process-memory changes and verifying read-back asynchronously...")
+        : UiText(
+            "Rolling back process-memory changes and verifying read-back asynchronously...");
     operation_future_ = std::async(
         std::launch::async,
         [this, memory, operation, generation, snapshot = std::move(snapshot)]() mutable {
@@ -312,21 +325,23 @@ void ProcessMemoryPanel::PublishOperation(OperationOutcome outcome) {
         if (!load) cached_writes_armed_ = false;
         switch (outcome.operation) {
         case Operation::Load:
-            status_ = "Process memory view loaded.";
+            status_ = UiText("Process memory view loaded.");
             break;
         case Operation::Reload:
-            status_ = "Process memory view reloaded from the target.";
+            status_ = UiText("Process memory view reloaded from the target.");
             break;
         case Operation::Apply:
-            status_ = "Process-memory changes were written and the full view matched on read-back.";
+            status_ = UiText(
+                "Process-memory changes were written and the full view matched on read-back.");
             break;
         case Operation::Rollback:
-            status_ = "The previous process-memory baseline was restored and verified.";
+            status_ = UiText(
+                "The previous process-memory baseline was restored and verified.");
             break;
         }
         if (outcome.cancel_observed && !load) {
-            status_ +=
-                " Cancellation arrived after the safety-critical transaction began; verification and gate relock completed.";
+            status_ += UiText(
+                " Cancellation arrived after the safety-critical transaction began; verification and gate relock completed.");
         }
         return;
     }
@@ -341,31 +356,37 @@ void ProcessMemoryPanel::Draw() {
     PollOperation();
     const bool operation_busy = Busy();
     if (memory_ == nullptr || (!operation_busy && !memory_->IsOpen())) {
-        ImGui::TextDisabled("Attach to a process to browse and edit its memory.");
+        ImGui::TextDisabled(UiText(
+            "Attach to a process to browse and edit its memory."));
         return;
     }
     if (!operation_busy) cached_writes_armed_ = memory_->WritesArmed();
 
     ImGui::Text(
-        "Attached PID: %u | Process write gate: %s",
+        UiText("Attached PID: %u | Process write gate: %s"),
         attached_pid_,
         operation_busy ? "TRANSACTION IN PROGRESS" :
             (cached_writes_armed_ ? "ARMED" : "LOCKED"));
     ImGui::SetNextItemWidth(220.0F);
-    ImGui::InputText("Address", address_.data(), address_.size());
+    ImGui::InputText(
+        UiLabel("Address", "Address").c_str(),
+        address_.data(),
+        address_.size());
     ImGui::SameLine();
     ImGui::SetNextItemWidth(150.0F);
-    ImGui::InputInt("Length", &length_);
+    ImGui::InputInt(
+        UiLabel("Length", "Length").c_str(), &length_);
     length_ = std::clamp(
         length_, 1,
         static_cast<int>(ProcessMemorySession::kMaximumViewSize));
     ImGui::SameLine();
     ImGui::BeginDisabled(operation_busy);
-    if (ImGui::Button("Read View")) {
+    if (ImGui::Button(UiText("Read View"))) {
         std::uint64_t address = 0;
         std::uint32_t length = 0;
         if (!ParseRange(&address, &length)) {
-            status_ = "Enter a valid non-zero address and a length up to 1 MiB.";
+            status_ = UiText(
+                "Enter a valid non-zero address and a length up to 1 MiB.");
         } else {
             StartLoad(address, length, Operation::Load);
         }
@@ -373,7 +394,7 @@ void ProcessMemoryPanel::Draw() {
     ImGui::EndDisabled();
     ImGui::SameLine();
     ImGui::BeginDisabled(operation_busy || !session_.HasBuffer());
-    if (ImGui::Button("Reload Live")) {
+    if (ImGui::Button(UiText("Reload Live"))) {
         StartLoad(
             session_.Address(),
             static_cast<std::uint32_t>(session_.Working().size()),
@@ -382,23 +403,24 @@ void ProcessMemoryPanel::Draw() {
     ImGui::EndDisabled();
     if (operation_busy) {
         ImGui::SameLine();
-        if (ImGui::Button("Request Cancel")) {
+        if (ImGui::Button(UiText("Request Cancel"))) {
             cancel_requested_.store(true, std::memory_order_relaxed);
-            status_ =
-                "Cancellation requested. A started write transaction will finish verification and gate relock.";
+            status_ = UiText(
+                "Cancellation requested. A started write transaction will finish verification and gate relock.");
         }
         const auto progress = operation_progress_.load(std::memory_order_relaxed);
         ImGui::ProgressBar(
             static_cast<float>(progress) / 2.0F,
             ImVec2(-1.0F, 0.0F),
-            progress == 0 ? "queued" :
-                (progress == 1 ? "working" : "publishing"));
+            progress == 0 ? UiText("queued") :
+                (progress == 1 ? UiText("working") : UiText("publishing")));
     }
 
     if (!session_.HasBuffer()) {
         ImGui::Separator();
         ImGui::TextDisabled(
-            "Load a committed readable range from the Memory Map or enter an address.");
+            UiText(
+                "Load a committed readable range from the Memory Map or enter an address."));
         if (!status_.empty()) ImGui::TextWrapped("%s", status_.c_str());
         if (!operation_busy) DrawWriteGateModal();
         return;
@@ -406,7 +428,8 @@ void ProcessMemoryPanel::Draw() {
 
     ImGui::Separator();
     ImGui::Text(
-        "State: %s | Range: 0x%016llX + 0x%llX | Dirty bytes: %llu",
+        UiText(
+            "State: %s | Range: 0x%016llX + 0x%llX | Dirty bytes: %llu"),
         StateText(session_.State()),
         static_cast<unsigned long long>(session_.Address()),
         static_cast<unsigned long long>(session_.Working().size()),
@@ -421,43 +444,48 @@ void ProcessMemoryPanel::Draw() {
         static_cast<std::size_t>(session_.Address()));
 
     if (!session_.CanUndo()) ImGui::BeginDisabled();
-    if (ImGui::Button("Undo Byte Edit")) {
-        SetStatus(session_.Undo(), "Last process-memory byte edit undone.");
+    if (ImGui::Button(UiText("Undo Byte Edit"))) {
+        SetStatus(
+            session_.Undo(), UiText("Last process-memory byte edit undone."));
     }
     if (!session_.CanUndo()) ImGui::EndDisabled();
     ImGui::SameLine();
     if (!session_.CanRedo()) ImGui::BeginDisabled();
-    if (ImGui::Button("Redo Byte Edit")) {
-        SetStatus(session_.Redo(), "Last process-memory byte edit redone.");
+    if (ImGui::Button(UiText("Redo Byte Edit"))) {
+        SetStatus(
+            session_.Redo(), UiText("Last process-memory byte edit redone."));
     }
     if (!session_.CanRedo()) ImGui::EndDisabled();
     ImGui::SameLine();
-    if (ImGui::Button("Revert Staged Edits")) {
+    if (ImGui::Button(UiText("Revert Staged Edits"))) {
         session_.RevertAll();
-        status_ = "Staged process-memory edits reverted.";
+        status_ = UiText("Staged process-memory edits reverted.");
     }
     ImGui::SameLine();
     if (!cached_writes_armed_) {
-        if (ImGui::Button("Arm Process Writes")) {
+        if (ImGui::Button(UiText("Arm Process Writes"))) {
             write_confirmation_.fill('\0');
-            ImGui::OpenPopup("Arm Process Browser Writes##KDBG");
+            const auto popup_label = UiLabel(
+                "Arm Process Browser Writes",
+                "Arm Process Browser Writes##KDBG");
+            ImGui::OpenPopup(popup_label.c_str());
         }
-    } else if (ImGui::Button("Lock Process Writes")) {
+    } else if (ImGui::Button(UiText("Lock Process Writes"))) {
         const auto result = memory_->SetWritesArmed(false);
         if (result) cached_writes_armed_ = false;
-        SetStatus(result, "Process writes locked.");
+        SetStatus(result, UiText("Process writes locked."));
     }
     ImGui::SameLine();
     const bool can_apply = session_.IsDirty() && cached_writes_armed_;
     if (!can_apply) ImGui::BeginDisabled();
-    if (ImGui::Button("Apply Changed Runs & Verify")) {
+    if (ImGui::Button(UiText("Apply Changed Runs & Verify"))) {
         StartSessionOperation(Operation::Apply);
     }
     if (!can_apply) ImGui::EndDisabled();
     if (session_.CanRollback()) {
         ImGui::SameLine();
         if (!cached_writes_armed_) ImGui::BeginDisabled();
-        if (ImGui::Button("Rollback Previous Apply")) {
+        if (ImGui::Button(UiText("Rollback Previous Apply"))) {
             StartSessionOperation(Operation::Rollback);
         }
         if (!cached_writes_armed_) ImGui::EndDisabled();
@@ -466,11 +494,13 @@ void ProcessMemoryPanel::Draw() {
 
     constexpr std::size_t kDiffPreviewCap = 16384;
     const auto diffs = session_.ByteDiffs(kDiffPreviewCap);
+    const auto diff_header = UiLabel("Staged Byte Diff", "Staged Byte Diff");
     if (!diffs.empty() && ImGui::CollapsingHeader(
-            "Staged Byte Diff", ImGuiTreeNodeFlags_DefaultOpen)) {
+            diff_header.c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
         if (session_.DirtyCount() > diffs.size()) {
             ImGui::TextDisabled(
-                "Showing the first %llu of %llu changed bytes; the hex view retains every dirty highlight.",
+                UiText(
+                    "Showing the first %llu of %llu changed bytes; the hex view retains every dirty highlight."),
                 static_cast<unsigned long long>(diffs.size()),
                 static_cast<unsigned long long>(session_.DirtyCount()));
         }
@@ -479,10 +509,11 @@ void ProcessMemoryPanel::Draw() {
                 ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
                     ImGuiTableFlags_ScrollY,
                 ImVec2(0.0F, 150.0F))) {
-            ImGui::TableSetupColumn("Offset");
-            ImGui::TableSetupColumn("Virtual Address");
-            ImGui::TableSetupColumn("Before");
-            ImGui::TableSetupColumn("After");
+            ImGui::TableSetupColumn(UiLabel("Offset", "Offset").c_str());
+            ImGui::TableSetupColumn(
+                UiLabel("Virtual Address", "Virtual Address").c_str());
+            ImGui::TableSetupColumn(UiLabel("Before", "Before").c_str());
+            ImGui::TableSetupColumn(UiLabel("After", "After").c_str());
             ImGui::TableHeadersRow();
             ImGuiListClipper clipper;
             clipper.Begin(static_cast<int>(std::min<std::size_t>(
@@ -517,15 +548,18 @@ void ProcessMemoryPanel::Draw() {
 
 void ProcessMemoryPanel::DrawWriteGateModal() {
     if (memory_ == nullptr) return;
+    const auto popup_label = UiLabel(
+        "Arm Process Browser Writes", "Arm Process Browser Writes##KDBG");
     if (ImGui::BeginPopupModal(
-            "Arm Process Browser Writes##KDBG", nullptr,
+            popup_label.c_str(), nullptr,
             ImGuiWindowFlags_AlwaysAutoResize)) {
         ImGui::TextWrapped(
-            "Process writes can destabilize the target. Use only in the assignment VM. "
-            "Enter the attached PID (%u) to open the shared process write gate.",
+            UiText(
+                "Process writes affect the attached process on this Windows instance. "
+                "Enter the attached PID (%u) to open the shared process write gate."),
             attached_pid_);
         ImGui::InputText(
-            "PID confirmation",
+            UiLabel("PID confirmation", "PID confirmation").c_str(),
             write_confirmation_.data(),
             write_confirmation_.size());
         std::uint32_t confirmed = 0;
@@ -540,15 +574,15 @@ void ProcessMemoryPanel::DrawWriteGateModal() {
                 std::strlen(write_confirmation_.data()) &&
             confirmed == attached_pid_ && !Busy();
         if (!valid) ImGui::BeginDisabled();
-        if (ImGui::Button("Arm")) {
+        if (ImGui::Button(UiText("Arm"))) {
             const auto result = memory_->SetWritesArmed(true);
             if (result) cached_writes_armed_ = true;
-            SetStatus(result, "Process writes armed.");
+            SetStatus(result, UiText("Process writes armed."));
             if (result) ImGui::CloseCurrentPopup();
         }
         if (!valid) ImGui::EndDisabled();
         ImGui::SameLine();
-        if (ImGui::Button("Cancel")) ImGui::CloseCurrentPopup();
+        if (ImGui::Button(UiText("Cancel"))) ImGui::CloseCurrentPopup();
         ImGui::EndPopup();
     }
 }

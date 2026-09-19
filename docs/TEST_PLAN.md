@@ -1,12 +1,15 @@
 # KDBG 테스트 계획
 
-Current release target: **1.1.0 RC4**, commit
-`4b376bb0d61eab232af8a2f7f29033238b911022`. Exact source/package, Windows
-build, and required-core evidence has been checked. GUI host/capture/archive
-integrity passed, but formal review remains `CAPTURED_UNREVIEWED`,
-`evidence_pass=false`, and `human_review_complete=false`. RC4 optional
-extended/lifecycle/soak was not run. Production signing and stable release are
-blocked. Named 1.0.0 and RC1 results below are historical only. DEF CON
+The current working tree adds the LocalHost RawPfn runtime-host path, ABI 7
+exact-page compare/write transaction, evidence producers, and runtime
+English/한국어 UI after the frozen **1.1.0 RC4** product-source commit
+`4b376bb0d61eab232af8a2f7f29033238b911022`. All RC4 package, Windows build,
+live-VM, GUI-capture, and media results below are historical and are not
+source-bound evidence for these post-RC4 changes. Current source/portable
+implementation validation is PASS. The current WDK driver/package build is not
+verified because the required toolset is unavailable in this environment
+(`MSB8020`). No current regression-guest or bare-metal live validation is
+claimed. Production signing and stable release remain blocked. DEF CON
 submission is outside this plan's scope.
 
 ## 1. Gate 분리
@@ -15,11 +18,80 @@ submission is outside this plan's scope.
 |---|---|---|
 | Source-complete | Linux 또는 Windows C++20 | portable core, Codex 구조, source contract |
 | Windows-build-verified | Visual Studio/SDK/WDK | GUI, bridge, WDM projects, package |
-| Live-VM-verified | 스냅샷 가능한 Windows VM | 실제 service/device/Probe R/W |
+| Regression-Guest-Verified (`Live-VM-verified` legacy name) | 스냅샷 가능한 Windows VM | 실제 service/device/Probe R/W 회귀 |
+| Bare-Metal-Runtime-Host-Read-Only | bare-metal Windows runtime_host | local RAM range와 Raw PFN exact 4 KiB read; 자동 provenance는 선택적 |
+| Bare-Metal-Runtime-Host-Probe-Verified | 동일 runtime_host | ProbeFixture apply/read-back/reload/rollback/final lock evidence |
+| Bare-Metal-RawPfn-Capability-Verified | 동일 runtime_host | 일반 RawPfn transaction correctness와 UI/target identity |
 
 어느 한 Gate의 PASS를 다른 Gate의 PASS로 표현하지 않는다.
 
-### Current 1.1.0 evidence boundary
+### Runtime-host target contract and current coverage
+
+- `runtime_host`는 KDBG/드라이버가 실행되고 동일 OS의 local system physical
+  RAM이 편집되는 bare-metal Windows다.
+- `orchestrator_host`는 lifecycle/evidence controller이며 memory target이 아니다.
+- `regression_guest`는 existing Hyper-V lane이며 historical VM evidence는 그대로
+  보존하고 bare-metal gate로 재표기하지 않는다.
+- RawPfn read/write는 일반 제품 범위다. ProbeFixture는 자동 destructive
+  evidence target이고 RawPfn 기능을 제한하지 않는다.
+
+현재 bare-metal lifecycle profile, runtime-host harness, target-kind, ABI 7
+compare/write, live-verifier v2 source와 deterministic contract test는
+source/portable PASS다. 현재 WDK driver/package build는 필요 toolset 부재로
+NOT VERIFIED/BLOCKED이며, source-bound Windows driver artifact를 생성하지
+못했다. Bare-metal read-only, Probe-write, RawPfn live gate는 모두
+**NOT RUN**이다. 기존 VM PASS와 non-visual host localization smoke는 이
+세 bare-metal gate를 승격하지 않는다.
+
+| Current gate | Status |
+|---|---|
+| Source-complete / portable | PASS |
+| Windows-build-verified (current WDK drivers/package) | NOT VERIFIED / BLOCKED (`MSB8020`, required WDK toolset unavailable) |
+| Regression-guest | NOT RUN for the current working tree |
+| Bare-metal runtime-host read-only | NOT RUN |
+| Bare-metal runtime-host Probe-write | NOT RUN |
+| Bare-metal RawPfn | NOT RUN; source/portable implementation PASS |
+
+Machine/boot/session values may be captured automatically as provenance. They
+are not manual confirmations or LocalHost RawPfn product prerequisites.
+
+### Post-RC4 bilingual UI evidence boundary
+
+The post-RC4 change keeps one executable and adds a compiled-in translation
+catalog, English default, runtime English/한국어 selection, stable ImGui
+`###` IDs, Windows system Korean-font discovery with English fallback, and
+language persistence in the existing `[KDBG][Preferences]` ImGui INI section.
+
+Required evidence for this change is:
+
+- portable deterministic localization tests for locale parsing, catalog
+  completeness/uniqueness, contextual mixed terminology, stable IDs, font
+  fallback, and repeated language switching;
+- regression proof that switching language does not change write gates,
+  confirmations, dirty edits, selected target, workers, or backend state;
+- an MSVC `/utf-8` Windows GUI build of the single executable;
+- Windows runtime checks for the permanent top-level `Language / 언어` menu,
+  Korean glyph rendering, selector persistence, and English fallback, followed
+  by an independent human visual review.
+
+Fresh post-RC4 evidence records `verify_layout.py` PASS, `core-debug`
+configure/build plus CTest 9/9 PASS, `windows-debug` GUI build/link PASS through
+`build.ps1 -Preset windows-debug -SkipTests`, Windows-debug CTest 9/9 PASS,
+and fresh `windows-release` GUI build/link plus CTest 9/9 PASS.
+These results promote only the source/portable/MSVC build gates. Actual Korean
+font rendering, interactive runtime selector/INI round-trip, live VM, and human
+visual gates remain **NOT RUN**.
+
+A non-visual host runtime smoke used isolated `LOCALAPPDATA` under
+`out/localization-host-smoke-persistence`. The English-default launch remained
+alive for 8 seconds and wrote `[KDBG][Preferences] Language=en-US`. A fixed test
+INI was then set to `ko-KR`; the Korean-preset launch remained alive for 8
+seconds with `C:\Windows\Fonts\malgun.ttf` present and retained
+`Language=ko-KR`. This is PASS only for host launch and INI persistence. Glyph
+appearance/clipping, an interactive selector click and its write-state
+preservation, VM/live execution, and human visual review remain **NOT RUN**.
+
+### Historical RC4 evidence boundary (not rebound)
 
 Unsigned epoch `product-1.1.0-rc4-final-20260919` passed source, clean Windows
 Release, WDK driver, strict main/symbol package and CTest 9/9 gates. Exact
@@ -140,10 +212,14 @@ python .\src\tools\validate_release.py --source-complete
 ### 2.2 PhysicalPageSession
 
 - exact 4096-byte load와 clean state
+- manual PFN input이 `RawPfn`으로 로드되고 ProbeFixture 여부와 무관하게
+  driver-reported local RAM range로 검증되는지 확인
 - edit, byte-level undo/redo, revert, dirty bitmap, diff run
 - wrong PFN과 locked Apply
 - clean/dirty byte preflight conflict
 - short read/write
+- dirty diff가 작아도 ABI 7 driver compare/write는 exact 4096 bytes이며
+  `dirty_bytes`와 `driver_transferred_bytes`를 분리해 기록
 - ignored write와 read-back mismatch
 - successful Apply와 baseline promotion
 - successful/failed rollback
@@ -184,6 +260,16 @@ python .\src\tools\validate_release.py --source-complete
 - synthetic 4 KiB/large-page reverse mapping
 - depth/page/result limit과 cancellation
 
+### 2.7 Runtime localization
+
+- 기본 locale가 English이고 `en`/`en-US`/`ko`/`ko-KR`/한국어 parse가 결정적인지 검사한다.
+- compile-in catalog의 key가 중복되지 않고 English/Korean 문구가 비어 있지 않은지 검사한다.
+- 선택 언어에서 조작 문구는 번역되지만 PFN/PTE/ABI 같은 contextual technical term과 미등록 진단은 정확한 English를 유지하는지 검사한다.
+- visible label이 바뀌어도 `UiLabel` 결과의 `###stable-id`가 유지되는지 검사한다.
+- Korean font 미가용에서 English로 fail closed하고, 반복 toggle해도 locale·label 결과가 동일한지 검사한다.
+- 언어 전환 전후 write gate, confirmation, dirty/history, target selection, worker/backend state snapshot이 동일한지 회귀 검사한다.
+- persistence는 기존 ImGui INI의 `[KDBG][Preferences]` section에 `Language=en-US|ko-KR`로 round-trip하고, invalid value는 English로 복구하는지 검사한다.
+
 ## 3. Source validator
 
 ```powershell
@@ -218,8 +304,11 @@ python .\src\tools\validate_release.py `
 검사:
 
 - MSVC warnings-as-errors
+- MSVC `/utf-8` compile option과 단일 `KDBG.exe` bilingual catalog link
 - RC resource compile
 - Dear ImGui/imgui_memory_editor/Zydis integration
+- English 기본/Korean system-font discovery/English fallback Windows GUI smoke
+- 상위 `Language / 언어` selector, `[KDBG][Preferences]` 언어 round-trip과 write-sensitive UI state 불변 확인
 - native bridge Win32 loader/process API
 - 설치형 WDK 또는 hash-locked NuGet WDK의 `/W4 /WX` kernel compile/link
 - 두 SYS의 x64 Native/CFG/NX/ASLR/checksum, basename-only RSDS와 PDB GUID+age
@@ -227,7 +316,12 @@ python .\src\tools\validate_release.py `
 - package 필수 파일
 - SHA-256 manifest 재계산
 
-Current 1.1.0 Windows Release user-mode build와 CTest 9/9, pinned NuGet WDK
+Current working-tree user-mode/source checks do not complete this gate. The
+current driver build attempt is **NOT VERIFIED / BLOCKED** because the required
+WDK toolset is unavailable (`MSB8020`); therefore no current SYS/CAT/package or
+driver signature claim is made.
+
+Historical RC4 Windows Release user-mode build와 CTest 9/9, pinned NuGet WDK
 KDbgDriver/KDbgProbe 1.1.0.0 clean build, Inf2Cat 0 errors/0 warnings,
 PE/PDB/driver contract와 strict main/symbol package validation은 PASS다.
 
@@ -244,6 +338,13 @@ gate는 **NOT RUN**이며, historical RC1 extended PASS를 RC4에 재결속하�
 RC4 공식 GUI run은 host/capture/integrity를 통과했지만 formal 상태는
 `CAPTURED_UNREVIEWED`다. 별도 presentation-only public-v4의 automatic/independent
 review PASS 역시 공식 source-bound `evidence_pass`를 승격하지 않는다.
+
+이 RC4 Windows build/GUI 근거는 post-RC4 bilingual UI source와 결속되지
+않는 historical evidence다. Post-RC4 MSVC `/utf-8` GUI build/link와
+Windows-debug CTest 9/9는 새로 PASS했고 비시각적 fixed-INI persistence
+smoke도 기록했지만, 실제 Korean glyph/clipping, interactive selector 클릭·상태
+불변과 human visual review를 수행하기 전에는
+post-RC4 runtime/live/visual PASS를 주장하지 않는다.
 
 Windows-only fallback 회귀는 완전한 `out/wdk-nuget` cache에서 `-Offline` clean
 build를 실행하고, cache package 하나의 byte/hash를 바꾼 복사본과 package가 빠진
@@ -274,7 +375,39 @@ Verifier `0x132`와 cleanup을 disposable VM에서 실행해 PASS했다. Runtime
 두 running driver hash를 package artifact hash에 결속했고 최종 write gate가
 LOCKED임을 기록했다.
 
-## 6. Probe Live E2E
+## 6. Live E2E lanes
+
+### 6.1 Current bare-metal runtime-host lane
+
+The executable producer runs on the same Windows instance whose local physical
+RAM is exposed by `KDbgDriver.sys`:
+
+```powershell
+.\src\tools\win11_baremetal_validation\Invoke-Win11BareMetalValidation.ps1 `
+  -PackageRoot D:\release\KDBG-1.1.0-win-x64 `
+  -PackageArchive D:\release\KDBG-1.1.0-win-x64.zip `
+  -EvidenceDirectory D:\evidence\kdbg-local-host-run
+
+python .\src\tools\validate_release.py `
+  --windows-package D:\release\KDBG-1.1.0-win-x64 `
+  --symbols-package D:\release\KDBG-1.1.0-win-x64-symbols `
+  --baremetal-host-evidence D:\evidence\kdbg-local-host-run\evidence.json
+```
+
+The producer records `role=runtime_host`, `TargetProfile=LocalHost`, the exact
+package/driver/ABI identity, a read-only exact 4 KiB Raw PFN result, and a
+`kdbg.live-verify.v2` Probe transaction with six 4096-byte page artifacts. The
+ABI 7 transaction records eight locally dirty bytes separately from each
+4096-byte driver transfer. It then produces
+`kdbg.win11-baremetal-validation.v1` after cleanup and cross-binding checks.
+
+The ProbeFixture transaction is the deterministic evidence target. It is not a
+restriction on normal LocalHost RawPfn input/read/write. Optional automatically
+collected provenance is evidence metadata, not a manual product gate. This lane
+is currently **NOT RUN**: no successful command output or artifact from a named
+bare-metal runtime host exists in the current working-tree evidence set.
+
+### 6.2 Historical disposable-VM regression procedure
 
 1. 반복 부팅이 안정적인 disposable Windows VM의 checkpoint, Administrator,
    test-signing 확인 기록을 사용하고 최종 패키지 SHA를 대조한다. Historical evidence는
@@ -297,7 +430,7 @@ LOCKED임을 기록했다.
     ordered 20-scene millisecond range/observed/note를 포함하고 v4 validator가
     누락·재정렬·범위 초과·placeholder를 거부하는지 확인한다.
 
-Current 1.1.0 RC4 required-core run `run-20260919T015729Z-8445dddb`은
+Historical 1.1.0 RC4 required-core run `run-20260919T015729Z-8445dddb`은
 Windows 11 Pro x64 build 26200, ABI 6, one-shot apply, full 4 KiB
 read-back/reload, 4 KiB rollback, final gate locked, cleanup, exact checkpoint
 restore와 final VM Off를 PASS했다. Host summary SHA-256은

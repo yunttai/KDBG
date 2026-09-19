@@ -12,11 +12,27 @@ cmake --build out/build/live-verify --parallel
 ctest --test-dir out/build/live-verify --output-on-failure
 ```
 
-The `kdbg_live_verify` executable is emitted only on Windows. Write mode is
-restricted to a disposable snapshot VM and the PFN returned by `KDbgProbe`.
-It requires all of `--write`, `--confirm-disposable-vm`, `--snapshot-id`, and
-`--confirm-probe-pfn`. The operator must restore the named snapshot after the
-run. Never use write mode on a host or an unknown PFN.
+The `kdbg_live_verify` executable is emitted only on Windows. Both evidence
+lanes write only the PFN returned by the running `KDbgProbe`; an independently
+entered PFN must match that runtime query. The legacy VM lane retains
+`--write`, `--confirm-disposable-vm`, `--snapshot-id`, and
+`--confirm-probe-pfn` and emits `kdbg.live-verify.v1`.
+
+Local-host evidence uses the ABI 7 serialized exact-page compare/write/read-back path:
+
+```powershell
+.\tools\kdbg_live_verify.exe --write --baremetal-evidence `
+  --confirm-probe-pfn <PFN_FROM_KDBGPROBE> `
+  --artifact-directory C:\KDBG-Evidence\raw-pages `
+  --output C:\KDBG-Evidence\baremetal-live.json
+```
+
+This lane emits `kdbg.live-verify.v2`, requires the compare/write capability,
+revalidates the live Probe identity immediately before rollback, and suppresses
+the rollback write if that identity is stale. It writes six exact 4 KiB page
+artifacts (baseline, preflight, expected-after, read-back, independent reload,
+and rollback) and records their package-independent file names and SHA-256
+identities without serializing the private artifact-directory path.
 
 The executable requires Windows x64 build 19041 or newer. Before opening either
 device it hashes itself and the two binaries configured in SCM, requires the
@@ -33,8 +49,9 @@ validated Windows package/symbol pair. The standalone build above remains a
 fast way to validate the harness without building the GUI.
 
 The write report binds the fixed eight-byte Probe edit at offset `0x100`, all
-full-page comparisons, exact operation byte counts, Probe CRC transitions,
-driver write counters, rollback, and the final locked gate. Final v4 evidence
+full-page comparisons, the eight user-dirty bytes separately from each 4096-byte
+driver transaction, Probe CRC transitions, driver write counters, rollback,
+and the final locked gate. Final v4 evidence
 additionally binds that report to the six raw 4 KiB pages and exact main/symbol
 package manifests.
 

@@ -12,7 +12,10 @@ param(
     [int]$TimeoutSeconds = 30,
 
     [switch]$ConfirmDedicatedVm,
-    [switch]$ConfirmSnapshot
+    [switch]$ConfirmSnapshot,
+
+    [ValidateSet("DisposableVm", "LocalHost")]
+    [string]$TargetProfile
 )
 
 $ErrorActionPreference = "Stop"
@@ -27,9 +30,19 @@ if (-not $Principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administra
 
 $LoadActions = @("Install", "Update", "Repair", "Start", "Restart")
 if ($Action -in $LoadActions) {
-    if (-not $ConfirmDedicatedVm -or -not $ConfirmSnapshot) {
+    $ResolvedTargetProfile = if ([string]::IsNullOrWhiteSpace($TargetProfile)) {
+        if ($ConfirmDedicatedVm -and $ConfirmSnapshot) { "DisposableVm" }
+        else { "LocalHost" }
+    } else { $TargetProfile }
+    if ($ResolvedTargetProfile -eq "DisposableVm" -and
+        (-not $ConfirmDedicatedVm -or -not $ConfirmSnapshot)) {
         throw "$Action requires -ConfirmDedicatedVm and -ConfirmSnapshot."
     }
+    Import-Module (Join-Path $PSScriptRoot "package\TargetProfile.psm1") -Force
+    $null = Assert-KdbgTargetProfile `
+        -TargetProfile $ResolvedTargetProfile `
+        -ConfirmDedicatedVm:$ConfirmDedicatedVm `
+        -ConfirmSnapshot:$ConfirmSnapshot
 }
 
 $RepoRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot "..\..")).Path

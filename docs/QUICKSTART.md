@@ -1,15 +1,21 @@
 # KDBG 1.1.0 quick start
 
-Use the package only in the prepared disposable Windows x64 build 19041 or
-newer VM with a restorable snapshot, Administrator PowerShell, and the
-supported test-signing configuration. The package does not change boot or Code
-Integrity policy.
+The product target is the local physical RAM of the bare-metal Windows x64
+`runtime_host` where KDBG and its driver execute. RawPfn read/write is a normal
+product path. Select `-TargetProfile LocalHost` for that path; it does not use
+VM/snapshot confirmation flags. Select `-TargetProfile DisposableVm` plus both
+confirmations for the separate regression lane. Source availability does not
+promote either live gate without target-bound execution evidence. The package
+does not change boot or Code Integrity policy.
+
+`LocalHost` is the product default; the examples below still specify it
+explicitly so command logs preserve the intended target role.
 
 1. Verify both main and symbols ZIP SHA-256 sidecars, extract them as sibling
    directories, and keep the names `KDBG-1.1.0-win-x64` and
    `KDBG-1.1.0-win-x64-symbols` unchanged.
-2. Run `KDBGSetup.exe`, accept the UAC prompt, confirm the dedicated disposable
-   VM and restorable snapshot checkboxes, then choose **Install**. Setup verifies
+2. Run `KDBGSetup.exe`, accept the UAC prompt, select the `LocalHost` target
+   profile, then choose **Install**. Setup verifies
    the package and trusted driver signatures, stages the product under
    `%ProgramFiles%\KDBG\Product`, starts the driver pair through the packaged
    transactional lifecycle, and registers Windows Apps & Features plus a Start
@@ -21,9 +27,17 @@ Integrity policy.
 ```powershell
 .\tools\diagnose.ps1 -VerifyPackage -RequireAdministrator
 python .\tools\validate_release.py
-.\tools\install.ps1 -ConfirmDedicatedVm -ConfirmSnapshot
-.\tools\start.ps1 -ConfirmDedicatedVm -ConfirmSnapshot
-.\tools\run.ps1 -ConfirmDedicatedVm -ConfirmSnapshot
+.\tools\install.ps1 -TargetProfile LocalHost
+.\tools\start.ps1 -TargetProfile LocalHost
+.\tools\run.ps1 -TargetProfile LocalHost
+```
+
+The regression_guest variant is explicit and separate:
+
+```powershell
+.\tools\install.ps1 -TargetProfile DisposableVm -ConfirmDedicatedVm -ConfirmSnapshot
+.\tools\start.ps1 -TargetProfile DisposableVm -ConfirmDedicatedVm -ConfirmSnapshot
+.\tools\run.ps1 -TargetProfile DisposableVm -ConfirmDedicatedVm -ConfirmSnapshot
 ```
 
 Run Setup from a newly extracted, validated package to use **Update**. Its
@@ -45,7 +59,7 @@ replacing one invalidates `SHA256SUMS.txt` and the release contract.
 
 `start.ps1` then runs the packaged live verifier in read-only mode inside the
 startup rollback transaction. It retains the latest ABI/Probe readiness result
-at `%LOCALAPPDATA%\KDBG\readiness\start-latest.json`; a failed ABI 6 check,
+at `%LOCALAPPDATA%\KDBG\readiness\start-latest.json`; a failed ABI 7 check,
 short Probe page, runtime identity check, or open final gate rolls back only
 the services started by that attempt.
 
@@ -132,9 +146,10 @@ image, exact process/physical page pair, ownership, complete x64 entry chain,
 and Kernel Explorer proof. The generator atomically publishes the JSON only
 after paired package validation.
 
-For the reproducible release transaction, query KDbgProbe and open its PFN.
-An advanced session may instead use the exact PFN derived from the current
-PTView mapping of a dedicated process fixture. In either case,
+For the reproducible automated destructive-evidence transaction, query
+KDbgProbe and open its PFN. RawPfn remains the general product path; the current
+automated evidence generator does not verify that separate bare-metal gate.
+In either case,
 read exactly 4096 bytes, edit locally, review the diff, type the same PFN, and
 apply once. Require the full read-back and independent reload to match, roll
 back to the baseline, and confirm that the write gate is locked.

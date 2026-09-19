@@ -1,5 +1,7 @@
 #include "app/ui/PfnInputPanel.h"
 
+#include "app/ui/Localization.h"
+
 #include "core/pfn/PfnAddress.h"
 
 #include <imgui.h>
@@ -8,10 +10,15 @@
 
 namespace kdbg {
 
+using ui::UiText;
+
 bool PfnInputPanel::Draw(
     IMemoryBackend& backend,
     PhysicalPageSession& session) {
-    ImGui::TextUnformatted("PFN Navigator");
+    ImGui::TextUnformatted(UiText("PFN Navigator"));
+    ImGui::TextColored(
+        ImVec4(0.45F, 0.75F, 1.0F, 1.0F),
+        "%s", UiText("Local physical RAM — this Windows instance"));
 
     const bool enter = ImGui::InputText(
         "PFN",
@@ -19,13 +26,13 @@ bool PfnInputPanel::Draw(
         input_.size(),
         ImGuiInputTextFlags_EnterReturnsTrue);
     ImGui::SameLine();
-    const bool clicked = ImGui::Button("Read");
+    const bool clicked = ImGui::Button(UiText("Read"));
 
     bool loaded = false;
     if (enter || clicked) {
         if (session.IsDirty()) {
-            status_ =
-                "Revert or apply the staged local edits before loading another PFN.";
+            status_ = UiText(
+                "Revert or apply the staged local edits before loading another PFN.");
             return false;
         }
         const auto parsed = PfnAddress::Parse(input_.data());
@@ -36,11 +43,12 @@ bool PfnInputPanel::Draw(
             if (!load) {
                 status_ = load.GetError().message;
             } else {
-                char buffer[160]{};
+                char buffer[320]{};
                 std::snprintf(
                     buffer,
                     sizeof(buffer),
-                    "PFN 0x%llX / PA 0x%016llX loaded",
+                    UiText(
+                        "RawPfn loaded: PFN 0x%llX / PA 0x%016llX; complete 4 KiB page is inside a driver-reported RAM range"),
                     static_cast<unsigned long long>(
                         parsed.Value().pfn),
                     static_cast<unsigned long long>(
@@ -60,9 +68,30 @@ bool PfnInputPanel::Draw(
             "PA:  0x%016llX",
             static_cast<unsigned long long>(
                 session.Address().physical_address));
-        ImGui::Text("Length: 0x1000");
+        ImGui::Text(UiText("Length: 0x1000"));
+        const auto& target = session.Target();
+        switch (target.kind) {
+        case PhysicalTargetKind::RawPfn:
+            ImGui::TextUnformatted(UiText(
+                "Target kind: RawPfn | provenance: manual PFN entry"));
+            break;
+        case PhysicalTargetKind::ProbeFixture:
+            ImGui::TextUnformatted(UiText(
+                "Target kind: ProbeFixture | provenance: KDbgProbe metadata"));
+            break;
+        case PhysicalTargetKind::ProcessMapping:
+            ImGui::Text(
+                UiText(
+                    "Target kind: ProcessMapping | PID %u | VA 0x%016llX"),
+                target.process_id.value_or(0U),
+                static_cast<unsigned long long>(
+                    target.virtual_page_address.value_or(0U)));
+            break;
+        }
+        ImGui::TextUnformatted(UiText(
+            "Range validation: complete 4096-byte page in local physical RAM"));
         ImGui::Text(
-            "Dirty: %llu",
+            UiText("Dirty: %llu"),
             static_cast<unsigned long long>(session.DirtyCount()));
     }
 

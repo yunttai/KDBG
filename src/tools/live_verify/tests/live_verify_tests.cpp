@@ -95,6 +95,15 @@ kdbg::live_verify::Options WriteOptions() {
     return options;
 }
 
+kdbg::live_verify::Options BareMetalWriteOptions() {
+    auto options = WriteOptions();
+    options.confirm_disposable_vm = false;
+    options.snapshot_id.clear();
+    options.baremetal_evidence = true;
+    options.artifact_directory = "C:/evidence/raw-pages";
+    return options;
+}
+
 void TestOptionsAreFailClosed() {
     const std::vector<std::string_view> no_arguments;
     const auto defaults = kdbg::live_verify::ParseOptions(no_arguments);
@@ -126,6 +135,24 @@ void TestOptionsAreFailClosed() {
     Check(accepted && accepted.Value().write &&
               accepted.Value().confirm_probe_pfn == 0x100ULL,
           "complete write confirmation must parse");
+
+    const std::vector<std::string_view> baremetal{
+        "--write", "--baremetal-evidence",
+        "--confirm-probe-pfn", "0x100",
+        "--artifact-directory", "C:/evidence/raw-pages"};
+    const auto baremetal_accepted =
+        kdbg::live_verify::ParseOptions(baremetal);
+    Check(baremetal_accepted &&
+              baremetal_accepted.Value().baremetal_evidence &&
+              !baremetal_accepted.Value().confirm_disposable_vm,
+          "bare-metal evidence metadata must parse without VM confirmations");
+
+    const std::vector<std::string_view> mixed{
+        "--write", "--baremetal-evidence", "--confirm-disposable-vm",
+        "--snapshot-id", "vm-snapshot", "--confirm-probe-pfn", "0x100",
+        "--artifact-directory", "C:/evidence/raw-pages"};
+    Check(!kdbg::live_verify::ParseOptions(mixed),
+          "bare-metal and disposable-VM confirmations must be exclusive");
 }
 
 void TestReadOnlyNeverOpensWriteGate() {
@@ -195,6 +222,10 @@ void TestWriteRollbackAndEvidence() {
           "JSON must contain the evidence schema");
     Check(json.find("\"read_p95_ms\"") != std::string::npos,
           "JSON must contain p95 latency");
+    Check(json.find(
+              "\"supports_physical_page_compare_write\":true") !=
+              std::string::npos,
+          "v1 ABI 7 JSON must publish compare/write capability");
     Check(json.find("\"edit_offset\":256,\"edit_length\":8") !=
               std::string::npos,
           "JSON must bind the exact edited byte range");
@@ -260,6 +291,65 @@ void TestProbeMetadataMustRemainStable() {
               "Probe physical identity and size changes after rollback must fail");
         Check(report.rollback_verified && report.final_gate_locked,
               "rollback metadata failure must retain memory and gate evidence");
+        backend.Close();
+    }
+}
+
+void TestBareMetalEvidenceAndStaleRollbackSuppression() {
+    {
+        kdbg::MockMemoryBackend backend;
+        Check(static_cast<bool>(backend.Open()), "mock backend must open");
+        const auto probe = MockProbe();
+        auto query = [probe, &backend]() {
+            return QueryCurrentProbe(backend, probe);
+        };
+        const auto report = kdbg::live_verify::Run(
+            backend, query, BareMetalWriteOptions(), MockSystem(),
+            MockRuntimeIdentity());
+        Check(report.success, "bare-metal Probe evidence flow must pass");
+        Check(report.schema == "kdbg.live-verify.v2" &&
+                  report.target_profile == "LocalHost",
+              "bare-metal evidence must use the v2 LocalHost schema");
+        Check(report.apply_requested_bytes == 8 &&
+                  report.apply_driver_transferred_bytes ==
+                      kdbg::kPhysicalPageSize,
+              "v2 evidence must separate dirty bytes from driver transfer");
+        Check(report.probe_identity_fresh_at_rollback &&
+                  !report.rollback_suppressed_stale_identity,
+              "rollback must require a fresh runtime Probe identity");
+        const auto json = kdbg::live_verify::ToJson(report);
+        Check(json.find("\"schema\":\"kdbg.live-verify.v2\"") !=
+                  std::string::npos &&
+              json.find("\"user_dirty_bytes\":8") != std::string::npos &&
+              json.find("C:/evidence/raw-pages") == std::string::npos,
+              "v2 JSON must bind transfer semantics without private paths");
+        backend.Close();
+    }
+
+    {
+        kdbg::MockMemoryBackend backend;
+        Check(static_cast<bool>(backend.Open()), "mock backend must open");
+        const auto probe = MockProbe();
+        int queries = 0;
+        const auto report = kdbg::live_verify::Run(
+            backend,
+            [&backend, probe, &queries]() {
+                auto current = QueryCurrentProbe(backend, probe);
+                ++queries;
+                if (current && queries == 3) {
+                    ++current.Value().generation;
+                }
+                return current;
+            },
+            BareMetalWriteOptions(), MockSystem(), MockRuntimeIdentity());
+        Check(!report.success &&
+                  report.rollback_suppressed_stale_identity &&
+                  !report.rollback_attempted,
+              "stale bare-metal Probe identity must suppress rollback");
+        Check(report.final_gate_locked,
+              "stale identity failure must still prove the final lock");
+        Check(backend.WriteCallCount() == 1,
+              "stale identity must prevent a rollback write");
         backend.Close();
     }
 }
@@ -398,6 +488,7 @@ int main(int argc, char** argv) {
     TestRunRevalidatesWriteAuthorization();
     TestWriteRollbackAndEvidence();
     TestProbeMetadataMustRemainStable();
+    TestBareMetalEvidenceAndStaleRollbackSuppression();
     TestCancellationAfterApplyRollsBack();
     TestShortWriteAttemptsRecovery();
     TestGateCloseFailureStillRollsBack();

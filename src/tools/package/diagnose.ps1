@@ -264,7 +264,7 @@ foreach ($Driver in $Drivers) {
             -not (Test-IsTrustedDriverSignature $CatalogSignature)) {
             Add-Failure (
                 "drivers/$($Driver.Catalog) does not have a trusted Authenticode signature " +
-                "on this guest (status=$($CatalogSignature.Status)).")
+                "on this Windows instance (status=$($CatalogSignature.Status)).")
         }
         if ($RequireProductionDriverSignatures -and
             -not (Test-IsProductionDriverSignature `
@@ -294,7 +294,7 @@ foreach ($Relative in @(
         $Relative.StartsWith("drivers/", [StringComparison]::OrdinalIgnoreCase) -and
         -not (Test-IsTrustedDriverSignature $Signature)) {
         Add-Failure (
-            "$Relative does not have a trusted Authenticode signature on this guest " +
+            "$Relative does not have a trusted Authenticode signature on this Windows instance " +
             "(status=$($Signature.Status)).")
     }
     if ($RequireProductionDriverSignatures -and

@@ -27,7 +27,7 @@ BEGIN
             VALUE "OriginalFilename", "KDBG.exe\0"
             VALUE "ProductName", "KDBG\0"
             VALUE "ProductVersion", "1.1.0\0"
-            VALUE "Comments", "Authorized disposable-VM research use only\0"
+            VALUE "Comments", "Windows x64 physical and process memory research GUI\0"
         END
     END
     BLOCK "VarFileInfo"

@@ -10,6 +10,7 @@ add_executable(kdbg_core_tests
     test_advanced.cpp
     test_kdbg_abi_layout.cpp
     test_kernel_module.cpp
+    test_localization.cpp
     test_performance_telemetry.cpp
 )
 
@@ -22,7 +23,10 @@ if(KDBG_TEST_BINARY_ROOT)
     set(KDBG_CTEST_BINARY_ROOT "${KDBG_TEST_BINARY_ROOT}")
 endif()
 
-target_link_libraries(kdbg_core_tests PRIVATE kdbg_core kdbg_app_telemetry)
+target_link_libraries(kdbg_core_tests PRIVATE
+    kdbg_core
+    kdbg_app_localization
+    kdbg_app_telemetry)
 target_include_directories(kdbg_core_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 kdbg_set_project_warnings(kdbg_core_tests)
 kdbg_enable_sanitizers(kdbg_core_tests)
@@ -57,6 +61,10 @@ if(Python3_Interpreter_FOUND)
         NAME kdbg_release_validator_tests
         COMMAND "${Python3_EXECUTABLE}"
             "${KDBG_CTEST_SOURCE_ROOT}/tests/test_validate_release.py")
+    add_test(
+        NAME kdbg_verified_page_transaction_source_tests
+        COMMAND "${Python3_EXECUTABLE}"
+            "${KDBG_CTEST_SOURCE_ROOT}/tests/test_verified_page_transaction_source.py")
 endif()
 
 add_test(NAME kdbg_core_tests COMMAND
@@ -102,6 +110,12 @@ if(WIN32)
                 -NoLogo -NoProfile -NonInteractive
                 -ExecutionPolicy Bypass
                 -File "${KDBG_CTEST_SOURCE_ROOT}/tests/package_lifecycle_tests.ps1")
+        add_test(
+            NAME kdbg_target_profile_contract_tests
+            COMMAND "${KDBG_POWERSHELL_EXECUTABLE}"
+                -NoLogo -NoProfile -NonInteractive
+                -ExecutionPolicy Bypass
+                -File "${KDBG_CTEST_SOURCE_ROOT}/tools/package/tests/TargetProfile.Contract.ps1")
         add_test(
             NAME kdbg_setup_contract_tests
             COMMAND "${KDBG_POWERSHELL_EXECUTABLE}"

@@ -1,9 +1,42 @@
 # KDBG 요구사항 추적표
 
-기준: 2026-09-19 RC4, product-source commit
-`4b376bb0d61eab232af8a2f7f29033238b911022`
+기준: 2026-09-19 current working tree. RC4 product-source
+commit `4b376bb0d61eab232af8a2f7f29033238b911022`의 package/live/GUI 결과는
+historical baseline이며 현재 변경과 source-bound되지 않는다.
 
-## KDBG 1.1.0 RC4 release binding (authoritative)
+## Bare-metal runtime-host contract (current target)
+
+| 요구사항 | 구현/운영 계약 | 검증 계약 | 현재 상태 |
+|---|---|---|---|
+| G-01, FR-002–FR-006 RawPfn | KDBG/driver가 실행되는 동일 bare-metal `runtime_host`의 local RAM; `RawPfn`은 일반 product target | RAM range/page-bound, exact 4 KiB, baseline preflight, explicit Apply, full read-back, rollback | SOURCE/PORTABLE PASS; current WDK driver build and live execution are separate gates |
+| Target roles | `runtime_host` memory target, `orchestrator_host` controller, `regression_guest` VM regression | explicit role; optional automatic provenance; no cross-lane promotion | SOURCE/PORTABLE HARNESS CONTRACT PASS; live execution NOT RUN |
+| Current Windows driver build | ABI 7 `KDbgDriver.sys`/`KDbgProbe.sys` and package outputs | WDK compile/link, INF/CAT, package validation | NOT VERIFIED / BLOCKED IN CURRENT ENVIRONMENT — required WDK toolset is unavailable (`MSB8020`) |
+| Bare-metal read-only | package/ABI/driver identity + Raw PFN exact read | source-bound runtime-host report | NOT RUN |
+| Bare-metal Probe evidence | ProbeFixture is automated destructive evidence target only | Apply/read-back/reload/rollback/final lock | NOT RUN |
+| Bare-metal RawPfn capability | explicit `RawPfn` kind; optional automatic provenance | general LocalHost RawPfn transaction | SOURCE/PORTABLE PASS; bare-metal live evidence NOT RUN |
+| Historical VM evidence | immutable exact RC4/RC1 identities | regression only; never renamed/promoted | PRESERVED |
+
+## Post-RC4 runtime bilingual UI binding (current)
+
+| 요구사항 | 구현 계약 | 검증 계약 | 현재 상태 |
+|---|---|---|---|
+| FR-019 single executable/runtime selector | `Localization.*`, `Application.cpp`, `MainWindow.*`, 각 panel label call site | English default, permanent top-level `Language / 언어` menu, external language-pack 미사용 | SOURCE/PORTABLE/MSVC BUILD PASS; fresh Windows runtime evidence pending |
+| FR-019 catalog/terminology | compiled-in `TranslationEntry` catalog, unknown-text English fallback | catalog non-empty/unique, contextual PFN/PTE/ABI terminology, deterministic lookup | CORE/WINDOWS CTEST PASS |
+| FR-019 stable widget identity | `UiLabel(visible, stable_id)` and ImGui `###` IDs | locale 전환 전후 stable ID 동일 | CORE/WINDOWS CTEST PASS |
+| FR-019 font/fallback | Windows system Korean-font discovery; default ImGui English fallback | Korean glyph rendering, missing-font English fail-closed | WINDOWS NON-VISUAL LOCALIZATION SMOKE PASS with `malgun.ttf` present; glyph appearance/clipping NOT RUN |
+| FR-019 persistence | existing ImGui INI `[KDBG][Preferences]` `Language` value | `en-US`/`ko-KR` round-trip, invalid value English recovery | WINDOWS NON-VISUAL LOCALIZATION SMOKE PASS: English wrote `en-US`, fixed Korean preset retained `ko-KR`; interactive selector NOT RUN |
+| NFR-005 localization isolation | selector/catalog/font path does not mutate memory-session or backend state | write gate/confirmation/dirty/history/target/worker/backend before-after equality | REGRESSION EVIDENCE PENDING |
+| NFR-005 deterministic encoding | MSVC `/utf-8`, compiled-in UTF-8 catalog | portable deterministic localization tests plus Windows GUI build | CORE + WINDOWS DEBUG/RELEASE CTEST 9/9; MSVC GUI BUILD/LINK PASS |
+| Human visual evidence | English/Korean core screens and fallback path | glyph coverage, clipping, mixed terminology and selector readability | NOT RUN; no PASS claim |
+
+The historical artifact path `out/localization-host-smoke-persistence` retains
+its original name. It is a Windows localization launch smoke, not a bare-metal
+physical-memory runtime-host gate. Both
+English-default and fixed-INI Korean-preset processes stayed alive for 8 seconds.
+It does not prove Korean glyph appearance, clipping, selector interaction,
+write-state preservation, VM/live behavior, or human visual quality.
+
+## KDBG 1.1.0 RC4 release binding (historical, not rebound)
 
 | Gate | RC4 state |
 |---|---|
@@ -41,7 +74,7 @@ VM-only derivative `product-1.1.0-rc4-test1-20260919` package SHA-256은
 | FR-016 | Kernel Explorer scenes | AUTOMATION/INTEGRITY PASS; formal GUI evidence 미승격 |
 | FR-017 | source/build tests와 GUI action log | SOURCE/WINDOWS PASS; RC4 extended/soak NOT RUN |
 | FR-018 | required-core install/load/cleanup/checkpoint restore/final Off | LIVE PASS |
-| NFR-001 | one-shot gate, read-back/rollback, final locked state | SOURCE/LIVE PASS |
+| Legacy PRD 3.0 NFR-001 safety | one-shot gate, read-back/rollback, final locked state | HISTORICAL SOURCE/LIVE PASS; not the current NFR-001 performance requirement |
 | NFR-002 | deterministic source/build tests and finite GUI automation | PASS; RC4 long-run soak NOT RUN |
 | NFR-003 | isolated bridge/source boundary | SOURCE PASS; optional MemProcFS pmem UNVERIFIED |
 | NFR-004 | RC4 status, implementation status, traceability and exact hashes | SOURCE PASS |
@@ -112,7 +145,7 @@ optional extended/full-v4 GUI 범위의 승격이 아니다.
 | FR-002 PFN/range | `PfnAddress`, backend/driver range and overflow validation | PFN/range/overflow negative tests | PORTABLE PASS; Probe PFN/PA LIVE PASS |
 | FR-003 exact page read | `PhysicalPageSession::Load`, physical read IOCTL | exact/short-read tests | PORTABLE/WDK PASS; exact 4096-byte LIVE PASS |
 | FR-004 Hex/diff/history | `HexEditorPanel`, `PhysicalPageSession` | edit/history/diff tests, current MSVC GUI build | PORTABLE/MSVC/LIVE AUTOMATION PASS; release visual review FAIL because required grid/diff content is omitted or clipped at 1024-wide capture |
-| FR-005 one-shot physical write | review modal, preflight, per-handle gate, dirty-run writes, full read-back | conflict/gate/partial-write/mismatch/reconnect loop tests | PORTABLE PASS; 8-byte one-shot + full read-back LIVE PASS |
+| FR-005 one-shot physical write | review modal, preflight, per-handle gate, ABI 7 exact-page compare/write, full read-back | conflict/gate/partial-write/mismatch/reconnect; `dirty_bytes` vs `driver_transferred_bytes=4096` tests | current SOURCE/PORTABLE PASS; current WDK/live NOT VERIFIED; historical 8-byte Probe evidence remains historical ABI 6 only |
 | FR-006 rollback | `RollbackBaseline`, independent reload evidence | rollback/reload/failure/repeated transaction tests | PORTABLE PASS; independent reload/full-page rollback LIVE PASS |
 | FR-007 Probe fixture | `KDbgProbe`, `ProbeClient`, probe-first GUI | ABI/layout tests, user-mode/driver build | SOURCE/MSVC/WDK PASS; PFN/generation/CRC LIVE PASS |
 | FR-008 process map/browser | `ProcessCatalog`, `Win32ProcessMemory`, process panels | mock/session/write tests, MSVC build | PORTABLE/MSVC/LIVE PASS; dedicated fixture PID/start identity/VA and verified write captured |
@@ -126,7 +159,7 @@ optional extended/full-v4 GUI 범위의 승격이 아니다.
 | FR-016 Kernel Explorer | bounded module catalog, local-image exact PDB resolver, kernel-only VA reader, Zydis table | PE/canonical/path/backend-range tests, MSVC Debug/Release/`/analyze`, GUI smoke | PORTABLE/MSVC/LIVE PASS; exact module/local-header/PDB/DriverEntry/kernel-read/Zydis proof captured |
 | FR-017 performance/live harness | aligned First Scan, bounded dense Next Scan batching/fallback, schema-2 benchmark, packaged `kdbg_live_verify`, opt-in `kdbg.runtime-telemetry.v1` | fixed-local path, initial persistence, atomic replacement, privacy/bounds and partial-outcome tests; mock repeats; live IOCTL plus final raw scan/frame JSON | PORTABLE/MSVC PASS; real driver 4 KiB and current exact-package GUI scan/frame telemetry LIVE PASS |
 | FR-018 product lifecycle | transactional SCM helpers, packaged scripts, elevated native Setup, stable Program Files root, ARP/shortcut and two-phase exact purge | root-mode integration, rollback/backup/purge fault tests, exact-package native UI lifecycle and reboot inventory | SOURCE/MSVC/LIVE PASS; Install/Repair/Update/Uninstall, two normal reboot boundaries, purge state and clean inventory verified |
-| NFR-001 safety | driver ACL/controller/gates/limits; transactional core and typed UI confirmation | ABI/negative/recovery tests, code audit, WDK `/W4 /WX`, live counters/final lock | SOURCE/PORTABLE/WDK PASS; Probe live run final gate locked |
+| NFR-001 performance | backend handle/state reuse, bounded/chunked I/O, cancellable workers, runtime telemetry and benchmark paths | latency/throughput/IOPS/CPU/memory benchmark plus regression baseline; exact workload/hash binding | PORTABLE/MSVC paths exist; current-tree runtime-host performance baseline NOT RUN |
 | NFR-002 responsiveness | stoppable workers, clipping, async lifecycle future | cancellation tests and MSVC GUI build | SOURCE/PORTABLE/MSVC PASS; 1.1.0 extended run completed 1800-second soak and seven benchmarks; presentation layout review FAIL is tracked separately |
 | NFR-003 isolation | portable core; Win32 guards; MemProcFS subprocess | MinGW/MSVC builds and bridge negative tests | PASS for source boundary; pmem runtime UNVERIFIED |
 | NFR-004 traceability | this matrix, test plan, status and validator gate table | layout and source validator | SOURCE PASS |
@@ -148,7 +181,7 @@ Its host summary and 26-entry guest archive SHA-256 values are
 | FR-002, FR-003 | discovered Probe PFN and exact 4096-byte physical baseline/read | LIVE PASS |
 | FR-005 | offset `0x100`, 8-byte one-shot apply and full-page read-back match | LIVE PASS |
 | FR-006 | independent reload and 4096-byte rollback to baseline | LIVE PASS |
-| NFR-001 | final gate locked, cleanup PASS, checkpoint restored, VM final Off | LIVE PASS |
+| Legacy PRD 3.0 NFR-001 safety | final gate locked, cleanup PASS, checkpoint restored, VM final Off | HISTORICAL LIVE PASS; not current NFR-001 performance |
 | Trust boundary | package `596ccdf0a…4413`, certificate `bd7de7eb…58b1`, signer `ba34b393521d722ba01df87afccc6f3feb760b2c` | VM-only test trust; not production signing |
 
 The extended run
@@ -201,7 +234,7 @@ The bound package/source SHA-256 values are
 | FR-002, FR-003 | discovered Probe PFN and exact 4096-byte baseline/read operations | LIVE PASS |
 | FR-005 | offset `0x100`, 8-byte one-shot apply and exact full-page read-back | LIVE PASS |
 | FR-006 | independent reload and 4096-byte rollback to the baseline | LIVE PASS |
-| NFR-001 | final write gate locked; exact checkpoint restored; final VM Off | LIVE PASS |
+| Legacy PRD 3.0 NFR-001 safety | final write gate locked; exact checkpoint restored; final VM Off | HISTORICAL LIVE PASS; not current NFR-001 performance |
 | VM/package binding | Windows 11 Pro x64 build 26200; VM `66935024-37f7-4f21-b2c8-12ca5fe677bf`; checkpoint `KDBG-Win11-Clean-TestSigning-20260918` (`f60a775a-26f6-4ef9-bb19-f61c93346bb4`) | LIVE PASS; VM-only test-signed derivative, not production trust |
 | Extended in this required-core run | full v4/interactive GUI/media, process Freeze, ownership/PTView, repeated reboot/lifecycle, long-run performance | NOT RUN in this run; a later 1.0.0 final engineering epoch completed this scope, but it is not 1.1.0 evidence |
 
