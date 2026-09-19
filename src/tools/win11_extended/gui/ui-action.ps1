@@ -15,14 +15,25 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
 function Write-Json([string]$Path, [object]$Value) {
-    $parent = Split-Path -Parent $Path
+    $targetFull = [IO.Path]::GetFullPath($Path)
+    $parent = [IO.Path]::GetDirectoryName($targetFull)
     if (-not [string]::IsNullOrWhiteSpace($parent)) {
         New-Item -ItemType Directory -Path $parent -Force | Out-Null
     }
-    [IO.File]::WriteAllText(
-        [IO.Path]::GetFullPath($Path),
-        ($Value | ConvertTo-Json -Depth 30) + [Environment]::NewLine,
-        [Text.UTF8Encoding]::new($false))
+    $temporaryFull = Join-Path $parent (
+        '.{0}.{1}.tmp' -f [IO.Path]::GetFileName($targetFull),[guid]::NewGuid().ToString('N'))
+    try {
+        [IO.File]::WriteAllText(
+            $temporaryFull,
+            ($Value | ConvertTo-Json -Depth 30) + [Environment]::NewLine,
+            [Text.UTF8Encoding]::new($false))
+        Move-Item -LiteralPath $temporaryFull -Destination $targetFull -Force
+    } catch {
+        Remove-Item -LiteralPath $temporaryFull -Force -ErrorAction SilentlyContinue
+        throw
+    } finally {
+        Remove-Item -LiteralPath $temporaryFull -Force -ErrorAction SilentlyContinue
+    }
 }
 
 function Get-Sha256([string]$Path) {

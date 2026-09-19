@@ -32,6 +32,13 @@ neutral reference point and waits 120 ms. A failed pointer move aborts capture,
 preventing hover-blue pixels from being mistaken for a checked Freeze box; the
 static harness locks this ordering ahead of bitmap creation.
 
+The interactive capture publishes result JSON through a unique temporary file
+in the destination directory. It completes and closes the UTF-8 write before a
+same-volume `Move-Item` rename publishes the final path, and removes the
+temporary file on every failure path. Concurrent host readers therefore see
+either no result or a complete JSON document, never an empty or partially
+written destination file.
+
 ## Status boundary
 
 `calibration.win11-1024x768-v1.json` is a reviewed coordinate profile for this

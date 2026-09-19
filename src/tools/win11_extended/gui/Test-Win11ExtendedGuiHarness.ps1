@@ -433,6 +433,41 @@ $bootstrapText = Get-Content -LiteralPath (Join-Path $root 'interactive-bootstra
 $uiActionText = Get-Content -LiteralPath (Join-Path $root 'ui-action.ps1') -Raw
 $uiTaskText = Get-Content -LiteralPath (Join-Path $root 'ui-task.ps1') -Raw
 $autoLogonCleanupText = Get-Content -LiteralPath (Join-Path $root 'Clear-Win11AutoLogonAfterExplorer.ps1') -Raw
+$uiWriteJsonFunction = [regex]::Match(
+    $uiActionText,
+    '(?ms)^function Write-Json\(.*?(?=^function Get-Sha256\()')
+if (-not $uiWriteJsonFunction.Success) {
+    throw 'ui-action Write-Json function is missing.'
+}
+$uiWriteJsonText = $uiWriteJsonFunction.Value
+$uiWriteJsonTemporary = $uiWriteJsonText.IndexOf(
+    '$temporaryFull = Join-Path $parent (',
+    [StringComparison]::Ordinal)
+$uiWriteJsonWrite = $uiWriteJsonText.IndexOf(
+    '[IO.File]::WriteAllText(',
+    [StringComparison]::Ordinal)
+$uiWriteJsonMove = $uiWriteJsonText.IndexOf(
+    'Move-Item -LiteralPath $temporaryFull -Destination $targetFull -Force',
+    [StringComparison]::Ordinal)
+$uiWriteJsonCatchCleanup = $uiWriteJsonText.IndexOf(
+    'Remove-Item -LiteralPath $temporaryFull -Force -ErrorAction SilentlyContinue',
+    $uiWriteJsonMove,
+    [StringComparison]::Ordinal)
+$uiWriteJsonRethrow = $uiWriteJsonText.IndexOf(
+    'throw',
+    $uiWriteJsonCatchCleanup,
+    [StringComparison]::Ordinal)
+if ($uiWriteJsonTemporary -lt 0 -or $uiWriteJsonWrite -le $uiWriteJsonTemporary -or
+    $uiWriteJsonMove -le $uiWriteJsonWrite -or
+    $uiWriteJsonCatchCleanup -le $uiWriteJsonMove -or
+    $uiWriteJsonRethrow -le $uiWriteJsonCatchCleanup -or
+    -not $uiWriteJsonText.Contains("[guid]::NewGuid().ToString('N')") -or
+    @([regex]::Matches(
+            $uiWriteJsonText,
+            'Remove-Item -LiteralPath \$temporaryFull -Force -ErrorAction SilentlyContinue')).Count -lt 2 -or
+    $uiWriteJsonText.Contains('[IO.File]::Move(')) {
+    throw 'ui-action result JSON must be fully written to a unique same-directory temporary file before atomic Move-Item publication, with fail-closed cleanup.'
+}
 $checkboxStripFunction = [regex]::Match(
     $uiActionText,
     '(?ms)^function Get-ReferenceCheckboxStripState\(.*?(?=^function Invoke-UncheckedReferenceCheckboxUntilChecked\()')
@@ -544,6 +579,11 @@ $orchestratorContracts = [ordered]@{
         $uiActionText.Contains('[KdbgGuiNative]::mouse_event(0x0002,0,0,0,[UIntPtr]::Zero)') -and
         $uiActionText.Contains('Start-Sleep -Milliseconds 50') -and
         $uiActionText.Contains('[KdbgGuiNative]::mouse_event(0x0004,0,0,0,[UIntPtr]::Zero)')
+    ui_result_json_atomic_publish = $uiWriteJsonTemporary -ge 0 -and
+        $uiWriteJsonWrite -gt $uiWriteJsonTemporary -and
+        $uiWriteJsonMove -gt $uiWriteJsonWrite -and
+        $uiWriteJsonCatchCleanup -gt $uiWriteJsonMove -and
+        $uiWriteJsonRethrow -gt $uiWriteJsonCatchCleanup
     guest_uninstall = $orchestratorText.Contains("'-ConfirmKdbgServices -PurgeUserData'") -or
         ($orchestratorText.Contains('-ConfirmKdbgServices') -and $orchestratorText.Contains('-PurgeUserData'))
     guest_script_execution_policy = @([regex]::Matches(
