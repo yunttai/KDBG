@@ -150,21 +150,22 @@ VM에서 서비스 관리:
 
 ## 검증 Gate
 
-현재 저장소 버전은 **1.1.0**이다. 아래 표에서 `PENDING REBIND`는 구현 실패가
-아니라, 버전 변경 후 생성할 정확한 1.1.0 package/hash/live evidence가 아직 이
-문서에 결속되지 않았다는 뜻이다. 1.0.0 실행 결과는 역사 증거로만 유지한다.
+현재 저장소 버전은 **1.1.0**이다. 각 Windows/VM 판정은 이름이 명시된 candidate의
+package/source/evidence hash에만 결속된다. 최신 exact identity와 판정은
+`docs/exec-plans/STATUS.md`와 `docs/VALIDATION_REPORT.md`에 기록하며, 소스 또는
+패키지가 바뀌면 새 epoch로 다시 생성한다. VM test trust는 production trust가 아니다.
 
 | Gate | 의미 | 현재 이 산출물에서 확인된 상태 |
 |---|---|---|
 | Source-complete | 기능 소스, Codex 구성, portable tests, 문서 정합성 | PASS |
 | Windows user-mode analyzed | `_WIN32` GUI/backend/bridge/tests MSVC `/analyze` | PASS |
-| MSVC user-mode | GUI, native bridge와 tests를 Windows에서 실제 빌드 | PENDING REBIND — 1.1.0 clean Release build/CTest 결과와 build ID를 기록해야 함 |
-| Windows-build-verified | MSVC 산출물과 WDK package inputs를 같은 candidate에서 실제 빌드 | PENDING REBIND — 1.1.0 main/symbol package validator와 정확한 hashes를 기록해야 함 |
-| Release package | main/symbol package, hashes, SBOM, setup/lifecycle tools와 원자적 publish | PENDING REBIND — 1.1.0 package/source snapshot identity 미기록 |
+| MSVC user-mode | GUI, native bridge와 tests를 Windows에서 실제 빌드 | PASS — 1.1.0 clean Release build와 CTest 완료; exact build ID는 candidate 문서에 기록 |
+| Windows-build-verified | MSVC 산출물과 WDK package inputs를 같은 candidate에서 실제 빌드 | PASS — 1.1.0 main/symbol package validator와 WDK build 완료 |
+| Release package | main/symbol package, hashes, SBOM, setup/lifecycle tools와 원자적 publish | PASS (unsigned engineering candidate) — exact ZIP/source identities는 epoch-local sidecar에 기록 |
 | Commercial operations docs | security/support/privacy/license/update/vulnerability/release notes | PASS (configured contract) — support/security routes configured; notification/acknowledgement evidence pending |
-| Live device/runtime | exact package install, ABI 6, Probe physical transaction, cleanup | PENDING REBIND — 1.1.0 exact test-signed ZIP으로 재실행해야 함; 1.0.0 Win11 결과는 역사 증거 |
-| Live VM evidence | PFN discovery/read/edit/diff/unlock/apply/read-back, ownership/PTView, MP4 | PENDING REBIND — 최종 1.1.0 MP4/hash와 exact-package evidence를 기록해야 함 |
-| Windows 11 readiness/live | static workspace, readiness, required-core, extended lifecycle/soak | PENDING REBIND — 1.1.0 exact-package run/archive hash 미기록 |
+| Live device/runtime | exact package install, ABI 6, Probe physical transaction, cleanup | PASS (disposable VM test trust) — 1.1.0 exact test-signed package의 apply/read-back/reload/rollback/cleanup 완료 |
+| Live VM evidence | PFN discovery/read/edit/diff/unlock/apply/read-back, ownership/PTView, MP4 | CANDIDATE-BOUND — automated capture와 presentation media는 각각의 formal review 상태와 분리해 기록 |
+| Windows 11 readiness/live | static workspace, readiness, required-core, extended lifecycle/soak | PASS — 1.1.0 exact-package required-core, repeated lifecycle/reboot와 30-minute soak 완료 |
 | Commercial release | production trust, operational acknowledgement, supported-platform validation | BLOCKED — production signer/TSA/returned signed drivers와 route notification/ack evidence가 없음. VM 전용 test trust는 production trust를 대체하지 않음 |
 | Optional MemProcFS runtime | 격리 bridge의 실제 `vmm.dll`/acquisition backend | UNVERIFIED — helper-process 회귀만 PASS |
 
@@ -174,10 +175,8 @@ VM에서 서비스 관리:
 `docs/exec-plans/STATUS.md`에 기록한다.
 
 현재 release target은 `1.1.0`이다. Main/symbol ZIP SHA-256과 source identity는
-새 package가 생성된 뒤 epoch-local sidecar와 packaged `BUILD-METADATA.json`에서
-채운다. Windows 10 build 19044 final v4 `fc0afb4b…9823`, archive
-`438881e7…a18e3`, 그리고 과거 `product-rc1/test2` 기록은 모두 1.0.0 역사
-증거이며 1.1.0에 재결속하지 않는다.
+각 epoch-local sidecar와 packaged `BUILD-METADATA.json`에서 확인한다. 과거
+1.0.0 candidate와 그 live evidence는 역사 증거이며 1.1.0에 재결속하지 않는다.
 
 DEF CON 제안서 초안, 발표 구조, 라이브 데모 복구 경로와 현재 증거 경계는
 [`docs/DEFCON_SUBMISSION.md`](docs/DEFCON_SUBMISSION.md)에 정리되어 있다.

@@ -113,7 +113,49 @@
           "milliseconds": 1200
         },
         {
+          "type": "drag",
+          "assertion": "minimal_scene03_left_collapse",
+          "x": 259,
+          "y": 350,
+          "end_x": 72,
+          "end_y": 350
+        },
+        {
+          "type": "drag",
+          "assertion": "minimal_scene03_right_collapse",
+          "x": 777,
+          "y": 350,
+          "end_x": 992,
+          "end_y": 350
+        },
+        {
+          "type": "wait",
+          "assertion": "minimal_scene03_capture_settle",
+          "milliseconds": 500
+        },
+        {
           "type": "capture"
+        },
+        {
+          "type": "drag",
+          "assertion": "minimal_scene03_left_restore",
+          "x": 72,
+          "y": 350,
+          "end_x": 259,
+          "end_y": 350
+        },
+        {
+          "type": "drag",
+          "assertion": "minimal_scene03_right_restore",
+          "x": 992,
+          "y": 350,
+          "end_x": 777,
+          "end_y": 350
+        },
+        {
+          "type": "wait",
+          "assertion": "minimal_scene03_restore_settle",
+          "milliseconds": 500
         }
       ]
     },
@@ -885,10 +927,21 @@
           "type": "click_until_region_change",
           "assertion": "scan_result_added_to_address_list",
           "candidates": [
-            { "x": 677, "y": 635 },
-            { "x": 677, "y": 625 }
+            {
+              "x": 677,
+              "y": 635
+            },
+            {
+              "x": 677,
+              "y": 625
+            }
           ],
-          "region": { "x": 270, "y": 427, "width": 495, "height": 220 },
+          "region": {
+            "x": 270,
+            "y": 427,
+            "width": 495,
+            "height": 220
+          },
           "max_attempts": 4,
           "settle_ms": 450
         },
@@ -1296,7 +1349,57 @@
           "milliseconds": 500
         },
         {
+          "type": "drag",
+          "assertion": "minimal_scene20_bottom_expand",
+          "x": 600,
+          "y": 427,
+          "end_x": 600,
+          "end_y": 250
+        },
+        {
+          "type": "wait",
+          "assertion": "minimal_scene20_expand_settle",
+          "milliseconds": 400
+        },
+        {
+          "type": "scroll",
+          "assertion": "minimal_scene20_diff_scroll",
+          "x": 600,
+          "y": 610,
+          "delta": -2400
+        },
+        {
+          "type": "wait",
+          "assertion": "minimal_scene20_scroll_settle_1",
+          "milliseconds": 350
+        },
+        {
+          "type": "scroll",
+          "assertion": "minimal_scene20_diff_scroll",
+          "x": 600,
+          "y": 610,
+          "delta": -2400
+        },
+        {
+          "type": "wait",
+          "assertion": "minimal_scene20_scroll_settle_2",
+          "milliseconds": 450
+        },
+        {
           "type": "capture"
+        },
+        {
+          "type": "drag",
+          "assertion": "minimal_scene20_bottom_restore",
+          "x": 600,
+          "y": 250,
+          "end_x": 600,
+          "end_y": 427
+        },
+        {
+          "type": "wait",
+          "assertion": "minimal_scene20_restore_settle",
+          "milliseconds": 500
         }
       ]
     },

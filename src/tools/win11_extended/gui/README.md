@@ -20,6 +20,14 @@ rollback, PFN ownership, PTView, first/next process scan, verified Freeze and
 restore, pointer scan, Zydis disassembly, snapshot diff, kernel module catalog,
 symbol resolution, kernel read/disassembly, and About/version.
 
+At the calibrated 1024x768 geometry, the source-bound plan temporarily collapses
+the left/right docks around scene 03 so the loaded 4 KiB hex grid is visible. It
+also expands and scrolls the bottom dock around scene 20 so the snapshot diff row
+is visible. Each capture is followed by the inverse splitter move; this changes
+presentation geometry only and does not alter product data or write-gate state.
+`Test-Win11ExtendedGuiHarness.ps1` locks the before-capture/after-capture ordering
+so a later coordinate edit cannot silently reintroduce either clipping defect.
+
 ## Status boundary
 
 `calibration.win11-1024x768-v1.json` is a reviewed coordinate profile for this

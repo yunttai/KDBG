@@ -2,11 +2,12 @@
 
 ## Unreleased — target 1.1.0
 
-Release identity note: implementation and documentation are versioned for
-1.1.0, but exact 1.1.0 package/source/media hashes and live-VM evidence remain
-pending until the final rebuilt epoch is produced and checked. The live results
-listed below describe the immediately preceding 1.0.0 final engineering epoch
-and must not be treated as 1.1.0 evidence without that rebind.
+Release identity note: implementation and product metadata are versioned for
+1.1.0. Exact package, symbols, source, media, and live-VM identities are bound
+to their named candidate epochs in the status and validation documents; they
+must be regenerated after any release-scope source change. The current Windows
+11 engineering candidate is VM-test-signed only. Stable publication remains
+pending production signing and trusted timestamp verification.
 
 - Added the read-only Kernel Explorer: bounded loaded-module catalog, explicit
   local exact-signature PDB resolution, kernel-only virtual reads, and Zydis
@@ -31,14 +32,14 @@ and must not be treated as 1.1.0 evidence without that rebind.
   external v4 evidence workflow, GUI raw-page metadata, runtime driver hashes,
   PE/PDB GUID+age pairing, mandatory INF/CAT provenance, and hash-bound timed
   20-scene human review records.
-- In the preceding 1.0.0 final engineering epoch, completed the Windows 11 Pro
-  25H2 required-core live gate in an isolated
+- Completed the 1.1.0 Windows 11 Pro 25H2 required-core live gate in an isolated
   Generation-2 Hyper-V VM: exact test-signed package identity, ABI 6,
   KDbgProbe PFN discovery, 8-byte apply, full-page read-back and independent
   reload, 4 KiB rollback, final write-gate lock, uninstall cleanup, exact
-  checkpoint restore, and final VM Off all passed. The same epoch subsequently
-  completed interactive GUI capture, repeated lifecycle/reboot, full feature
-  evidence, a 30-minute soak, and MP4 composition; exact 1.1.0 rebind is pending.
+  checkpoint restore, and final VM Off all passed. The same candidate line also
+  completed repeated lifecycle/reboot validation, a 30-minute soak, automated
+  GUI capture, and MP4 composition. Formal visual-review and production-trust
+  states remain independently recorded and are not inferred from those gates.
 - Release user-mode builds now emit full PDBs with basename-only CodeView paths;
   package-only validation no longer depends on a source checkout.
 - Current source gate: 1,771 checks with zero failures and 38/38 validator tests;

@@ -213,6 +213,60 @@ foreach ($step in $steps) {
     }
 }
 
+# Keep the two 1024-wide readability fixes source-bound. These pane changes are
+# deliberately bracketed around capture so they do not leak into later scenes.
+$scene03 = @($steps | Where-Object id -ceq '03-physical-read-4096')
+$scene20 = @($steps | Where-Object id -ceq '20-snapshot-diff')
+if ($scene03.Count -ne 1 -or $scene20.Count -ne 1) {
+    throw 'Readability contract requires the exact scene 03 and scene 20 steps.'
+}
+$scene03Actions = @($scene03[0].actions)
+$scene20Actions = @($scene20[0].actions)
+$scene03Capture = [Array]::FindIndex(
+    $scene03Actions, [Predicate[object]]{ param($action) [string]$action.type -ceq 'capture' })
+$scene20Capture = [Array]::FindIndex(
+    $scene20Actions, [Predicate[object]]{ param($action) [string]$action.type -ceq 'capture' })
+if ($scene03Capture -lt 0 -or $scene20Capture -lt 0) {
+    throw 'Readability contract requires capture actions in scene 03 and scene 20.'
+}
+function Test-ExactReadabilityDrag([object]$Action, [string]$Assertion,
+        [int]$X, [int]$Y, [int]$EndX, [int]$EndY) {
+    $Action.PSObject.Properties['assertion'] -and
+        $Action.PSObject.Properties['x'] -and
+        $Action.PSObject.Properties['y'] -and
+        $Action.PSObject.Properties['end_x'] -and
+        $Action.PSObject.Properties['end_y'] -and
+        [string]$Action.type -ceq 'drag' -and
+        [string]$Action.assertion -ceq $Assertion -and
+        [int]$Action.x -eq $X -and [int]$Action.y -eq $Y -and
+        [int]$Action.end_x -eq $EndX -and [int]$Action.end_y -eq $EndY
+}
+$readabilityContracts = [ordered]@{
+    scene03_left_collapse_before_capture = @($scene03Actions | Select-Object -First $scene03Capture |
+        Where-Object { Test-ExactReadabilityDrag $_ 'minimal_scene03_left_collapse' 259 350 72 350 }).Count -eq 1
+    scene03_right_collapse_before_capture = @($scene03Actions | Select-Object -First $scene03Capture |
+        Where-Object { Test-ExactReadabilityDrag $_ 'minimal_scene03_right_collapse' 777 350 992 350 }).Count -eq 1
+    scene03_left_restore_after_capture = @($scene03Actions | Select-Object -Skip ($scene03Capture + 1) |
+        Where-Object { Test-ExactReadabilityDrag $_ 'minimal_scene03_left_restore' 72 350 259 350 }).Count -eq 1
+    scene03_right_restore_after_capture = @($scene03Actions | Select-Object -Skip ($scene03Capture + 1) |
+        Where-Object { Test-ExactReadabilityDrag $_ 'minimal_scene03_right_restore' 992 350 777 350 }).Count -eq 1
+    scene20_expand_before_capture = @($scene20Actions | Select-Object -First $scene20Capture |
+        Where-Object { Test-ExactReadabilityDrag $_ 'minimal_scene20_bottom_expand' 600 427 600 250 }).Count -eq 1
+    scene20_scroll_before_capture = @($scene20Actions | Select-Object -First $scene20Capture |
+        Where-Object {
+            $null -ne $_.PSObject.Properties['assertion'] -and
+            [string]$_.assertion -ceq 'minimal_scene20_diff_scroll' -and
+            [string]$_.type -ceq 'scroll' -and [int]$_.delta -eq -2400
+        }).Count -eq 2
+    scene20_restore_after_capture = @($scene20Actions | Select-Object -Skip ($scene20Capture + 1) |
+        Where-Object { Test-ExactReadabilityDrag $_ 'minimal_scene20_bottom_restore' 600 250 600 427 }).Count -eq 1
+}
+foreach ($contract in $readabilityContracts.GetEnumerator()) {
+    if ($contract.Value -ne $true) {
+        throw "Source-bound 1024-wide readability contract failed: $($contract.Key)"
+    }
+}
+
 $planXs = [Collections.Generic.List[double]]::new()
 $planYs = [Collections.Generic.List[double]]::new()
 foreach ($step in $steps) {
@@ -539,6 +593,7 @@ $result = [ordered]@{
         proven_action_types=$provenActionTypes.Count
         readiness_actions=@($allActions | Where-Object type -eq 'wait_window_responsive').Count
         capture_actions=@($allActions | Where-Object type -eq 'capture').Count
+        source_bound_readability_contracts=$readabilityContracts.Count
         token_count=$planTokens.Count
         planned_duration_ms=$plannedDuration
         client_height=[int]$calibration.client.height
