@@ -17,23 +17,23 @@ ProbeFixture는 destructive evidence의 기본 fixture일 뿐 일반 LocalHost R
 | Gate | 현재 상태 | 근거/경계 |
 |---|---|---|
 | Source-complete | PASS | `verify_layout.py`, core configure/build, CTest 14/14, source validator PASS |
-| Release validator unit tests | PASS | `python -m unittest src.tests.test_validate_release`: 90/90 |
+| Release validator unit tests | PASS | `python -m unittest src.tests.test_validate_release`: 92/92 |
 | ABI 7 physical transaction source | PASS | exact 4096-byte baseline compare, desired-page write, full read-back result/capability implemented and deterministically tested |
-| Windows Release/package | PASS (UNSIGNED) | MSVC Release GUI/bridge, package validator, and source snapshot pass in epoch `local-host-source-fix3-20260921`; production trust is not claimed |
+| Windows Release/package | PASS (UNSIGNED) | MSVC Release GUI/bridge, pinned WDK driver package, validator, and source snapshot pass in epoch `local-host-source-fix6-rawpfn-20260921`; production trust is not claimed |
 | Windows WDK driver build | PASS (PINNED NUGET) | WDK `10.0.26100.2454`; Debug/Release, driver contract, Inf2Cat, and symbol verification pass; drivers are unsigned |
 | Bare-metal runtime-host read-only | PASS | `out/evidence/local-host-source-fix3-runtime-host-5/evidence.json`; ABI 7, live backend, exact 4096-byte reads |
 | Bare-metal Probe transaction | PASS | same evidence; apply/read-back/reload/rollback/final lock all pass |
-| Bare-metal RawPfn live write | NOT RUN | actual host PFN write를 실행하거나 성공으로 주장하지 않음 |
+| Bare-metal RawPfn live write | PASS (CLI transaction) / GUI scene incomplete | `out/evidence/local-host-source-fix6-rawpfn/raw-pfn.json`; manual `RawPfn` input, exact 4 KiB apply/read-back/reload/rollback, final lock. Required visible GUI scene is not captured. |
 | Historical regression-guest evidence | PRESERVED | 해당 historical source/package identity에만 결속; current bare-metal gate로 승격하지 않음 |
 
 2026-09-21 source/tooling repair epoch:
-`out/release-epochs/local-host-source-fix3-20260921` (unsigned) and
-`out/release-epochs/local-host-source-fix3-test-signed-20260921` (VM-only test
+`out/release-epochs/local-host-source-fix6-rawpfn-20260921` (unsigned) and
+`out/release-epochs/local-host-source-fix6-test-signed-20260921` (local test
 trust). Main/symbol ZIP hashes are
-`3386b2e0…9f54e70` / `365da09f…e4a624`; the signed package hash is
-`c58fad5f…d1ae76`. PowerShell 5.1/7 package and signing contracts, core-debug
+`6673371b…ca0f3526` / `56d91768…1f5cb9ad`; the signed package hash is
+`24ba5de9…5e93376b`. PowerShell 5.1/7 package and signing contracts, core-debug
 and Windows Release CTest 14/14, package validation, and the local-host
-producer preflight all pass. RawPfn live-write remains unclaimed.
+producer preflight all pass.
 
 The GUI driver-service registration quote bug is fixed in
 `src/core/windows/DriverService.cpp`; a validator regression test ensures SCM
@@ -41,8 +41,20 @@ receives the raw binary path for both create and update.
 
 Current test-signed runtime-host evidence is
 `out/evidence/local-host-source-fix3-runtime-host-5/evidence.json`; strict
-package validation passes its read-only and Probe-write gates. RawPfn live-write
-is intentionally still unclaimed.
+package validation passes its read-only and Probe-write gates. The independent
+RawPfn transaction report is
+`out/evidence/local-host-source-fix6-rawpfn/raw-pfn.json` (SHA-256
+`017c2808…2d68f1f7`); it is a CLI evidence lane and does not claim a captured GUI
+scene.
+
+The RawPfn transaction uses the fix6 test-signed package
+`out/release-epochs/local-host-source-fix6-test-signed-20260921` (package
+SHA-256 `24ba5de9…5e93376b`; source snapshot `2f5f82df…9df829f6`). The live target
+PFN was `8523045` (`PA 34910392320`). The report records 8 dirty bytes,
+`driver_transferred_bytes=4096` for apply and rollback, full read-back and
+independent reload matches, and `final_gate_locked=true`. The PFN was manually
+entered and matched the fresh Probe identity as a safety check; Probe evidence
+was not relabeled as RawPfn evidence.
 
 The earlier admin producer run is retained at
 `out/evidence/local-host-source-fix-runtime-host-20260921` as historical

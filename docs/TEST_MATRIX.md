@@ -21,12 +21,12 @@ renamed across those roles.
 
 | Gate | Status | Exact evidence/boundary |
 |---|---|---|
-| Source-complete | PASS | current ABI 7 backend/driver source, RawPfn page transaction, GUI target-kind flow, LocalHost profile, live-verifier v2 and bare-metal producer contracts pass deterministic source/portable validation |
-| Windows-build-verified | NOT VERIFIED / BLOCKED | current user-mode build evidence does not establish the driver/package gate; this environment cannot build the current drivers because the required WDK toolset is unavailable (`MSB8020`) |
+| Source-complete | PASS | current ABI 7 backend/driver source, RawPfn page transaction, GUI target-kind flow, LocalHost profile, live-verifier raw-PFN mode and bare-metal producer contracts pass deterministic source/portable validation |
+| Windows-build-verified | PASS (UNSIGNED) | fix6 Windows Release/package epoch `out/release-epochs/local-host-source-fix6-rawpfn-20260921`; pinned WDK `10.0.26100.2454`, Inf2Cat, driver contract, symbols, and package validation pass; production trust is not claimed |
 | Regression-guest | NOT RUN | no current-working-tree guest package/run is bound; historical RC4/RC1 VM rows below remain immutable |
-| Bare-metal runtime-host read-only | NOT RUN | no current source-bound LocalHost lifecycle/ABI/exact Raw PFN read artifact from a named `runtime_host` |
-| Bare-metal runtime-host Probe write | NOT RUN | no current `kdbg.live-verify.v2` apply/read-back/reload/rollback artifact or `kdbg.win11-baremetal-validation.v1` bundle |
-| Bare-metal RawPfn | NOT RUN | product source/portable implementation is PASS, but no current source-bound bare-metal RawPfn live transaction was executed |
+| Bare-metal runtime-host read-only | PASS | `out/evidence/local-host-source-fix3-runtime-host-5/evidence.json`; current signed LocalHost package, ABI 7, exact 4096-byte reads |
+| Bare-metal runtime-host Probe write | PASS | same bundle; Probe apply/read-back/reload/rollback/final-lock evidence and strict validation pass |
+| Bare-metal RawPfn | PASS (CLI transaction) / GUI scene incomplete | `out/evidence/local-host-source-fix6-rawpfn/raw-pfn.json`; `kdbg.live-verify.raw-pfn.v1`, manual PFN input, exact 4096-byte apply/read-back/reload/rollback, final lock. Required visible GUI scene is not captured |
 
 Machine/boot/session values are optional automatically collected provenance.
 Their absence is not a LocalHost RawPfn product blocker. ProbeFixture is the
@@ -56,7 +56,7 @@ deterministic write-evidence target and does not restrict ordinary RawPfn use.
 | Package | source contract | PE/PDB GUID+age, INF/CAT, provenance/hash/SBOM validator | install/diagnose/remove | `TargetProfile LocalHost` lifecycle and cleanup |
 | Native Setup | plan/quoting/marker tests | `KDBGSetup.exe` MSVC/MinGW build, PE/PDB/package binding | guest lifecycle | LocalHost install/start/run/uninstall |
 | Runtime telemetry | deterministic bounded/privacy tests | MSVC GUI hook and JSON writer | guest raw JSON | runtime-host raw JSON with private paths excluded |
-| Evidence | schema and negative tests | artifact/report hash binding | immutable guest archive | live-verify v2 plus bare-metal validation v1 bundle |
+| Evidence | schema and negative tests | artifact/report hash binding | immutable guest archive | live-verify v2/raw-PFN plus bare-metal validation v1 bundle |
 
 PASS must include command output and artifacts from the corresponding column.
 Portable results never promote the Windows or live columns.

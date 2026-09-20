@@ -2900,11 +2900,35 @@ def validate_live_run(path: Path, errors: list[str]) -> None:
     report = load_json(path, "live verification run report", errors)
     if report is None:
         return
-    if report.get("schema") != "kdbg.live-verify.v1":
-        errors.append("live run schema must be kdbg.live-verify.v1")
+    schema = report.get("schema")
+    if schema not in {"kdbg.live-verify.v1", "kdbg.live-verify.raw-pfn.v1"}:
+        errors.append(
+            "live run schema must be kdbg.live-verify.v1 or "
+            "kdbg.live-verify.raw-pfn.v1"
+        )
     mode = report.get("mode")
-    if mode not in {"read-only", "probe-write-rollback"}:
+    if mode not in {
+        "read-only", "probe-write-rollback",
+        "baremetal-raw-pfn-write-rollback",
+    }:
         errors.append("live run mode is invalid")
+    raw_pfn_mode = schema == "kdbg.live-verify.raw-pfn.v1" or mode == "baremetal-raw-pfn-write-rollback"
+    if raw_pfn_mode:
+        contract = report.get("raw_pfn_contract")
+        if (not isinstance(contract, dict) or
+                contract.get("target_profile") != "LocalHost" or
+                contract.get("target_kind") != "RawPfn" or
+                contract.get("target_provenance") != "manual PFN entry" or
+                contract.get("raw_pfn_derived_from_probe") is not True):
+            errors.append("Raw-PFN live run target contract is invalid")
+        else:
+            target_pfn = integer(contract.get("pfn"), "raw_pfn_contract.pfn", errors)
+            target_physical = integer(
+                contract.get("physical_address"),
+                "raw_pfn_contract.physical_address", errors)
+            if (target_pfn is not None and target_physical is not None and
+                    target_physical != target_pfn << 12):
+                errors.append("Raw-PFN target PFN/physical address mismatch")
     if report.get("success") is not True or report.get("cancelled") is not False:
         errors.append("live run must report successful, non-cancelled completion")
     if report.get("errors") != []:
@@ -2998,6 +3022,13 @@ def validate_live_run(path: Path, errors: list[str]) -> None:
     probe_before = checked_probe("probe_before")
     session_before = checked_session("session_before")
     session_final = checked_session("session_final")
+    if raw_pfn_mode and probe_before:
+        contract = report.get("raw_pfn_contract")
+        if isinstance(contract, dict):
+            if contract.get("pfn") != probe_before.get("pfn"):
+                errors.append("Raw-PFN target must match the live Probe PFN")
+            if contract.get("physical_address") != probe_before.get("physical_address"):
+                errors.append("Raw-PFN target must match the live Probe physical address")
 
     latency = report.get("latency")
     if not isinstance(latency, dict):
@@ -3086,11 +3117,15 @@ def validate_live_run(path: Path, errors: list[str]) -> None:
         errors.append("live run does not prove the final write gate is locked")
         cleanup = {}
 
-    if mode == "probe-write-rollback":
-        if (report.get("operator_confirmed_disposable_vm") is not True or
-                not isinstance(report.get("snapshot_id"), str) or
-                not report.get("snapshot_id")):
-            errors.append("write run lacks disposable-VM and snapshot confirmation")
+    if mode in {"probe-write-rollback", "baremetal-raw-pfn-write-rollback"}:
+        if mode == "probe-write-rollback":
+            if (report.get("operator_confirmed_disposable_vm") is not True or
+                    not isinstance(report.get("snapshot_id"), str) or
+                    not report.get("snapshot_id")):
+                errors.append("write run lacks disposable-VM and snapshot confirmation")
+        elif (report.get("operator_confirmed_disposable_vm") is not False or
+              report.get("snapshot_id") != ""):
+            errors.append("Raw-PFN run must not assert disposable-VM confirmation")
         probe_after_write = checked_probe("probe_after_write")
         probe_after_rollback = checked_probe("probe_after_rollback")
         session_after_apply = checked_session("session_after_apply")
@@ -3169,7 +3204,7 @@ def validate_live_run(path: Path, errors: list[str]) -> None:
                 session_final.get("rejected_writes")
             ):
                 errors.append("write run unexpectedly changed the rejected-write counter")
-    elif report.get("operator_confirmed_disposable_vm") is not False:
+    elif mode == "read-only" and report.get("operator_confirmed_disposable_vm") is not False:
         errors.append("read-only run must not assert write-mode confirmation")
 
 

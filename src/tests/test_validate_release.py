@@ -190,6 +190,25 @@ def valid_write_report_abi7() -> dict[str, object]:
     return report
 
 
+def valid_raw_pfn_report() -> dict[str, object]:
+    report = valid_write_report_abi7()
+    report["schema"] = "kdbg.live-verify.raw-pfn.v1"
+    report["mode"] = "baremetal-raw-pfn-write-rollback"
+    report["operator_confirmed_disposable_vm"] = False
+    report["snapshot_id"] = ""
+    report["raw_pfn_contract"] = {
+        "target_profile": "LocalHost",
+        "target_kind": "RawPfn",
+        "target_provenance": "manual PFN entry",
+        "raw_pfn_derived_from_probe": True,
+        "pfn": 0x100,
+        "physical_address": 0x100000,
+        "probe_identity_fresh_at_rollback": True,
+        "rollback_suppressed_stale_identity": False,
+    }
+    return report
+
+
 def file_sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
@@ -1201,6 +1220,17 @@ class LiveRunValidatorTests(unittest.TestCase):
 
     def test_valid_abi7_write_report(self) -> None:
         self.assertEqual([], self.validate(valid_write_report_abi7()))
+
+    def test_valid_raw_pfn_report(self) -> None:
+        self.assertEqual([], self.validate(valid_raw_pfn_report()))
+
+    def test_raw_pfn_report_must_match_probe_target(self) -> None:
+        report = valid_raw_pfn_report()
+        report["raw_pfn_contract"]["pfn"] = 0x101  # type: ignore[index]
+        self.assertTrue(any(
+            "Raw-PFN target must match the live Probe PFN" in error
+            for error in self.validate(report)
+        ))
 
     def test_valid_abi7_live_bundle(self) -> None:
         with tempfile.TemporaryDirectory(

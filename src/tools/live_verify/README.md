@@ -12,8 +12,8 @@ cmake --build out/build/live-verify --parallel
 ctest --test-dir out/build/live-verify --output-on-failure
 ```
 
-The `kdbg_live_verify` executable is emitted only on Windows. Both evidence
-lanes write only the PFN returned by the running `KDbgProbe`; an independently
+The `kdbg_live_verify` executable is emitted only on Windows. Automated
+destructive lanes are bound to the current `KDbgProbe` fixture; an independently
 entered PFN must match that runtime query. The legacy VM lane retains
 `--write`, `--confirm-disposable-vm`, `--snapshot-id`, and
 `--confirm-probe-pfn` and emits `kdbg.live-verify.v1`.
@@ -33,6 +33,26 @@ the rollback write if that identity is stale. It writes six exact 4 KiB page
 artifacts (baseline, preflight, expected-after, read-back, independent reload,
 and rollback) and records their package-independent file names and SHA-256
 identities without serializing the private artifact-directory path.
+
+The separate Raw-PFN capability lane exercises the ordinary manual-input target
+classification while keeping the live test page deterministic. Enter the PFN
+reported by the read-only query twice (once as the manual PFN and once as the
+explicit confirmation):
+
+```powershell
+.\tools\kdbg_live_verify.exe --write --raw-pfn-evidence `
+  --raw-pfn <PFN_FROM_KDBGPROBE> `
+  --confirm-raw-pfn <PFN_FROM_KDBGPROBE> `
+  --artifact-directory C:\KDBG-Evidence\raw-pfn-pages `
+  --output C:\KDBG-Evidence\raw-pfn-live.json
+```
+
+This lane emits `kdbg.live-verify.raw-pfn.v1` with `target_kind=RawPfn`,
+`target_provenance=manual PFN entry`, the runtime-host identity, complete
+4 KiB RAM-range validation, one-shot apply, full read-back, independent reload,
+full-page rollback, and final write-gate lock. It rejects a manual PFN that is
+not the current Probe PFN; this is a safety binding for deterministic evidence,
+not a restriction on the GUI's normal RawPfn input path.
 
 The executable requires Windows x64 build 19041 or newer. Before opening either
 device it hashes itself and the two binaries configured in SCM, requires the

@@ -104,6 +104,16 @@ kdbg::live_verify::Options BareMetalWriteOptions() {
     return options;
 }
 
+kdbg::live_verify::Options RawPfnWriteOptions() {
+    auto options = BareMetalWriteOptions();
+    options.baremetal_evidence = false;
+    options.raw_pfn_evidence = true;
+    options.confirm_probe_pfn.reset();
+    options.raw_pfn = MockProbe().pfn;
+    options.confirm_raw_pfn = MockProbe().pfn;
+    return options;
+}
+
 void TestOptionsAreFailClosed() {
     const std::vector<std::string_view> no_arguments;
     const auto defaults = kdbg::live_verify::ParseOptions(no_arguments);
@@ -147,12 +157,79 @@ void TestOptionsAreFailClosed() {
               !baremetal_accepted.Value().confirm_disposable_vm,
           "bare-metal evidence metadata must parse without VM confirmations");
 
+    const std::vector<std::string_view> raw_pfn{
+        "--write", "--raw-pfn-evidence", "--raw-pfn", "0x100",
+        "--confirm-raw-pfn", "0x100",
+        "--artifact-directory", "C:/evidence/raw-pfn"};
+    const auto raw_pfn_accepted = kdbg::live_verify::ParseOptions(raw_pfn);
+    Check(raw_pfn_accepted && raw_pfn_accepted.Value().raw_pfn_evidence &&
+              raw_pfn_accepted.Value().raw_pfn == 0x100ULL &&
+              raw_pfn_accepted.Value().confirm_raw_pfn == 0x100ULL,
+          "Raw-PFN evidence metadata must parse with matching manual PFN confirmation");
+
+    const std::vector<std::string_view> raw_pfn_mismatch{
+        "--write", "--raw-pfn-evidence", "--raw-pfn", "0x100",
+        "--confirm-raw-pfn", "0x101",
+        "--artifact-directory", "C:/evidence/raw-pfn"};
+    Check(!kdbg::live_verify::ParseOptions(raw_pfn_mismatch),
+          "Raw-PFN evidence must reject mismatched manual confirmation");
+
     const std::vector<std::string_view> mixed{
         "--write", "--baremetal-evidence", "--confirm-disposable-vm",
         "--snapshot-id", "vm-snapshot", "--confirm-probe-pfn", "0x100",
         "--artifact-directory", "C:/evidence/raw-pages"};
     Check(!kdbg::live_verify::ParseOptions(mixed),
           "bare-metal and disposable-VM confirmations must be exclusive");
+}
+
+void TestRawPfnEvidenceUsesManualTarget() {
+    kdbg::MockMemoryBackend backend;
+    Check(static_cast<bool>(backend.Open()), "mock backend must open");
+    const auto probe = MockProbe();
+    auto query = [probe, &backend]() {
+        return QueryCurrentProbe(backend, probe);
+    };
+    const auto report = kdbg::live_verify::Run(
+        backend, query, RawPfnWriteOptions(), MockSystem(),
+        MockRuntimeIdentity());
+    Check(report.success, "Raw-PFN evidence flow must pass with mock fixture");
+    Check(report.schema == "kdbg.live-verify.raw-pfn.v1" &&
+              report.mode == "baremetal-raw-pfn-write-rollback" &&
+              report.target_profile == "LocalHost",
+          "Raw-PFN evidence must use its distinct LocalHost schema and mode");
+    Check(report.target_kind == "RawPfn" &&
+              report.target_provenance == "manual PFN entry" &&
+              report.raw_pfn_derived_from_probe &&
+              report.target_pfn == probe.pfn &&
+              report.target_physical_address == probe.physical_address,
+          "Raw-PFN evidence must publish the manually entered target identity");
+    Check(report.rollback_verified && report.final_gate_locked &&
+              report.apply_driver_transferred_bytes == kdbg::kPhysicalPageSize &&
+              report.rollback_driver_transferred_bytes == kdbg::kPhysicalPageSize,
+          "Raw-PFN evidence must prove full-page apply, rollback, and relock");
+    const auto json = kdbg::live_verify::ToJson(report);
+    Check(json.find("\"raw_pfn_contract\"") != std::string::npos &&
+              json.find("\"target_kind\":\"RawPfn\"") != std::string::npos &&
+              json.find("\"target_provenance\":\"manual PFN entry\"") !=
+                  std::string::npos &&
+              json.find("\"user_dirty_bytes\":8") != std::string::npos,
+          "Raw-PFN JSON must carry target identity and transfer semantics");
+    backend.Close();
+
+    kdbg::MockMemoryBackend mismatch_backend;
+    Check(static_cast<bool>(mismatch_backend.Open()),
+          "mock backend must open for the Raw-PFN binding check");
+    auto mismatch_options = RawPfnWriteOptions();
+    mismatch_options.raw_pfn = probe.pfn + 1U;
+    mismatch_options.confirm_raw_pfn = probe.pfn + 1U;
+    const auto mismatch = kdbg::live_verify::Run(
+        mismatch_backend,
+        [probe]() { return kdbg::Result<kdbg::ProbeInfo>::Success(probe); },
+        mismatch_options, MockSystem(), MockRuntimeIdentity());
+    Check(!mismatch.success && !mismatch.rollback_attempted &&
+              mismatch_backend.WriteCallCount() == 0,
+          "Raw-PFN evidence must fail closed when the manual PFN is not the live fixture PFN");
+    mismatch_backend.Close();
 }
 
 void TestReadOnlyNeverOpensWriteGate() {
@@ -487,6 +564,7 @@ int main(int argc, char** argv) {
     TestReadOnlyNeverOpensWriteGate();
     TestRunRevalidatesWriteAuthorization();
     TestWriteRollbackAndEvidence();
+    TestRawPfnEvidenceUsesManualTarget();
     TestProbeMetadataMustRemainStable();
     TestBareMetalEvidenceAndStaleRollbackSuppression();
     TestCancellationAfterApplyRollsBack();

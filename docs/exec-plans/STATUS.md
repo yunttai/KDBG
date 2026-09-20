@@ -13,8 +13,9 @@ ProbeFixture는 자동 destructive evidence target일 뿐이다.
 현재 working tree는 이 target을 제품 동작과 검증 도구에 반영했다. ABI 7의
 exact 4 KiB compare/write/read-back transaction, RawPfn page session, LocalHost
 target profile, GUI target provenance와 bare-metal evidence harness가 구현돼 있다.
-source/portable 판정과 별도로 direct LocalHost read-only 및 Probe-write evidence가
-기록됐다. RawPfn live-write 성공은 아직 주장하지 않는다. 기존 RC4/RC1 VM
+source/portable 판정과 별도로 direct LocalHost read-only, Probe-write, 그리고
+별도 RawPfn 수동입력 transaction evidence가 기록됐다. RawPfn GUI의 visible
+scene capture는 아직 주장하지 않는다. 기존 RC4/RC1 VM
 evidence와 hash/status는 historical identity에 그대로 결속되며 current
 bare-metal PASS로 재표기하거나 승격하지 않는다.
 
@@ -27,7 +28,8 @@ bare-metal PASS로 재표기하거나 승격하지 않는다.
 | Windows WDK driver build | PASS (PINNED NUGET) — Release/Debug built with pinned NuGet WDK `10.0.26100.2454`; Inf2Cat 0 errors/0 warnings; artifacts remain unsigned |
 | Bare-metal read-only evidence | PASS — current signed-package LocalHost wrapper evidence: `out/evidence/local-host-source-fix3-runtime-host-5/evidence.json` |
 | Bare-metal Probe-write evidence | PASS — same current wrapper evidence, with six 4 KiB artifacts, full read-back, independent reload, rollback, and final lock |
-| Bare-metal RawPfn live-write evidence | NOT RUN — no actual runtime-host PFN write is claimed |
+| Bare-metal RawPfn live-write transaction | PASS — `out/evidence/local-host-source-fix6-rawpfn/raw-pfn.json`; distinct `kdbg.live-verify.raw-pfn.v1`, manual PFN target, full 4096-byte apply/read-back/reload/rollback, final lock |
+| Bare-metal RawPfn GUI scene gate | NOT COMPLETE — the live transaction is recorded, but the required visible GUI `RawPfn | manual PFN entry` scene was not captured |
 | Historical regression_guest evidence | PRESERVED; no promotion |
 
 Latest working-tree integration check for this target-alignment epoch:
@@ -38,8 +40,8 @@ Latest working-tree integration check for this target-alignment epoch:
 - `ctest --preset core-debug --output-on-failure`: **14/14 PASS**
 - Windows Release configure/build and `ctest --preset windows-release --output-on-failure`:
   **14/14 PASS**; current package epoch is
-  `out/release-epochs/local-host-source-fix3-20260921`
-- `python -m unittest src.tests.test_validate_release`: **90/90 PASS**
+  `out/release-epochs/local-host-source-fix6-rawpfn-20260921`
+- `python -m unittest src.tests.test_validate_release`: **92/92 PASS**
 - `python .\src\tools\validate_release.py --source-complete`: PASS
 - WDK driver build: **PASS (PINNED NUGET)** — WDK `10.0.26100.2454`, Inf2Cat
   0 errors/0 warnings, driver contract and symbol verification PASS; resulting
@@ -47,14 +49,16 @@ Latest working-tree integration check for this target-alignment epoch:
 - bare-metal runtime-host read-only and Probe-write direct verifier gates:
   **PASS** for the current source-fix3 test-signed package via
   `out/evidence/local-host-source-fix3-runtime-host-5/evidence.json`; RawPfn
-  live-write remains **NOT RUN**
-- current source-fix3 unsigned epoch:
-  `out/release-epochs/local-host-source-fix3-20260921`; main/symbol ZIP hashes
-  `3386b2e0…9f54e70` / `365da09f…e4a624`; source snapshot
-  `a75d84e3…de88dc8`
-- current VM-only test-signed derivative:
-  `out/release-epochs/local-host-source-fix3-test-signed-20260921`; package hash
-  `c58fad5f…d1ae76`; SYS/CAT Authenticode status is Valid. This derivative is
+  transaction evidence is **PASS** for the fix6 test-signed package via
+  `out/evidence/local-host-source-fix6-rawpfn/raw-pfn.json`; the GUI scene gate
+  remains **NOT COMPLETE**
+- current unsigned epoch:
+  `out/release-epochs/local-host-source-fix6-rawpfn-20260921`; main/symbol ZIP
+  hashes `6673371b…ca0f3526` / `56d91768…1f5cb9ad`; source snapshot
+  `2f5f82df…9df829f6`
+- current local test-signed derivative:
+  `out/release-epochs/local-host-source-fix6-test-signed-20260921`; package hash
+  `24ba5de9…5e93376b`; SYS/CAT Authenticode status is Valid. This derivative is
   not production trust. The GUI `DriverService` path-registration quote bug was
   removed and covered by a source regression test in this epoch.
 - the earlier admin producer run is preserved in
@@ -66,8 +70,9 @@ Latest working-tree integration check for this target-alignment epoch:
   no longer fails on the former `OSArchitecture` property lookup
 
 따라서 현재 working tree의 source/portable, unsigned Windows build/package,
-runtime-host read-only 및 Probe-write direct-verifier gates는 PASS다. RawPfn
-live-write와 production signing은 독립적으로 미완료이며, Probe evidence를
+runtime-host read-only 및 Probe-write direct-verifier gates, 그리고 별도
+RawPfn 수동입력 transaction evidence는 PASS다. RawPfn GUI visible-scene
+gate와 production signing은 독립적으로 미완료이며, Probe evidence를
 RawPfn evidence로 승격하지 않는다.
 
 PRD section 3의 bypass/BYOVD/stealth 등 목록은 현재 AGENTS/agent/skill 계약과

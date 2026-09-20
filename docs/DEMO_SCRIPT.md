@@ -7,10 +7,13 @@ whose local physical RAM is exposed by `KDbgDriver.sys`. The recording and its
 command log must identify `role=runtime_host` and `TargetProfile=LocalHost`.
 `orchestrator_host` may collect the result but is not the memory target.
 
-This is the next-run procedure, not a claim that current live evidence exists.
-The source/portable implementation is PASS, the current WDK driver/package build
-is NOT VERIFIED because the required toolset is unavailable (`MSB8020`), and the
-bare-metal read-only, Probe-write, and RawPfn live gates are all NOT RUN.
+This is the next-run procedure for the visible recording scene. The source/portable
+implementation and pinned WDK/package build are PASS (unsigned build identity).
+Current runtime-host read-only and Probe-write evidence are PASS, and the separate
+manual-input RawPfn CLI transaction is PASS at the current epoch's
+`out/evidence/<current-rawpfn-epoch>/raw-pfn.json`. The visible GUI
+`RawPfn | manual PFN entry` scene is still unrecorded, so this script remains the
+procedure for closing that evidence gate rather than a claim that the scene exists.
 
 Before recording, produce and validate the current-host bundle on the
 `runtime_host`:

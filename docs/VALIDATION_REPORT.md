@@ -12,13 +12,13 @@ target, and `regression_guest` is an independent regression lane.
 | Gate | State | Current evidence boundary |
 |---|---|---|
 | Source-complete | PASS | layout, core configure/build, CTest 14/14, and `validate_release.py --source-complete` PASS |
-| Release validator tests | PASS | `python -m unittest src.tests.test_validate_release`: 90/90 |
+| Release validator tests | PASS | `python -m unittest src.tests.test_validate_release`: 92/92 |
 | ABI 7 exact-page transaction | SOURCE PASS | 4096-byte compare/write/full read-back implementation and deterministic coverage are present |
 | Windows WDK driver build | PASS (PINNED NUGET, UNSIGNED) | WDK `10.0.26100.2454`; Debug/Release, Inf2Cat, driver contract, and symbol verification pass |
-| Current Windows Release/package | PASS (UNSIGNED) | epoch `local-host-source-fix3-20260921`; package/symbol validation pass; production trust not claimed |
+| Current Windows Release/package | PASS (UNSIGNED) | epoch `local-host-source-fix6-rawpfn-20260921`; package/symbol validation pass; production trust not claimed |
 | Bare-metal runtime-host read-only | PASS | `out/evidence/local-host-source-fix3-runtime-host-5/evidence.json`; current test-signed package, ABI 7, live backend |
 | Bare-metal Probe-write | PASS | same evidence; six 4 KiB artifacts, full rollback and final lock; strict validator PASS |
-| Bare-metal RawPfn live write | NOT RUN | no actual runtime-host PFN write or read-back success is claimed |
+| Bare-metal RawPfn live write | PASS (CLI transaction) / GUI scene incomplete | `out/evidence/local-host-source-fix6-rawpfn/raw-pfn.json`; manual PFN input, exact 4 KiB apply/read-back/reload/rollback and final lock. Required visible GUI scene is not captured |
 | Historical regression-guest evidence | PRESERVED | remains bound to its recorded source/package identity and does not establish a current bare-metal gate |
 
 LocalHost RawPfn is the ordinary product path. ProbeFixture is the default
@@ -28,29 +28,33 @@ not a manual confirmation or product prerequisite. No dedicated-machine,
 recovery-plan, Probe-only, or equivalent new product usage restriction was added.
 
 Current unsigned package identity: main ZIP SHA-256
-`3386b2e02a4918da0bf85fd5a7eb79a8eb2c9936c805dd941ffc3cd639f54e70`, symbols
-ZIP SHA-256 `365da09fc18cd621a97ddeb71930a3ad34fb8d557679e8e7e19ddc093ae4a624`,
+`6673371b89e41c5e602fc32cfe87a2fd84e830875b0d0e6a398d76beca0f3526`, symbols
+ZIP SHA-256 `56d91768eb9b727274058e364fa9996fd8b8f76aeea6eafd657ed92d1f5cb9ad`,
 and source snapshot SHA-256
-`a75d84e3de1ee369a242891cee3df14785c7503470e5a7ba68733532ade88dc8`.
+`2f5f82df9b400c5fc920cc80af83f4ab3aba965b0cd7de5ae409dfc59df829f6`.
 `tools/TargetProfile.psm1` is present in the package. The drivers are unsigned;
 no production signature or runtime-host memory-write claim is made.
 
 The remainder of this report preserves the RC4/RC1 and earlier evidence as
 historical records. Its PASS results are not rebound to the current working tree.
 
-The current source-fix3 package epoch is
-`out/release-epochs/local-host-source-fix3-20260921`; its VM-only test-signed
-derivative is `out/release-epochs/local-host-source-fix3-test-signed-20260921`
-with package SHA-256
-`c58fad5fe6cf7027115a6c3f599d548644a14278193e36c710ec71c884d1ae76`.
+The current raw-PFN package epoch is
+`out/release-epochs/local-host-source-fix6-rawpfn-20260921`; its local
+test-signed derivative is
+`out/release-epochs/local-host-source-fix6-test-signed-20260921` with package
+SHA-256 `24ba5de94f389a91c61a5ec16da3d6abd09f6901c4bb043d09c1193c5e93376b`.
 The GUI service registration now passes the raw driver path to SCM; the
-embedded-quote regression is covered by the 90-test validator suite.
+embedded-quote regression is covered by the 92-test validator suite.
 The package/install, host-facts, atomic-evidence, backend-name, and JSON-array
 repairs were validated in both PowerShell 5.1 and PowerShell 7. The current
 signed-package runtime-host evidence is
 `out/evidence/local-host-source-fix3-runtime-host-5/evidence.json`; strict
 validation passes the Windows package, symbols package, read-only gate, and
-Probe-write gate. RawPfn live-write remains NOT RUN.
+Probe-write gate. The separate RawPfn CLI transaction report is
+`out/evidence/local-host-source-fix6-rawpfn/raw-pfn.json` (schema
+`kdbg.live-verify.raw-pfn.v1`, SHA-256 `017c2808…2d68f1f7`). Its fix6 test-signed
+package identity is kept separate from the fix3 wrapper report. The visible GUI
+RawPfn scene remains incomplete.
 
 ## Historical RC4 report boundary
 

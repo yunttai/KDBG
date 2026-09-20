@@ -933,11 +933,13 @@ int main(int argc, char** argv) {
             "Runtime identity attestation failed with a non-standard exception",
             "live_verify::attest_runtime");
     }
+    const bool needs_local_artifacts =
+        options.baremetal_evidence || options.raw_pfn_evidence;
     if (identity_capture.package_root.has_value() &&
         (IsPathWithin(
              *identity_capture.package_root,
              Utf8Path(options.output_path)) ||
-         (options.baremetal_evidence && IsPathWithin(
+         (needs_local_artifacts && IsPathWithin(
              *identity_capture.package_root,
              Utf8Path(options.artifact_directory))))) {
         std::cerr <<
@@ -1021,7 +1023,7 @@ int main(int argc, char** argv) {
     backend.Close();
     SetConsoleCtrlHandler(&ConsoleHandler, FALSE);
 
-    if (options.baremetal_evidence) {
+    if (needs_local_artifacts) {
         const auto artifact_error = WriteBaremetalArtifacts(
             options.artifact_directory, report);
         if (artifact_error) {

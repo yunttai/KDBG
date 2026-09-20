@@ -13,7 +13,7 @@ historical baseline이며 현재 변경과 source-bound되지 않는다.
 | Current Windows driver build | ABI 7 `KDbgDriver.sys`/`KDbgProbe.sys` and package outputs | WDK compile/link, INF/CAT, package validation | PASS (PINNED NUGET, UNSIGNED) — WDK `10.0.26100.2454`, Inf2Cat/contract/symbol checks pass; production trust not established |
 | Bare-metal read-only | package/ABI/driver identity + Raw PFN exact read | source-bound runtime-host report | PASS — `out/evidence/local-host-source-fix3-runtime-host-5/evidence.json` |
 | Bare-metal Probe evidence | ProbeFixture is automated destructive evidence target only | Apply/read-back/reload/rollback/final lock | PASS — current signed-package LocalHost report and six raw 4 KiB artifacts |
-| Bare-metal RawPfn capability | explicit `RawPfn` kind; optional automatic provenance | general LocalHost RawPfn transaction | SOURCE/PORTABLE PASS; bare-metal live evidence NOT RUN |
+| Bare-metal RawPfn capability | explicit `RawPfn` kind; optional automatic provenance | general LocalHost RawPfn transaction | PASS (CLI transaction) / GUI scene incomplete — `out/evidence/local-host-source-fix6-rawpfn/raw-pfn.json`; visible GUI `RawPfn | manual PFN entry` scene not captured |
 | Historical VM evidence | immutable exact RC4/RC1 identities | regression only; never renamed/promoted | PRESERVED |
 
 ## Post-RC4 runtime bilingual UI binding (current)

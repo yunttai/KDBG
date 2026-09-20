@@ -21,8 +21,11 @@ struct Options {
     bool help{false};
     bool write{false};
     bool baremetal_evidence{false};
+    bool raw_pfn_evidence{false};
     bool confirm_disposable_vm{false};
     std::optional<std::uint64_t> confirm_probe_pfn;
+    std::optional<std::uint64_t> raw_pfn;
+    std::optional<std::uint64_t> confirm_raw_pfn;
     std::string snapshot_id;
     std::string artifact_directory;
     std::string output_path;
@@ -129,6 +132,11 @@ struct VerificationReport {
     bool operator_confirmed_disposable_vm{false};
     std::string snapshot_id;
     std::string target_profile{"LocalHost"};
+    std::string target_kind{"ProbeFixture"};
+    std::string target_provenance{"KDbgProbe metadata"};
+    bool raw_pfn_derived_from_probe{false};
+    std::uint64_t target_pfn{0};
+    std::uint64_t target_physical_address{0};
     bool probe_identity_fresh_at_rollback{false};
     bool rollback_suppressed_stale_identity{false};
     std::vector<RawPageArtifactRecord> raw_page_artifacts;
