@@ -134,5 +134,23 @@ if(WIN32)
                 -NoLogo -NoProfile -NonInteractive
                 -ExecutionPolicy Bypass
                 -File "${KDBG_CTEST_SOURCE_ROOT}/tests/win11_harness_tests.ps1")
+        add_test(
+            NAME kdbg_win11_test_signed_package_contract_tests
+            COMMAND "${KDBG_POWERSHELL_EXECUTABLE}"
+                -NoLogo -NoProfile -NonInteractive
+                -ExecutionPolicy Bypass
+                -File "${KDBG_CTEST_SOURCE_ROOT}/tools/win11_validation/New-Win11TestSignedPackage.Contract.Tests.ps1")
+        add_test(
+            NAME kdbg_win11_workspace_generator_contract_tests
+            COMMAND "${KDBG_POWERSHELL_EXECUTABLE}"
+                -NoLogo -NoProfile -NonInteractive
+                -ExecutionPolicy Bypass
+                -File "${KDBG_CTEST_SOURCE_ROOT}/tools/win11_validation/workspace/Test-Win11ValidationWorkspaceGenerator.Contract.ps1")
+        add_test(
+            NAME kdbg_win11_baremetal_validation_contract_tests
+            COMMAND "${KDBG_POWERSHELL_EXECUTABLE}"
+                -NoLogo -NoProfile -NonInteractive
+                -ExecutionPolicy Bypass
+                -File "${KDBG_CTEST_SOURCE_ROOT}/tools/win11_baremetal_validation/Win11BareMetalValidation.Contract.Tests.ps1")
     endif()
 endif()

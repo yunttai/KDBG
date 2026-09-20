@@ -329,7 +329,10 @@ function Invoke-DriverTransaction(
 
 function Install-Driver($Driver) {
     $Path = Get-DriverPath $Driver
-    $QuotedPath = '"' + $Path + '"'
+    # Keep the image path as one native argument. Literal quote characters are
+    # escaped twice by PowerShell 7 before sc.exe receives them and can make
+    # the kernel loader reject the service path with ERROR_INVALID_NAME (123).
+    $ServicePath = [string]$Path
     $State = Get-ServiceState $Driver.Service
     if ($State -eq "Running") {
         Write-Warning "$($Driver.Service) is running; the updated binary path takes effect on its next start."
@@ -346,7 +349,7 @@ function Install-Driver($Driver) {
             "type=", "kernel",
             "start=", "demand",
             "error=", "normal",
-            "binPath=", $QuotedPath,
+            "binPath=", $ServicePath,
             "DisplayName=", $Driver.Display) -AllowedExitCodes @(0, 1072)
     } else {
         $Configured = Invoke-Sc -Arguments @(
@@ -354,7 +357,7 @@ function Install-Driver($Driver) {
             "type=", "kernel",
             "start=", "demand",
             "error=", "normal",
-            "binPath=", $QuotedPath,
+            "binPath=", $ServicePath,
             "DisplayName=", $Driver.Display) -AllowedExitCodes @(0, 1072)
     }
     if ($Configured.Code -eq 1072) {
@@ -364,7 +367,7 @@ function Install-Driver($Driver) {
             "type=", "kernel",
             "start=", "demand",
             "error=", "normal",
-            "binPath=", $QuotedPath,
+            "binPath=", $ServicePath,
             "DisplayName=", $Driver.Display) | Out-Null
     }
 

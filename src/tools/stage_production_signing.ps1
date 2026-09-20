@@ -41,6 +41,20 @@ function Get-Sha256 {
     return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
 }
 
+function Get-RelativePathCompat {
+    param(
+        [Parameter(Mandatory)][string]$Root,
+        [Parameter(Mandatory)][string]$Path
+    )
+    $rootFull = [IO.Path]::GetFullPath($Root).TrimEnd('\')
+    $pathFull = [IO.Path]::GetFullPath($Path)
+    $prefix = $rootFull + [IO.Path]::DirectorySeparatorChar
+    if (-not $pathFull.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)) {
+        throw "Path is not under root: $Path"
+    }
+    return $pathFull.Substring($prefix.Length)
+}
+
 function Test-HttpsTimestampUrl {
     param([Parameter(Mandatory)][string]$Value)
     $uri = $null
@@ -118,7 +132,18 @@ function Get-ZipEntryHashes {
             $stream, [IO.Compression.ZipArchiveMode]::Read, $false)
         try {
             foreach ($relative in $RelativePaths) {
-                $entry = $archive.GetEntry("$Root/$relative")
+                # .NET Framework exposes ZIP entry names with backslashes while
+                # modern .NET commonly uses slashes.  Match after normalizing
+                # both forms so the producer behaves identically in Windows
+                # PowerShell 5.1 and PowerShell 7.
+                $entryName = "$Root/$relative".Replace('\', '/')
+                $entry = $null
+                foreach ($candidate in $archive.Entries) {
+                    if ([string]$candidate.FullName.Replace('\', '/') -ceq $entryName) {
+                        $entry = $candidate
+                        break
+                    }
+                }
                 if (-not $entry -or [string]::IsNullOrEmpty($entry.Name)) {
                     throw "ZIP is missing required signing input: $relative"
                 }
@@ -148,7 +173,10 @@ function Expand-SafeZip {
     param(
         [Parameter(Mandatory)][string]$Path,
         [Parameter(Mandatory)][string]$Destination)
-    [IO.Compression.ZipFile]::ExtractToDirectory($Path, $Destination, $false)
+    # The two-argument overload is present on both .NET Framework (Windows
+    # PowerShell 5.1) and modern .NET.  The destination is a newly-created
+    # directory, so overwrite behavior is not needed here.
+    [IO.Compression.ZipFile]::ExtractToDirectory($Path, $Destination)
 }
 
 function Copy-Tree {
@@ -161,14 +189,14 @@ function Copy-Tree {
         if (($directory.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
             throw "Copy source contains a reparse point: $($directory.FullName)"
         }
-        $relative = [IO.Path]::GetRelativePath($Source, $directory.FullName)
+        $relative = Get-RelativePathCompat $Source $directory.FullName
         [IO.Directory]::CreateDirectory((Join-Path $Destination $relative)) | Out-Null
     }
     foreach ($file in Get-ChildItem -LiteralPath $Source -File -Recurse) {
         if (($file.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
             throw "Copy source contains a reparse point: $($file.FullName)"
         }
-        $relative = [IO.Path]::GetRelativePath($Source, $file.FullName)
+        $relative = Get-RelativePathCompat $Source $file.FullName
         $target = Join-Path $Destination $relative
         [IO.Directory]::CreateDirectory((Split-Path -Parent $target)) | Out-Null
         Copy-Item -LiteralPath $file.FullName -Destination $target
@@ -182,7 +210,7 @@ function Write-HashManifest {
         Where-Object { $_.FullName -ne $manifest } |
         ForEach-Object {
             [pscustomobject]@{
-                Relative = [IO.Path]::GetRelativePath($Directory, $_.FullName).Replace('\', '/')
+                Relative = (Get-RelativePathCompat $Directory $_.FullName).Replace('\', '/')
                 FullName = $_.FullName
             }
         } | Sort-Object Relative | ForEach-Object {
@@ -204,7 +232,7 @@ function New-DeterministicZip {
             foreach ($file in Get-ChildItem -LiteralPath $Directory -File -Recurse |
                     ForEach-Object {
                         [pscustomobject]@{
-                            Relative = [IO.Path]::GetRelativePath($Directory, $_.FullName).Replace('\', '/')
+                            Relative = (Get-RelativePathCompat $Directory $_.FullName).Replace('\', '/')
                             FullName = $_.FullName
                         }
                     } | Sort-Object Relative) {

@@ -28,6 +28,20 @@ function Get-BytesSha256 {
     finally { $hasher.Dispose() }
 }
 
+function Get-RelativePathCompat {
+    param(
+        [Parameter(Mandatory)][string]$Root,
+        [Parameter(Mandatory)][string]$Path
+    )
+    $rootFull = [IO.Path]::GetFullPath($Root).TrimEnd('\')
+    $pathFull = [IO.Path]::GetFullPath($Path)
+    $prefix = $rootFull + [IO.Path]::DirectorySeparatorChar
+    if (-not $pathFull.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)) {
+        throw "Path is not under root: $Path"
+    }
+    return $pathFull.Substring($prefix.Length)
+}
+
 function Write-FixtureFile {
     param([string]$Root, [string]$Relative, [byte[]]$Bytes)
     $path = Join-Path $Root ($Relative.Replace('/', '\'))
@@ -40,7 +54,7 @@ function Write-FixtureManifest {
     $manifest = Join-Path $Root 'SHA256SUMS.txt'
     $relativePaths = [string[]]@(Get-ChildItem -LiteralPath $Root -Recurse -File |
         Where-Object { $_.FullName -ne $manifest } |
-        ForEach-Object { [IO.Path]::GetRelativePath($Root, $_.FullName).Replace('\', '/') })
+        ForEach-Object { (Get-RelativePathCompat $Root $_.FullName).Replace('\', '/') })
     [Array]::Sort($relativePaths, [StringComparer]::Ordinal)
     $lines = foreach ($relative in $relativePaths) {
         "$(Get-Sha256 (Join-Path $Root ($relative.Replace('/', '\'))))  $relative"
@@ -57,7 +71,7 @@ function New-FixtureZip {
             $stream, [IO.Compression.ZipArchiveMode]::Create, $false)
         try {
             foreach ($file in Get-ChildItem -LiteralPath $Root -Recurse -File) {
-                $relative = [IO.Path]::GetRelativePath($Root, $file.FullName).Replace('\', '/')
+                $relative = (Get-RelativePathCompat $Root $file.FullName).Replace('\', '/')
                 $entry = $archive.CreateEntry(
                     "$([IO.Path]::GetFileName($Root))/$relative",
                     [IO.Compression.CompressionLevel]::Optimal)

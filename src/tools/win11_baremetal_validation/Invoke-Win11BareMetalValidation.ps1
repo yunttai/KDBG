@@ -30,16 +30,24 @@ function Write-KdbgAtomicJson([string]$Path, [object]$Value) {
     [IO.Directory]::CreateDirectory($parent) | Out-Null
     $temporary = Join-Path $parent ('.{0}.{1}.tmp' -f `
         [IO.Path]::GetFileName($Path), [Guid]::NewGuid().ToString('N'))
+    $backup = Join-Path $parent ('.{0}.{1}.bak' -f `
+        [IO.Path]::GetFileName($Path), [Guid]::NewGuid().ToString('N'))
     try {
         $Value | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $temporary -Encoding utf8
         if (Test-Path -LiteralPath $Path) {
-            [IO.File]::Replace($temporary, $Path, $null)
+            # Windows PowerShell and PowerShell 7 both reject a null backup
+            # path on File.Replace, but the three-argument form was accepted
+            # by some framework versions.  Give SCM-independent evidence
+            # writes a disposable backup name and remove it after the atomic
+            # replacement succeeds.
+            [IO.File]::Replace($temporary, $Path, $backup, $true)
         } else {
             [IO.File]::Move($temporary, $Path)
         }
     }
     finally {
         if (Test-Path -LiteralPath $temporary) { Remove-Item -LiteralPath $temporary -Force }
+        if (Test-Path -LiteralPath $backup) { Remove-Item -LiteralPath $backup -Force }
     }
 }
 
@@ -81,11 +89,22 @@ function Get-KdbgRuntimeObservation {
 
 function Get-KdbgHostFacts {
     $computer = Get-CimInstance Win32_ComputerSystem
+    $operatingSystem = Get-CimInstance Win32_OperatingSystem
     $virtual = ([string]$computer.Model -match 'Virtual|VMware|KVM|VirtualBox|Hyper-V') -or
         ([string]$computer.Manufacturer -match 'VMware|Xen|QEMU|innotek')
+    $architectureText = [string]$operatingSystem.OSArchitecture
+    $architecture = if ($architectureText -match '64') {
+        'x64'
+    } elseif ($architectureText -match '32|86') {
+        'x86'
+    } elseif ([Environment]::Is64BitOperatingSystem) {
+        'x64'
+    } else {
+        'x86'
+    }
     return [pscustomobject]@{
         os_name = if ($env:OS -eq 'Windows_NT') { 'Windows' } else { [Environment]::OSVersion.Platform.ToString() }
-        architecture = [Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString().ToLowerInvariant()
+        architecture = $architecture
         execution_context = if ($virtual) { 'virtual-machine-guest' } else { 'bare-metal' }
         is_virtual_machine = $virtual
         hypervisor_present = [bool]$computer.HypervisorPresent
@@ -188,8 +207,8 @@ try {
         --artifact-directory $pageDirectory `
         --output $livePath --build-id 'local-host-probe-transaction' --read-samples 3
     if ($LASTEXITCODE -ne 0) { throw 'Local-host Probe transaction verifier failed.' }
-    $live = Get-Content -LiteralPath $livePath -Raw | ConvertFrom-Json
-    if ($live.schema -cne 'kdbg.live-verify.v2' -or $live.success -ne $true) {
+$live = Get-Content -LiteralPath $livePath -Raw | ConvertFrom-Json
+if ($live.schema -cne 'kdbg.live-verify.v2' -or $live.success -ne $true) {
         throw 'Local-host Probe transaction report did not pass.'
     }
     $pageNames = [ordered]@{
@@ -224,6 +243,11 @@ finally {
     catch { $cleanupErrors.Add($_.Exception.Message) }
 }
 if (-not $liveSucceeded) { throw 'Local-host transaction did not complete.' }
+$backendCapabilities = @(
+    if ($live.backend.supports_physical_page_compare_write -eq $true) {
+        'compare-write-page-v1'
+    }
+)
 
 $observation = Get-KdbgRuntimeObservation
 $uninstallCompleted = $cleanupErrors.Count -eq 0
@@ -302,9 +326,7 @@ $evidence = [ordered]@{
         name = 'KDbgDriver'; connected = $live.backend.connected
         is_mock = $live.backend.is_mock; abi_version = $live.backend.abi_version
         write_enabled_final = $live.session_final.write_enabled
-        capabilities = if ($live.backend.supports_physical_page_compare_write -eq $true) {
-            @('compare-write-page-v1')
-        } else { @() }
+        capabilities = $backendCapabilities
     }
     artifacts = $artifacts
     transaction = [ordered]@{

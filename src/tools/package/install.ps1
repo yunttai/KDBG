@@ -177,7 +177,11 @@ function New-PairLifecyclePlan(
 
 function Set-InstalledService([object]$Item) {
     $Driver = $Item.Driver
-    $QuotedPath = '"' + $Item.Path + '"'
+    # Pass the fully-qualified path as one native argument.  Adding literal
+    # quote characters here makes PowerShell 7's native argument binder escape
+    # them a second time, leaving SCM with an invalid kernel image path (error
+    # 123) even though the diagnostic path normalization appears to match.
+    $ServicePath = [string]$Item.Path
     $QueryCode = Invoke-Sc @("query", $Driver.Service) -AllowFailure -Quiet
     if ($QueryCode -eq 1072) {
         Wait-ServiceAbsent $Driver.Service
@@ -192,7 +196,7 @@ function Set-InstalledService([object]$Item) {
         }
         $Code = Invoke-Sc @(
             "config", $Driver.Service, "type=", "kernel", "start=", "demand",
-            "binPath=", $QuotedPath, "DisplayName=", $Driver.Display) -AllowFailure
+            "binPath=", $ServicePath, "DisplayName=", $Driver.Display) -AllowFailure
         if ($Code -ne 0) {
             throw "sc.exe config $($Driver.Service) failed with exit code $Code."
         }
@@ -203,12 +207,12 @@ function Set-InstalledService([object]$Item) {
     }
     $Code = Invoke-Sc @(
         "create", $Driver.Service, "type=", "kernel", "start=", "demand",
-        "binPath=", $QuotedPath, "DisplayName=", $Driver.Display) -AllowFailure
+        "binPath=", $ServicePath, "DisplayName=", $Driver.Display) -AllowFailure
     if ($Code -eq 1072) {
         Wait-ServiceAbsent $Driver.Service
         $Code = Invoke-Sc @(
             "create", $Driver.Service, "type=", "kernel", "start=", "demand",
-            "binPath=", $QuotedPath, "DisplayName=", $Driver.Display) -AllowFailure
+            "binPath=", $ServicePath, "DisplayName=", $Driver.Display) -AllowFailure
     }
     if ($Code -ne 0) {
         throw "sc.exe create $($Driver.Service) failed with exit code $Code."
@@ -253,7 +257,7 @@ function Restore-OriginalService([object]$Item) {
         "config", $Name,
         "type=", "kernel",
         "start=", (Get-ScStartMode $OriginalStart),
-        "binPath=", ('"' + $OriginalPath + '"'),
+        "binPath=", $OriginalPath,
         "DisplayName=", $OriginalDisplay)
     $QueryCode = Invoke-Sc @("query", $Name) -AllowFailure -Quiet
     if ($QueryCode -eq 1072) {

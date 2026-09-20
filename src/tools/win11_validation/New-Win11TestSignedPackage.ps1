@@ -93,6 +93,20 @@ function Get-BytesSha256 {
     }
 }
 
+function Get-RelativePathCompat {
+    param(
+        [Parameter(Mandatory)][string]$Root,
+        [Parameter(Mandatory)][string]$Path
+    )
+    $rootFull = [IO.Path]::GetFullPath($Root).TrimEnd('\')
+    $pathFull = [IO.Path]::GetFullPath($Path)
+    $prefix = $rootFull + [IO.Path]::DirectorySeparatorChar
+    if (-not $pathFull.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)) {
+        throw "Path is not under root: $Path"
+    }
+    return $pathFull.Substring($prefix.Length)
+}
+
 function Test-PathHasReparsePoint {
     param([Parameter(Mandatory)][string]$Path)
     $cursor = [IO.Path]::GetFullPath($Path)
@@ -299,7 +313,7 @@ function Get-TreeHashMap {
     param([Parameter(Mandatory)][string]$Directory)
     $map = @{}
     foreach ($file in Get-ChildItem -LiteralPath $Directory -Recurse -File) {
-        $relative = [IO.Path]::GetRelativePath($Directory, $file.FullName).Replace('\', '/')
+        $relative = (Get-RelativePathCompat $Directory $file.FullName).Replace('\', '/')
         $map[$relative] = Get-Sha256 $file.FullName
     }
     return $map
@@ -310,7 +324,7 @@ function Write-HashManifest {
     $manifestPath = Join-Path $Directory 'SHA256SUMS.txt'
     $relativePaths = [string[]]@(Get-ChildItem -LiteralPath $Directory -Recurse -File |
         Where-Object { -not $_.FullName.Equals($manifestPath, [StringComparison]::OrdinalIgnoreCase) } |
-        ForEach-Object { [IO.Path]::GetRelativePath($Directory, $_.FullName).Replace('\', '/') })
+        ForEach-Object { (Get-RelativePathCompat $Directory $_.FullName).Replace('\', '/') })
     [Array]::Sort($relativePaths, [StringComparer]::Ordinal)
     $lines = foreach ($relative in $relativePaths) {
         "$(Get-Sha256 (Join-Path $Directory ($relative.Replace('/', '\'))))  $relative"
@@ -325,7 +339,7 @@ function New-DeterministicZip {
         [Parameter(Mandatory)][string]$ZipPath)
     Add-Type -AssemblyName System.IO.Compression
     $relativePaths = [string[]]@(Get-ChildItem -LiteralPath $Directory -Recurse -File |
-        ForEach-Object { [IO.Path]::GetRelativePath($Directory, $_.FullName).Replace('\', '/') })
+        ForEach-Object { (Get-RelativePathCompat $Directory $_.FullName).Replace('\', '/') })
     [Array]::Sort($relativePaths, [StringComparer]::Ordinal)
     $stream = [IO.File]::Open($ZipPath, [IO.FileMode]::CreateNew)
     try {

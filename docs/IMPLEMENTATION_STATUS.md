@@ -1,6 +1,6 @@
 # KDBG 구현 상태
 
-기준: 2026-09-19 KST
+기준: 2026-09-21 KST
 
 ## 현재 working-tree 판정 (authoritative)
 
@@ -16,14 +16,38 @@ ProbeFixture는 destructive evidence의 기본 fixture일 뿐 일반 LocalHost R
 
 | Gate | 현재 상태 | 근거/경계 |
 |---|---|---|
-| Source-complete | PASS | `verify_layout.py`, core configure/build, CTest 11/11, source validator PASS |
-| Release validator unit tests | PASS | `python -m unittest src.tests.test_validate_release`: 88/88 |
+| Source-complete | PASS | `verify_layout.py`, core configure/build, CTest 14/14, source validator PASS |
+| Release validator unit tests | PASS | `python -m unittest src.tests.test_validate_release`: 90/90 |
 | ABI 7 physical transaction source | PASS | exact 4096-byte baseline compare, desired-page write, full read-back result/capability implemented and deterministically tested |
-| Windows WDK driver build | BLOCKED / NOT VERIFIED | required WDK toolset unavailable; MSBuild `MSB8020` |
-| Bare-metal runtime-host read-only | NOT RUN | same-host runtime evidence 없음 |
-| Bare-metal Probe transaction | NOT RUN | harness/validator implementation만 존재; actual transaction evidence 없음 |
+| Windows Release/package | PASS (UNSIGNED) | MSVC Release GUI/bridge, package validator, and source snapshot pass in epoch `local-host-source-fix3-20260921`; production trust is not claimed |
+| Windows WDK driver build | PASS (PINNED NUGET) | WDK `10.0.26100.2454`; Debug/Release, driver contract, Inf2Cat, and symbol verification pass; drivers are unsigned |
+| Bare-metal runtime-host read-only | PASS | `out/evidence/local-host-source-fix3-runtime-host-5/evidence.json`; ABI 7, live backend, exact 4096-byte reads |
+| Bare-metal Probe transaction | PASS | same evidence; apply/read-back/reload/rollback/final lock all pass |
 | Bare-metal RawPfn live write | NOT RUN | actual host PFN write를 실행하거나 성공으로 주장하지 않음 |
 | Historical regression-guest evidence | PRESERVED | 해당 historical source/package identity에만 결속; current bare-metal gate로 승격하지 않음 |
+
+2026-09-21 source/tooling repair epoch:
+`out/release-epochs/local-host-source-fix3-20260921` (unsigned) and
+`out/release-epochs/local-host-source-fix3-test-signed-20260921` (VM-only test
+trust). Main/symbol ZIP hashes are
+`3386b2e0…9f54e70` / `365da09f…e4a624`; the signed package hash is
+`c58fad5f…d1ae76`. PowerShell 5.1/7 package and signing contracts, core-debug
+and Windows Release CTest 14/14, package validation, and the local-host
+producer preflight all pass. RawPfn live-write remains unclaimed.
+
+The GUI driver-service registration quote bug is fixed in
+`src/core/windows/DriverService.cpp`; a validator regression test ensures SCM
+receives the raw binary path for both create and update.
+
+Current test-signed runtime-host evidence is
+`out/evidence/local-host-source-fix3-runtime-host-5/evidence.json`; strict
+package validation passes its read-only and Probe-write gates. RawPfn live-write
+is intentionally still unclaimed.
+
+The earlier admin producer run is retained at
+`out/evidence/local-host-source-fix-runtime-host-20260921` as historical
+evidence. The current source-fix3 run above is the authoritative current
+runtime-host report.
 
 machine/boot/session 값은 확보 가능한 경우 자동 provenance로 기록할 수 있지만
 수동 확인이나 LocalHost RawPfn 제품 전제는 아니다. 이번 구현은 dedicated-machine,

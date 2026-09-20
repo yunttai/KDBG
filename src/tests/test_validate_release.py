@@ -1057,6 +1057,15 @@ class BareMetalHostEvidenceValidatorTests(unittest.TestCase):
     def test_valid_baremetal_evidence_allows_same_host_orchestrator(self) -> None:
         self.assertEqual([], self.validate_mutation())
 
+    def test_baremetal_accepts_live_backend_canonical_name(self) -> None:
+        def mutate(evidence: dict, directory: Path) -> None:
+            report_path = directory / evidence["artifacts"]["live_run_report"]["file"]
+            report = json.loads(report_path.read_text(encoding="utf-8"))
+            report["backend"]["name"] = "kdbg-live"
+            self.rewrite_artifact(evidence, directory, "live_run_report", report)
+
+        self.assertEqual([], self.validate_mutation(mutate))
+
     def test_guest_report_cannot_masquerade_as_baremetal(self) -> None:
         def mutate(evidence: dict, _: Path) -> None:
             evidence["guest_validation_passed"] = True
@@ -1687,6 +1696,17 @@ class SymbolBuildComparisonTests(unittest.TestCase):
 
 
 class PackageProvenanceValidatorTests(unittest.TestCase):
+    def test_gui_driver_service_uses_raw_binary_path(self) -> None:
+        source = (VALIDATOR_PATH.parents[1] / "core/windows/DriverService.cpp").read_text(
+            encoding="utf-8-sig")
+        self.assertNotIn(
+            "const std::wstring quoted_path =", source,
+            "SCM driver paths must not retain the embedded quote bug")
+        self.assertEqual(
+            2,
+            source.count("native_path.c_str()"),
+            "CreateServiceW and ChangeServiceConfigW must receive the raw path")
+
     def test_setup_artifacts_are_release_gated(self) -> None:
         self.assertIn("KDBGSetup.exe", VALIDATOR.MAIN_REQUIRED)
         self.assertIn("tools/setup.ps1", VALIDATOR.MAIN_REQUIRED)

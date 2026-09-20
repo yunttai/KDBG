@@ -1,6 +1,6 @@
 # KDBG 요구사항 추적표
 
-기준: 2026-09-19 current working tree. RC4 product-source
+기준: 2026-09-21 current working tree. RC4 product-source
 commit `4b376bb0d61eab232af8a2f7f29033238b911022`의 package/live/GUI 결과는
 historical baseline이며 현재 변경과 source-bound되지 않는다.
 
@@ -9,10 +9,10 @@ historical baseline이며 현재 변경과 source-bound되지 않는다.
 | 요구사항 | 구현/운영 계약 | 검증 계약 | 현재 상태 |
 |---|---|---|---|
 | G-01, FR-002–FR-006 RawPfn | KDBG/driver가 실행되는 동일 bare-metal `runtime_host`의 local RAM; `RawPfn`은 일반 product target | RAM range/page-bound, exact 4 KiB, baseline preflight, explicit Apply, full read-back, rollback | SOURCE/PORTABLE PASS; current WDK driver build and live execution are separate gates |
-| Target roles | `runtime_host` memory target, `orchestrator_host` controller, `regression_guest` VM regression | explicit role; optional automatic provenance; no cross-lane promotion | SOURCE/PORTABLE HARNESS CONTRACT PASS; live execution NOT RUN |
-| Current Windows driver build | ABI 7 `KDbgDriver.sys`/`KDbgProbe.sys` and package outputs | WDK compile/link, INF/CAT, package validation | NOT VERIFIED / BLOCKED IN CURRENT ENVIRONMENT — required WDK toolset is unavailable (`MSB8020`) |
-| Bare-metal read-only | package/ABI/driver identity + Raw PFN exact read | source-bound runtime-host report | NOT RUN |
-| Bare-metal Probe evidence | ProbeFixture is automated destructive evidence target only | Apply/read-back/reload/rollback/final lock | NOT RUN |
+| Target roles | `runtime_host` memory target, `orchestrator_host` controller, `regression_guest` VM regression | explicit role; optional automatic provenance; no cross-lane promotion | SOURCE/PORTABLE HARNESS CONTRACT PASS; direct LocalHost read-only/Probe evidence PASS |
+| Current Windows driver build | ABI 7 `KDbgDriver.sys`/`KDbgProbe.sys` and package outputs | WDK compile/link, INF/CAT, package validation | PASS (PINNED NUGET, UNSIGNED) — WDK `10.0.26100.2454`, Inf2Cat/contract/symbol checks pass; production trust not established |
+| Bare-metal read-only | package/ABI/driver identity + Raw PFN exact read | source-bound runtime-host report | PASS — `out/evidence/local-host-source-fix3-runtime-host-5/evidence.json` |
+| Bare-metal Probe evidence | ProbeFixture is automated destructive evidence target only | Apply/read-back/reload/rollback/final lock | PASS — current signed-package LocalHost report and six raw 4 KiB artifacts |
 | Bare-metal RawPfn capability | explicit `RawPfn` kind; optional automatic provenance | general LocalHost RawPfn transaction | SOURCE/PORTABLE PASS; bare-metal live evidence NOT RUN |
 | Historical VM evidence | immutable exact RC4/RC1 identities | regression only; never renamed/promoted | PRESERVED |
 
@@ -26,7 +26,7 @@ historical baseline이며 현재 변경과 source-bound되지 않는다.
 | FR-019 font/fallback | Windows system Korean-font discovery; default ImGui English fallback | Korean glyph rendering, missing-font English fail-closed | WINDOWS NON-VISUAL LOCALIZATION SMOKE PASS with `malgun.ttf` present; glyph appearance/clipping NOT RUN |
 | FR-019 persistence | existing ImGui INI `[KDBG][Preferences]` `Language` value | `en-US`/`ko-KR` round-trip, invalid value English recovery | WINDOWS NON-VISUAL LOCALIZATION SMOKE PASS: English wrote `en-US`, fixed Korean preset retained `ko-KR`; interactive selector NOT RUN |
 | NFR-005 localization isolation | selector/catalog/font path does not mutate memory-session or backend state | write gate/confirmation/dirty/history/target/worker/backend before-after equality | REGRESSION EVIDENCE PENDING |
-| NFR-005 deterministic encoding | MSVC `/utf-8`, compiled-in UTF-8 catalog | portable deterministic localization tests plus Windows GUI build | CORE + WINDOWS DEBUG/RELEASE CTEST 9/9; MSVC GUI BUILD/LINK PASS |
+| NFR-005 deterministic encoding | MSVC `/utf-8`, compiled-in UTF-8 catalog | portable deterministic localization tests plus Windows GUI build | CORE + WINDOWS DEBUG/RELEASE CTEST 14/14; MSVC GUI BUILD/LINK PASS |
 | Human visual evidence | English/Korean core screens and fallback path | glyph coverage, clipping, mixed terminology and selector readability | NOT RUN; no PASS claim |
 
 The historical artifact path `out/localization-host-smoke-persistence` retains

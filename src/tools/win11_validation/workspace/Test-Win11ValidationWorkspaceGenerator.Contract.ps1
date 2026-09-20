@@ -32,6 +32,43 @@ function Assert-Throws([scriptblock]$Operation, [string]$Pattern, [string]$Messa
     throw "CHECK FAILED: $Message (operation succeeded)"
 }
 
+function Get-RelativePathCompat {
+    param(
+        [Parameter(Mandatory)][string]$Root,
+        [Parameter(Mandatory)][string]$Path
+    )
+    $rootFull = [IO.Path]::GetFullPath($Root).TrimEnd('\')
+    $pathFull = [IO.Path]::GetFullPath($Path)
+    $prefix = $rootFull + [IO.Path]::DirectorySeparatorChar
+    if (-not $pathFull.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)) {
+        throw "Path is not under root: $Path"
+    }
+    return $pathFull.Substring($prefix.Length)
+}
+
+function New-FixtureZip([string]$Root, [string]$Path) {
+    Add-Type -AssemblyName System.IO.Compression
+    $stream = [IO.File]::Open($Path, [IO.FileMode]::CreateNew)
+    try {
+        $archive = [IO.Compression.ZipArchive]::new(
+            $stream, [IO.Compression.ZipArchiveMode]::Create, $false)
+        try {
+            foreach ($file in Get-ChildItem -LiteralPath $Root -Recurse -File) {
+                $relative = (Get-RelativePathCompat $Root $file.FullName).Replace('\', '/')
+                $entry = $archive.CreateEntry(
+                    "$([IO.Path]::GetFileName($Root))/$relative",
+                    [IO.Compression.CompressionLevel]::Optimal)
+                $input = [IO.File]::OpenRead($file.FullName)
+                $output = $entry.Open()
+                try { $input.CopyTo($output) }
+                finally { $output.Dispose(); $input.Dispose() }
+            }
+        }
+        finally { $archive.Dispose() }
+    }
+    finally { $stream.Dispose() }
+}
+
 function Remove-ExactTestPath([string]$Path, [string]$AllowedRoot) {
     if (-not (Test-Path -LiteralPath $Path)) { return }
     $full = [IO.Path]::GetFullPath($Path).TrimEnd('\')
@@ -98,7 +135,7 @@ try {
         (Join-Path $fixturePackageRoot 'SHA256SUMS.txt'),
         "fixture manifest`n",
         [Text.UTF8Encoding]::new($false))
-    Compress-Archive -LiteralPath $fixturePackageRoot -DestinationPath $fixtureZip
+    New-FixtureZip $fixturePackageRoot $fixtureZip
     $packageSha = (Get-FileHash -LiteralPath $fixtureZip -Algorithm SHA256).Hash.ToLowerInvariant()
 
     $rsa = [Security.Cryptography.RSA]::Create(2048)

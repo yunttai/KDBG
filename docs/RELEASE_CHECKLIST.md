@@ -1,6 +1,6 @@
 # KDBG 1.1.0 release checklist
 
-Status date: 2026-09-19 KST. A gate is PASS only when the current workspace has
+Status date: 2026-09-21 KST. A gate is PASS only when the current workspace has
 the command result and required artifact. Historical or external results do not
 promote the current gate.
 
@@ -8,11 +8,31 @@ promote the current gate.
 
 The current product target is `LocalHost` RawPfn editing of the same bare-metal
 Windows `runtime_host` that runs KDBG and its driver. Source/portable validation
-is PASS (`verify_layout.py`, core build, CTest 11/11, release-validator tests
-88/88, and `validate_release.py --source-complete`). The current ABI 7 WDK
-driver build is BLOCKED / NOT VERIFIED on this machine because the required WDK
-toolset is unavailable (`MSB8020`). Same-host read-only, Probe-write, and RawPfn
-live-write evidence are all NOT RUN. No actual host physical write is claimed.
+is PASS (`verify_layout.py`, core build, CTest 14/14, release-validator tests
+90/90, and `validate_release.py --source-complete`). The current ABI 7 WDK
+driver build is PASS through pinned NuGet WDK `10.0.26100.2454`; Inf2Cat,
+driver contract, and symbol verification pass, but the resulting drivers are
+unsigned. Same-host read-only and Probe-write direct verifier evidence are
+PASS; RawPfn live-write remains NOT RUN.
+
+The current direct runtime-host report is
+`out/evidence/local-host-source-fix3-runtime-host-5/evidence.json`; it binds
+the test-signed package and records read-only plus Probe write/read-back,
+rollback, and cleanup.
+The repaired source/package validation epoch is
+`out/release-epochs/local-host-source-fix3-20260921`, with VM-only test-signed
+derivative `out/release-epochs/local-host-source-fix3-test-signed-20260921`.
+
+The current unsigned Windows Release/package epoch is
+`out/release-epochs/local-host-source-fix3-20260921`. Package and symbol
+validation pass; `tools/TargetProfile.psm1` is included. Main ZIP SHA-256 is
+`3386b2e02a4918da0bf85fd5a7eb79a8eb2c9936c805dd941ffc3cd639f54e70` and
+symbols ZIP SHA-256 is
+`365da09fc18cd621a97ddeb71930a3ad34fb8d557679e8e7e19ddc093ae4a624`.
+The source snapshot SHA-256 is
+`a75d84e3de1ee369a242891cee3df14785c7503470e5a7ba68733532ade88dc8`.
+These are unsigned build/package identities only; they do not establish
+production signing or live memory access.
 
 The RC4 table and artifacts below are historical records bound to their exact
 source/package identities; they do not override this working-tree boundary.
@@ -27,9 +47,9 @@ epochs and do not promote a 1.1.0 gate.
 
 | Gate | PASS requirement | Current state |
 |---|---|---|
-| Source-complete | layout, core build/test, source validator | **PASS** — layout, core build, CTest 9/9 and source validator passed; source `966c51f2…0f92`, scope `bd2c93da…8932` |
-| Windows-build-verified | MSVC Release GUI/bridge plus WDK signing inputs, validated main package and hashes | **PASS (UNSIGNED PRODUCT EPOCH)** — main `4dd98b12…34d9`, symbols `1f042e5e…ac68`; this is not production trust |
-| Live-device-run-report | exact packaged drivers, controlled Probe transaction and final lock | **PASS (VM TEST TRUST)** — `run-20260919T015729Z-8445dddb`, summary `4ad612d9…57b5`, archive `39c31476…57da` |
+| Source-complete | layout, core build/test, source validator | **PASS** — layout, core build, CTest 14/14 and source validator passed; current source snapshot `a75d84e3…de88dc8`, scope `bd2c93da…8932` |
+| Windows-build-verified | MSVC Release GUI/bridge plus WDK signing inputs, validated main package and hashes | **PASS (UNSIGNED PRODUCT EPOCH)** — main `3386b2e0…9f54e70`, symbols `365da09f…e4a624`; this is not production trust |
+| Live-device-run-report | exact packaged drivers, controlled Probe transaction and final lock | **PASS (SEPARATE RUNTIME-HOST EVIDENCE)** — `out/evidence/local-host-source-fix3-runtime-host-5/evidence.json`; strict read-only and Probe-write validation pass; RawPfn remains separate |
 | Live-VM-verified | required-core plus optional extended/lifecycle/soak | **PARTIAL** — RC4 required-core PASS; optional extended/lifecycle/soak **NOT RUN**; historical RC1 result not rebound |
 | GUI capture evidence | host/capture/archive integrity plus formal human review | **INTEGRITY PASS / FORMAL REVIEW INCOMPLETE** — `run-20260919T015850Z-1cfb0381`; `CAPTURED_UNREVIEWED`, `evidence_pass=false`, `human_review_complete=false` |
 | Presentation-video-quality | redacted video-only artifact and independent readability review | **PASS (AUTOMATIC + INDEPENDENT PRESENTATION REVIEW)** — public-v4 passed; v2/v3 superseded; no formal promotion |

@@ -263,7 +263,6 @@ Result<void> DriverService::InstallOrUpdate(
         service_name.c_str(),
         SERVICE_CHANGE_CONFIG | SERVICE_QUERY_CONFIG |
             SERVICE_QUERY_STATUS)};
-    const std::wstring quoted_path = L"\"" + native_path + L"\"";
     if (service.value == nullptr) {
         const DWORD open_error = GetLastError();
         if (open_error == ERROR_SERVICE_MARKED_FOR_DELETE) {
@@ -290,7 +289,7 @@ Result<void> DriverService::InstallOrUpdate(
             SERVICE_KERNEL_DRIVER,
             SERVICE_DEMAND_START,
             SERVICE_ERROR_NORMAL,
-            quoted_path.c_str(),
+            native_path.c_str(),
             nullptr,
             nullptr,
             nullptr,
@@ -305,7 +304,7 @@ Result<void> DriverService::InstallOrUpdate(
                    SERVICE_KERNEL_DRIVER,
                    SERVICE_DEMAND_START,
                    SERVICE_ERROR_NORMAL,
-                   quoted_path.c_str(),
+                   native_path.c_str(),
                    nullptr,
                    nullptr,
                    nullptr,

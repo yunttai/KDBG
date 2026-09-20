@@ -1,6 +1,6 @@
 # KDBG execution status
 
-기준 시각: 2026-09-19 KST
+기준 시각: 2026-09-21 KST
 
 ## 결론
 
@@ -13,9 +13,10 @@ ProbeFixture는 자동 destructive evidence target일 뿐이다.
 현재 working tree는 이 target을 제품 동작과 검증 도구에 반영했다. ABI 7의
 exact 4 KiB compare/write/read-back transaction, RawPfn page session, LocalHost
 target profile, GUI target provenance와 bare-metal evidence harness가 구현돼 있다.
-다만 이것은 source/portable 완료 판정이며 실제 runtime-host write 성공 판정은
-아니다. 기존 RC4/RC1 VM evidence와 hash/status는 historical identity에 그대로
-결속되며 bare-metal PASS로 재표기하거나 승격하지 않는다.
+source/portable 판정과 별도로 direct LocalHost read-only 및 Probe-write evidence가
+기록됐다. RawPfn live-write 성공은 아직 주장하지 않는다. 기존 RC4/RC1 VM
+evidence와 hash/status는 historical identity에 그대로 결속되며 current
+bare-metal PASS로 재표기하거나 승격하지 않는다.
 
 | Bare-metal runtime-host gate | 현재 상태 / blocker |
 |---|---|
@@ -23,9 +24,9 @@ target profile, GUI target provenance와 bare-metal evidence harness가 구현�
 | RawPfn core/driver primitive | SOURCE COMPLETE — ABI 7 exact 4096-byte compare/write/read-back implemented |
 | Target-kind UI + optional automatic provenance | SOURCE COMPLETE — LocalHost RawPfn is a normal product path; automatically available provenance is evidence metadata only |
 | Bare-metal lifecycle profile | SOURCE COMPLETE — `TargetProfile LocalHost|DisposableVm`; ordinary install/start/run defaults to `LocalHost` |
-| Windows WDK driver build | BLOCKED / NOT VERIFIED — this host lacks the required WDK toolset; MSBuild reports `MSB8020` |
-| Bare-metal read-only evidence | NOT RUN — no same-host runtime evidence was produced in this epoch |
-| Bare-metal Probe-write evidence | NOT RUN — harness/validator source exists, but no same-host transaction was executed |
+| Windows WDK driver build | PASS (PINNED NUGET) — Release/Debug built with pinned NuGet WDK `10.0.26100.2454`; Inf2Cat 0 errors/0 warnings; artifacts remain unsigned |
+| Bare-metal read-only evidence | PASS — current signed-package LocalHost wrapper evidence: `out/evidence/local-host-source-fix3-runtime-host-5/evidence.json` |
+| Bare-metal Probe-write evidence | PASS — same current wrapper evidence, with six 4 KiB artifacts, full read-back, independent reload, rollback, and final lock |
 | Bare-metal RawPfn live-write evidence | NOT RUN — no actual runtime-host PFN write is claimed |
 | Historical regression_guest evidence | PRESERVED; no promotion |
 
@@ -34,17 +35,40 @@ Latest working-tree integration check for this target-alignment epoch:
 - `python .\src\tools\verify_layout.py`: PASS
 - `cmake --preset core-debug` and `cmake --build --preset core-debug --parallel`:
   PASS using the existing Visual Studio bundled CMake/WinLibs toolchain
-- `ctest --preset core-debug --output-on-failure`: **11/11 PASS**
-- `python -m unittest src.tests.test_validate_release`: **88/88 PASS**
+- `ctest --preset core-debug --output-on-failure`: **14/14 PASS**
+- Windows Release configure/build and `ctest --preset windows-release --output-on-failure`:
+  **14/14 PASS**; current package epoch is
+  `out/release-epochs/local-host-source-fix3-20260921`
+- `python -m unittest src.tests.test_validate_release`: **90/90 PASS**
 - `python .\src\tools\validate_release.py --source-complete`: PASS
-- WDK driver build: **BLOCKED / NOT VERIFIED** (`MSB8020`; required toolset is
-  unavailable on this host)
-- bare-metal runtime-host read-only, Probe-write and RawPfn live-write gates:
-  **NOT RUN**
+- WDK driver build: **PASS (PINNED NUGET)** — WDK `10.0.26100.2454`, Inf2Cat
+  0 errors/0 warnings, driver contract and symbol verification PASS; resulting
+  drivers are unsigned and do not establish production trust
+- bare-metal runtime-host read-only and Probe-write direct verifier gates:
+  **PASS** for the current source-fix3 test-signed package via
+  `out/evidence/local-host-source-fix3-runtime-host-5/evidence.json`; RawPfn
+  live-write remains **NOT RUN**
+- current source-fix3 unsigned epoch:
+  `out/release-epochs/local-host-source-fix3-20260921`; main/symbol ZIP hashes
+  `3386b2e0…9f54e70` / `365da09f…e4a624`; source snapshot
+  `a75d84e3…de88dc8`
+- current VM-only test-signed derivative:
+  `out/release-epochs/local-host-source-fix3-test-signed-20260921`; package hash
+  `c58fad5f…d1ae76`; SYS/CAT Authenticode status is Valid. This derivative is
+  not production trust. The GUI `DriverService` path-registration quote bug was
+  removed and covered by a source regression test in this epoch.
+- the earlier admin producer run is preserved in
+  `out/evidence/local-host-source-fix-runtime-host-20260921` as historical
+  evidence; the current authoritative runtime-host run is
+  `out/evidence/local-host-source-fix3-runtime-host-5/evidence.json`.
+- PowerShell 5.1/7 package, signing, and local-host producer contract tests:
+  **PASS**; the producer preflight reached signature verification on PS5.1 and
+  no longer fails on the former `OSArchitecture` property lookup
 
-따라서 현재 working tree의 source/portable gate는 PASS다. Windows WDK build와
-세 bare-metal live gate는 독립적으로 미완료이며, source PASS가 이를 승격하지
-않는다.
+따라서 현재 working tree의 source/portable, unsigned Windows build/package,
+runtime-host read-only 및 Probe-write direct-verifier gates는 PASS다. RawPfn
+live-write와 production signing은 독립적으로 미완료이며, Probe evidence를
+RawPfn evidence로 승격하지 않는다.
 
 PRD section 3의 bypass/BYOVD/stealth 등 목록은 현재 AGENTS/agent/skill 계약과
 충돌하는 `UNRESOLVED` 항목이다. 이번 runtime-host 정렬은 이를 구현하거나 완료한
@@ -66,8 +90,8 @@ confirmation, dirty/history, target, worker 및 backend state에 영향을 주�
 
 | Post-RC4 bilingual UI gate | 현재 상태 |
 |---|---|
-| Source/portable | PASS — `verify_layout.py`, `core-debug` configure/build, CTest 9/9 |
-| Deterministic localization tests | PASS in core-debug, windows-debug, and windows-release CTest 9/9 suites |
+| Source/portable | PASS — `verify_layout.py`, `core-debug` configure/build, CTest 14/14; Windows Release CTest 14/14 |
+| Deterministic localization and harness contract tests | PASS in core-debug and windows-release CTest 14/14 suites |
 | MSVC `/utf-8` single-executable GUI build | PASS — Debug and Release GUI link complete |
 | Windows localization launch/INI persistence | NON-VISUAL PASS — isolated `LOCALAPPDATA`; English `en-US` and fixed Korean preset `ko-KR` retained across 8-second launches |
 | Korean glyph appearance/clipping | NOT RUN; `malgun.ttf` presence alone is not visual evidence |

@@ -3512,7 +3512,7 @@ def validate_baremetal_host_evidence(
                 errors.append("bare-metal live verifier contract binding is invalid")
             report_backend = live_report.get("backend")
             if not isinstance(report_backend, dict) or (
-                report_backend.get("name") != "KDbgDriver" or
+                report_backend.get("name") not in {"KDbgDriver", "kdbg-live"} or
                 report_backend.get("abi_version") != 7 or
                 report_backend.get("connected") is not True or
                 report_backend.get("is_mock") is not False or
