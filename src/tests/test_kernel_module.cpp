@@ -121,7 +121,11 @@ void RunKernelModuleTests(kdbg::test::TestRunner& runner) {
     LocalSymbolModuleProof proof{};
     proof.module_base = 0xFFFFF80000000000ULL;
     proof.module_size = 0x2000U;
+#ifdef _WIN32
     proof.loaded_pdb_path = "C:\\symbols\\ntkrnlmp.pdb";
+#else
+    proof.loaded_pdb_path = "/symbols/ntkrnlmp.pdb";
+#endif
     proof.loaded_pdb_basename = proof.loaded_pdb_path.filename().string();
     proof.loaded_pdb_sha256 = std::string(64U, 'a');
     KDBG_CHECK(runner, proof.Contains(proof.module_base));
