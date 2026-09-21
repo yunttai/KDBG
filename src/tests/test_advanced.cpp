@@ -129,6 +129,8 @@ std::string WideToUtf8(std::wstring_view value) {
         : std::string{};
 }
 
+#endif
+
 std::vector<std::string> VmmArguments(
     std::size_t count,
     const std::string& quoted_value = {}) {
@@ -147,7 +149,6 @@ std::vector<std::string> VmmArguments(
     }
     return arguments;
 }
-#endif
 
 }  // namespace
 
