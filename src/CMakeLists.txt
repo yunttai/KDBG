@@ -73,6 +73,12 @@ add_library(kdbg_core
     core/snapshot/MemorySnapshot.cpp
 )
 target_include_directories(kdbg_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+if(NOT WIN32)
+    # The resolver has a platform-independent disconnected/stub path used by
+    # portable core tests.  The live Windows implementation remains part of
+    # kdbg_windows below, where DbgHelp and Psapi are linked.
+    target_sources(kdbg_core PRIVATE core/kernel/LocalSymbolResolver.cpp)
+endif()
 if(WIN32)
     target_compile_definitions(kdbg_core PUBLIC NOMINMAX)
 endif()
