@@ -36,9 +36,9 @@ typedef uint64_t KDBG_U64;
 #define KDBG_SERVICE_NAME     L"KDBG"
 #define KDBG_DISPLAY_NAME     L"KDBG Physical Memory Driver"
 
-#define KDBG_ABI_VERSION          6u
+#define KDBG_ABI_VERSION          7u
 #define KDBG_DRIVER_VERSION_MAJOR 1u
-#define KDBG_DRIVER_VERSION_MINOR 0u
+#define KDBG_DRIVER_VERSION_MINOR 1u
 #define KDBG_MAX_TRANSFER_SIZE    (1024u * 1024u)
 #define KDBG_MAX_PHYSICAL_RANGES  4096u
 #define KDBG_MAX_TRANSLATION_STEPS 5u
@@ -52,6 +52,10 @@ typedef uint64_t KDBG_U64;
 #define KDBG_VERSION_FLAG_LA57_ACTIVE     0x00000010u
 #define KDBG_VERSION_FLAG_SECURE_OPEN     0x00000020u
 #define KDBG_VERSION_FLAG_SINGLE_OWNER    0x00000040u
+/* Every accepted write IOCTL atomically consumes the per-handle gate. */
+#define KDBG_VERSION_FLAG_WRITE_GATE_ONE_SHOT 0x00000080u
+/* Exact 4 KiB baseline compare, write, and in-driver read-back transaction. */
+#define KDBG_VERSION_FLAG_PHYSICAL_PAGE_COMPARE_WRITE 0x00000100u
 
 #define KDBG_SESSION_FLAG_OWNER_ACTIVE    0x00000001u
 #define KDBG_SESSION_FLAG_WRITE_ENABLED   0x00000002u
@@ -61,6 +65,16 @@ typedef uint64_t KDBG_U64;
 #define KDBG_PHYSICAL_WRITE_STAGE_MAPPING    2u
 #define KDBG_PHYSICAL_WRITE_STAGE_COPYING    3u
 #define KDBG_PHYSICAL_WRITE_STAGE_COMPLETE   4u
+#define KDBG_PHYSICAL_WRITE_STAGE_COMPARING  5u
+#define KDBG_PHYSICAL_WRITE_STAGE_READBACK   6u
+#define KDBG_PHYSICAL_WRITE_STAGE_MAX        KDBG_PHYSICAL_WRITE_STAGE_READBACK
+
+#define KDBG_PHYSICAL_PAGE_RESULT_APPLIED  1u
+#define KDBG_PHYSICAL_PAGE_RESULT_CONFLICT 2u
+#define KDBG_PHYSICAL_PAGE_RESULT_FAILED   3u
+#define KDBG_PHYSICAL_PAGE_NO_MISMATCH      0xFFFFFFFFu
+#define KDBG_PHYSICAL_PAGE_STATUS_SUCCESS   0x00000000u
+#define KDBG_PHYSICAL_PAGE_STATUS_CONFLICT  0xC0000059u
 
 #define KDBG_PROCESS_FLAG_CR3_VALID       0x00000001u
 #define KDBG_PROCESS_FLAG_WOW64           0x00000002u
@@ -118,6 +132,8 @@ typedef uint64_t KDBG_U64;
     CTL_CODE(FILE_DEVICE_UNKNOWN, 0x909, METHOD_BUFFERED, FILE_READ_DATA | FILE_WRITE_DATA)
 #define IOCTL_KDBG_READ_KERNEL_VIRTUAL \
     CTL_CODE(FILE_DEVICE_UNKNOWN, 0x90A, METHOD_BUFFERED, FILE_READ_DATA)
+#define IOCTL_KDBG_COMPARE_WRITE_PHYSICAL_PAGE \
+    CTL_CODE(FILE_DEVICE_UNKNOWN, 0x90B, METHOD_BUFFERED, FILE_READ_DATA | FILE_WRITE_DATA)
 
 #pragma pack(push, 8)
 
@@ -252,6 +268,36 @@ typedef struct _KDBG_KERNEL_VIRTUAL_READ_REQUEST {
     KDBG_U8 Data[1];
 } KDBG_KERNEL_VIRTUAL_READ_REQUEST;
 
+/*
+ * A compare/write request is deliberately fixed-size and page-granular.
+ * The write gate is consumed before ExpectedBefore is compared.  A mismatch
+ * returns a CONFLICT response containing the complete current page and does
+ * not map or modify physical memory.
+ */
+typedef struct _KDBG_PHYSICAL_PAGE_COMPARE_WRITE_REQUEST {
+    KDBG_U32 Size;
+    KDBG_U32 Flags;
+    KDBG_U64 PhysicalAddress;
+    KDBG_U32 Length;
+    KDBG_U32 Reserved;
+    KDBG_U64 Acknowledge;
+    KDBG_U64 TransactionId;
+    KDBG_U8 ExpectedBefore[KDBG_PAGE_SIZE];
+    KDBG_U8 Desired[KDBG_PAGE_SIZE];
+} KDBG_PHYSICAL_PAGE_COMPARE_WRITE_REQUEST;
+
+typedef struct _KDBG_PHYSICAL_PAGE_COMPARE_WRITE_RESPONSE {
+    KDBG_U32 Size;
+    KDBG_U32 Result;
+    KDBG_U64 PhysicalAddress;
+    KDBG_U32 Length;
+    KDBG_U32 Transferred;
+    KDBG_U32 FirstMismatchOffset;
+    KDBG_U32 Status;
+    KDBG_U64 TransactionId;
+    KDBG_U8 Readback[KDBG_PAGE_SIZE];
+} KDBG_PHYSICAL_PAGE_COMPARE_WRITE_RESPONSE;
+
 #pragma pack(pop)
 
 #if defined(__cplusplus)
@@ -269,4 +315,11 @@ static_assert(sizeof(KDBG_TRANSLATION_STEP) == 24u, "KDBG_TRANSLATION_STEP ABI d
 static_assert(sizeof(KDBG_TRANSLATE_RESPONSE) == 192u, "KDBG_TRANSLATE_RESPONSE ABI drift");
 static_assert(offsetof(KDBG_PROCESS_MEMORY_REQUEST, Data) == 40u, "KDBG_PROCESS_MEMORY_REQUEST ABI drift");
 static_assert(offsetof(KDBG_KERNEL_VIRTUAL_READ_REQUEST, Data) == 24u, "KDBG_KERNEL_VIRTUAL_READ_REQUEST ABI drift");
+static_assert(sizeof(KDBG_PHYSICAL_PAGE_COMPARE_WRITE_REQUEST) == 8232u, "KDBG_PHYSICAL_PAGE_COMPARE_WRITE_REQUEST ABI drift");
+static_assert(offsetof(KDBG_PHYSICAL_PAGE_COMPARE_WRITE_REQUEST, ExpectedBefore) == 40u, "KDBG physical page expected offset drift");
+static_assert(offsetof(KDBG_PHYSICAL_PAGE_COMPARE_WRITE_REQUEST, Desired) == 4136u, "KDBG physical page desired offset drift");
+static_assert(sizeof(KDBG_PHYSICAL_PAGE_COMPARE_WRITE_RESPONSE) == 4136u, "KDBG_PHYSICAL_PAGE_COMPARE_WRITE_RESPONSE ABI drift");
+static_assert(offsetof(KDBG_PHYSICAL_PAGE_COMPARE_WRITE_RESPONSE, Status) == 28u, "KDBG physical page status offset drift");
+static_assert(offsetof(KDBG_PHYSICAL_PAGE_COMPARE_WRITE_RESPONSE, TransactionId) == 32u, "KDBG physical page transaction id offset drift");
+static_assert(offsetof(KDBG_PHYSICAL_PAGE_COMPARE_WRITE_RESPONSE, Readback) == 40u, "KDBG physical page readback offset drift");
 #endif

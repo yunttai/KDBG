@@ -4,6 +4,7 @@ function(kdbg_set_project_warnings target)
             /W4
             /permissive-
             /Zc:__cplusplus
+            /utf-8
         )
         if(KDBG_WARNINGS_AS_ERRORS)
             target_compile_options(${target} PRIVATE /WX)
@@ -88,4 +89,26 @@ function(kdbg_enable_msvc_analysis target)
             "KDBG_ENABLE_MSVC_ANALYZE requires the MSVC toolchain")
     endif()
     target_compile_options(${target} PRIVATE /analyze)
+endfunction()
+
+function(kdbg_enable_release_symbols target)
+    if(NOT MSVC)
+        return()
+    endif()
+
+    # The distributable Release package has a separate symbols archive. Embed
+    # object debug records with /Z7 so compiler PDB temporaries cannot carry a
+    # user-profile path into the final linker PDB.  Keep only the PDB basename
+    # in PE CodeView and request deterministic linker output.
+    target_compile_options(${target} PRIVATE
+        "$<$<CONFIG:Release>:/Z7>")
+    get_target_property(kdbg_target_type ${target} TYPE)
+    if(NOT kdbg_target_type STREQUAL "STATIC_LIBRARY")
+        target_link_options(${target} PRIVATE
+            "$<$<CONFIG:Release>:/DEBUG:FULL>"
+            "$<$<CONFIG:Release>:/PDBALTPATH:%_PDB%>"
+            "$<$<AND:$<CONFIG:Release>,$<BOOL:${KDBG_REPRODUCIBLE_RELEASE_SYMBOLS}>>:/Brepro>")
+        set_target_properties(${target} PROPERTIES
+            PDB_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+    endif()
 endfunction()

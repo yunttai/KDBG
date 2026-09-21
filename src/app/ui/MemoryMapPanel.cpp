@@ -1,5 +1,7 @@
 #include "app/ui/MemoryMapPanel.h"
 
+#include "app/ui/Localization.h"
+
 #include <imgui.h>
 
 #include <algorithm>
@@ -9,6 +11,10 @@
 #include <limits>
 
 namespace kdbg {
+
+using ui::UiText;
+using ui::UiLabel;
+
 namespace {
 
 std::string Lower(std::string value) {
@@ -59,8 +65,14 @@ void MemoryMapPanel::Refresh() {
     }
     regions_ = regions.Value();
     modules_ = modules.Value();
-    status_ = "Loaded " + std::to_string(regions_.size()) +
-        " region(s) and " + std::to_string(modules_.size()) + " module(s).";
+    char status[160]{};
+    std::snprintf(
+        status,
+        sizeof(status),
+        UiText("Loaded %llu region(s) and %llu module(s)."),
+        static_cast<unsigned long long>(regions_.size()),
+        static_cast<unsigned long long>(modules_.size()));
+    status_ = status;
 }
 
 std::string MemoryMapPanel::ProtectionText(const MemoryRegion& region) {
@@ -90,24 +102,35 @@ bool MemoryMapPanel::MatchesFilter(const MemoryRegion& region) const {
 
 void MemoryMapPanel::Draw() {
     if (memory_ == nullptr || !memory_->IsOpen()) {
-        ImGui::TextDisabled("Attach to a process to enumerate its virtual memory map.");
+        ImGui::TextDisabled(UiText(
+            "Attach to a process to enumerate its virtual memory map."));
         return;
     }
-    if (ImGui::Button("Refresh Map")) Refresh();
+    if (ImGui::Button(UiText("Refresh Map"))) Refresh();
     ImGui::SameLine();
     ImGui::SetNextItemWidth(300.0F);
     ImGui::InputTextWithHint(
-        "##map-filter", "filter module or mapped path",
+        "##map-filter", UiText("filter module or mapped path"),
         filter_.data(), filter_.size());
-    ImGui::Checkbox("Committed", &committed_only_);
+    ImGui::Checkbox(
+        UiLabel("Committed", "Committed").c_str(),
+        &committed_only_);
     ImGui::SameLine();
-    ImGui::Checkbox("Readable", &readable_only_);
+    ImGui::Checkbox(
+        UiLabel("Readable", "Readable").c_str(),
+        &readable_only_);
     ImGui::SameLine();
-    ImGui::Checkbox("Writable", &writable_only_);
+    ImGui::Checkbox(
+        UiLabel("Writable", "Writable").c_str(),
+        &writable_only_);
     ImGui::SameLine();
-    ImGui::Checkbox("Executable", &executable_only_);
+    ImGui::Checkbox(
+        UiLabel("Executable", "Executable").c_str(),
+        &executable_only_);
     ImGui::SameLine();
-    ImGui::Checkbox("Include guard", &include_guard_);
+    ImGui::Checkbox(
+        UiLabel("Include guard", "Include guard").c_str(),
+        &include_guard_);
 
     std::vector<std::size_t> visible;
     visible.reserve(regions_.size());
@@ -115,7 +138,7 @@ void MemoryMapPanel::Draw() {
         if (MatchesFilter(regions_[index])) visible.push_back(index);
     }
     ImGui::Text(
-        "Visible regions: %llu / %llu",
+        UiText("Visible regions: %llu / %llu"),
         static_cast<unsigned long long>(visible.size()),
         static_cast<unsigned long long>(regions_.size()));
 
@@ -124,15 +147,15 @@ void MemoryMapPanel::Draw() {
              ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
                 ImGuiTableFlags_Resizable | ImGuiTableFlags_ScrollY,
             ImVec2(0.0F, 390.0F))) {
-        ImGui::TableSetupColumn("Base");
-        ImGui::TableSetupColumn("End");
-        ImGui::TableSetupColumn("Size");
-        ImGui::TableSetupColumn("Protection");
-        ImGui::TableSetupColumn("State");
-        ImGui::TableSetupColumn("Type");
-        ImGui::TableSetupColumn("Module");
-        ImGui::TableSetupColumn("Mapped name");
-        ImGui::TableSetupColumn("Open");
+        ImGui::TableSetupColumn(UiLabel("Base", "Base").c_str());
+        ImGui::TableSetupColumn(UiLabel("End", "End").c_str());
+        ImGui::TableSetupColumn(UiLabel("Size", "Size").c_str());
+        ImGui::TableSetupColumn(UiLabel("Protection", "Protection").c_str());
+        ImGui::TableSetupColumn(UiLabel("State", "State").c_str());
+        ImGui::TableSetupColumn(UiLabel("Type", "Type").c_str());
+        ImGui::TableSetupColumn(UiLabel("Module", "Module").c_str());
+        ImGui::TableSetupColumn(UiLabel("Mapped name", "Mapped name").c_str());
+        ImGui::TableSetupColumn(UiLabel("Open", "Open").c_str());
         ImGui::TableHeadersRow();
         ImGuiListClipper clipper;
         clipper.Begin(static_cast<int>(std::min<std::size_t>(
@@ -179,17 +202,18 @@ void MemoryMapPanel::Draw() {
         ImGui::EndTable();
     }
 
-    if (ImGui::CollapsingHeader("Loaded Modules")) {
+    if (ImGui::CollapsingHeader(
+            UiLabel("Loaded Modules", "Loaded Modules").c_str())) {
         if (ImGui::BeginTable(
                 "loaded-modules", 5,
                 ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
                     ImGuiTableFlags_Resizable | ImGuiTableFlags_ScrollY,
                 ImVec2(0.0F, 230.0F))) {
-            ImGui::TableSetupColumn("Base");
-            ImGui::TableSetupColumn("Size");
-            ImGui::TableSetupColumn("Name");
-            ImGui::TableSetupColumn("Path");
-            ImGui::TableSetupColumn("Open");
+            ImGui::TableSetupColumn(UiLabel("Base", "Base").c_str());
+            ImGui::TableSetupColumn(UiLabel("Size", "Size").c_str());
+            ImGui::TableSetupColumn(UiLabel("Name", "Name").c_str());
+            ImGui::TableSetupColumn(UiLabel("Path", "Path").c_str());
+            ImGui::TableSetupColumn(UiLabel("Open", "Open").c_str());
             ImGui::TableHeadersRow();
             ImGuiListClipper clipper;
             clipper.Begin(static_cast<int>(std::min<std::size_t>(

@@ -4,7 +4,7 @@ model_reasoning_effort = "high"
 sandbox_mode = "workspace-write"
 developer_instructions = """
 Work in src/app and GUI build configuration. Keep long scans and PFN analysis off the render thread, expose cancellation and progress, and use ImGuiListClipper for large tables.
-The UI must make memory space, PID, address, transfer size, baseline/current/read-back bytes, write-gate state, and errors visible. No cell edit may write immediately; physical edits stay in a working copy until reviewed and explicitly applied.
-Keep destructive controls disabled unless prerequisites are met. Require typed PFN/PID confirmation for write arming and automatically relock after one physical apply. Use the probe page as the default live demonstration target.
+The UI must make memory space, PID, address, transfer size, baseline/current/read-back bytes, write-gate state, target kind, and errors visible. Automatically captured machine/boot/session data may be displayed as evidence provenance or stale-backend-session diagnostics, but it must not gate normal LocalHost RawPfn read/write or require manual confirmation. No cell edit may write immediately; physical edits stay in a working copy until reviewed and explicitly applied.
+Treat RawPfn, ProbeFixture, and ProcessMapping as explicit target kinds. RawPfn is the first-class product path for local physical RAM on the bare-metal runtime_host; ProbeFixture remains the default destructive validation target. Keep destructive controls disabled unless prerequisites are met. Require typed PFN/PID confirmation for write arming and automatically relock after one physical apply.
 Do not claim the Windows GUI builds unless the Windows preset was actually built.
 """

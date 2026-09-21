@@ -9,6 +9,9 @@ namespace kdbg {
 namespace {
 
 constexpr std::uint64_t kProgressUpdateBytes = 4ULL * 1024ULL * 1024ULL;
+// Dense candidates amortize backend calls; sparse candidates stay individual
+// so reading gaps cannot dominate useful candidate bytes.
+constexpr std::uint64_t kMaxNextScanReadAmplification = 16ULL;
 
 void AddProgressBytes(std::uint64_t& total, std::size_t amount) noexcept {
     const auto amount64 = static_cast<std::uint64_t>(amount);
@@ -17,6 +20,29 @@ void AddProgressBytes(std::uint64_t& total, std::size_t amount) noexcept {
     } else {
         total += amount64;
     }
+}
+
+void AddReportBytes(std::uint64_t& total, std::uint64_t amount) noexcept {
+    if (amount > std::numeric_limits<std::uint64_t>::max() - total) {
+        total = std::numeric_limits<std::uint64_t>::max();
+    } else {
+        total += amount;
+    }
+}
+
+void PreserveFirstError(ScanReadReport& report, const Error& error) {
+    if (report.first_error.code == ErrorCode::None) {
+        report.first_error = error;
+    }
+}
+
+void MarkCancelled(ScanReadReport& report, const char* operation) {
+    report.cancelled = true;
+    report.partial = true;
+    PreserveFirstError(report, MakeError(
+        ErrorCode::Cancelled,
+        "Memory scan was cancelled",
+        operation));
 }
 
 std::uint64_t NextProgressBoundary(std::uint64_t current) noexcept {
@@ -95,6 +121,7 @@ Result<ScanSummary> MemoryScanner::FirstScan(
     const ScanQuery& query,
     ScanProgressCallback progress,
     std::stop_token stop_token) {
+    last_read_report_ = {};
     if (!memory_.IsOpen()) {
         return Result<ScanSummary>::Failure(MakeError(
             ErrorCode::BackendDisconnected,
@@ -149,6 +176,7 @@ Result<ScanSummary> MemoryScanner::FirstScan(
     bool truncated = false;
     for (const auto& region : regions) {
         if (stop_token.stop_requested()) {
+            MarkCancelled(last_read_report_, "MemoryScanner::FirstScan");
             return Result<ScanSummary>::Failure(MakeError(
                 ErrorCode::Cancelled,
                 "Memory scan was cancelled",
@@ -159,6 +187,7 @@ Result<ScanSummary> MemoryScanner::FirstScan(
             compiled,
             next_candidates,
             state,
+            last_read_report_,
             progress,
             stop_token,
             truncated);
@@ -189,6 +218,7 @@ Result<ScanSummary> MemoryScanner::NextScan(
     const ScanQuery& query,
     ScanProgressCallback progress,
     std::stop_token stop_token) {
+    last_read_report_ = {};
     if (!has_scan_) {
         return Result<ScanSummary>::Failure(MakeError(
             ErrorCode::InvalidArgument,
@@ -236,49 +266,145 @@ Result<ScanSummary> MemoryScanner::NextScan(
     bool truncated = false;
     std::uint64_t next_report = kProgressUpdateBytes;
 
-    for (const auto& candidate : candidates_) {
+    std::size_t candidate_index = 0;
+    while (candidate_index < candidates_.size()) {
         if (stop_token.stop_requested()) {
+            MarkCancelled(last_read_report_, "MemoryScanner::NextScan");
             return Result<ScanSummary>::Failure(MakeError(
                 ErrorCode::Cancelled,
                 "Memory scan was cancelled",
                 "MemoryScanner::NextScan"));
         }
 
-        const auto current_result = memory_.Read(
-            candidate.address,
-            static_cast<std::uint32_t>(compiled.width));
-        if (!current_result) {
-            return Result<ScanSummary>::Failure(current_result.GetError());
-        }
-        AddProgressBytes(state.bytes_scanned, current_result.Value().size());
-        if (current_result.Value().size() != compiled.width) {
-            return Result<ScanSummary>::Failure(MakeError(
-                ErrorCode::ShortRead,
-                "Next scan returned a short read",
-                "MemoryScanner::NextScan",
-                0,
-                compiled.width,
-                current_result.Value().size()));
-        }
-
-        const auto& current = current_result.Value();
-        if (MatchNextValue(compiled, candidate.current, current)) {
-            ScanCandidate survivor{};
-            survivor.address = candidate.address;
-            survivor.previous = candidate.current;
-            survivor.current = current;
-            survivors.push_back(std::move(survivor));
-            if (survivors.size() >= compiled.query.max_results) {
-                truncated = true;
+        const auto batch_start = candidates_[candidate_index].address;
+        std::size_t batch_end_index = candidate_index + 1U;
+        std::uint64_t batch_end = batch_start + compiled.width;
+        while (batch_end_index < candidates_.size()) {
+            const auto address = candidates_[batch_end_index].address;
+            if (address < batch_start ||
+                compiled.width > std::numeric_limits<std::uint64_t>::max() - address) {
                 break;
             }
+            const auto end = address + compiled.width;
+            const auto span = end - batch_start;
+            const auto candidate_count =
+                static_cast<std::uint64_t>(batch_end_index - candidate_index + 1U);
+            const auto useful_bytes = candidate_count *
+                static_cast<std::uint64_t>(compiled.width);
+            if (span > compiled.query.chunk_size ||
+                span > useful_bytes * kMaxNextScanReadAmplification) {
+                break;
+            }
+            batch_end = std::max(batch_end, end);
+            ++batch_end_index;
         }
 
-        if (state.bytes_scanned >= next_report) {
-            state.candidates = survivors.size();
-            ReportProgress(progress, state);
-            next_report = NextProgressBoundary(state.bytes_scanned);
+        const auto batch_length = static_cast<std::uint32_t>(batch_end - batch_start);
+        std::vector<std::uint8_t> batch_bytes;
+        if (batch_end_index - candidate_index > 1U) {
+            auto batch_result = memory_.Read(batch_start, batch_length);
+            if (batch_result && batch_result.Value().size() == batch_length) {
+                batch_bytes = batch_result.TakeValue();
+            }
         }
+        const bool use_batch = !batch_bytes.empty();
+
+        for (std::size_t index = candidate_index;
+             index < batch_end_index;
+             ++index) {
+            if (stop_token.stop_requested()) {
+                MarkCancelled(last_read_report_, "MemoryScanner::NextScan");
+                return Result<ScanSummary>::Failure(MakeError(
+                    ErrorCode::Cancelled,
+                    "Memory scan was cancelled",
+                    "MemoryScanner::NextScan"));
+            }
+
+            const auto& candidate = candidates_[index];
+            ++last_read_report_.items_attempted;
+            AddReportBytes(
+                last_read_report_.requested_bytes,
+                static_cast<std::uint64_t>(compiled.width));
+            std::span<const std::uint8_t> current;
+            std::vector<std::uint8_t> individual;
+            if (use_batch) {
+                const auto offset = static_cast<std::size_t>(
+                    candidate.address - batch_start);
+                current = std::span<const std::uint8_t>(
+                    batch_bytes.data() + offset,
+                    compiled.width);
+            } else {
+                // A batch can cross an unreadable hole between otherwise valid
+                // candidates. Fall back to exact candidate reads so relevant
+                // failures remain visible without rejecting readable entries.
+                auto current_result = memory_.Read(
+                    candidate.address,
+                    static_cast<std::uint32_t>(compiled.width));
+                if (!current_result) {
+                    ++last_read_report_.items_skipped;
+                    ++last_read_report_.failed_reads;
+                    last_read_report_.partial = true;
+                    PreserveFirstError(
+                        last_read_report_,
+                        current_result.GetError());
+                    state.candidates = survivors.size();
+                    ReportProgress(progress, state);
+                    continue;
+                }
+                if (current_result.Value().size() != compiled.width) {
+                    const auto short_error = MakeError(
+                        ErrorCode::ShortRead,
+                        "Next scan returned a short read",
+                        "MemoryScanner::NextScan",
+                        0,
+                        compiled.width,
+                        current_result.Value().size());
+                    AddProgressBytes(
+                        state.bytes_scanned,
+                        current_result.Value().size());
+                    AddReportBytes(
+                        last_read_report_.completed_bytes,
+                        static_cast<std::uint64_t>(
+                            current_result.Value().size()));
+                    ++last_read_report_.items_skipped;
+                    ++last_read_report_.short_reads;
+                    last_read_report_.partial = true;
+                    PreserveFirstError(last_read_report_, short_error);
+                    state.candidates = survivors.size();
+                    ReportProgress(progress, state);
+                    continue;
+                }
+                individual = current_result.TakeValue();
+                current = individual;
+            }
+            AddProgressBytes(state.bytes_scanned, compiled.width);
+            ++last_read_report_.items_completed;
+            AddReportBytes(
+                last_read_report_.completed_bytes,
+                static_cast<std::uint64_t>(compiled.width));
+
+            if (MatchNextValue(compiled, candidate.current, current)) {
+                ScanCandidate survivor{};
+                survivor.address = candidate.address;
+                survivor.previous = candidate.current;
+                survivor.current.assign(current.begin(), current.end());
+                survivors.push_back(std::move(survivor));
+                if (survivors.size() >= compiled.query.max_results) {
+                    truncated = true;
+                    break;
+                }
+            }
+
+            if (state.bytes_scanned >= next_report) {
+                state.candidates = survivors.size();
+                ReportProgress(progress, state);
+                next_report = NextProgressBoundary(state.bytes_scanned);
+            }
+        }
+        if (truncated) {
+            break;
+        }
+        candidate_index = batch_end_index;
     }
 
     state.regions_scanned = 1;
@@ -300,6 +426,7 @@ void MemoryScanner::Reset() noexcept {
     candidates_.clear();
     active_query_ = {};
     has_scan_ = false;
+    last_read_report_ = {};
     ++generation_;
 }
 
@@ -314,6 +441,10 @@ const CompiledScanQuery* MemoryScanner::ActiveQuery() const noexcept {
 }
 
 std::uint64_t MemoryScanner::Generation() const noexcept { return generation_; }
+
+ScanReadReport MemoryScanner::LastReadReport() const {
+    return last_read_report_;
+}
 
 bool MemoryScanner::RegionAllowed(
     const MemoryRegion& region,
@@ -344,6 +475,7 @@ Result<void> MemoryScanner::ScanRegion(
     const CompiledScanQuery& query,
     std::vector<ScanCandidate>& output,
     ScanProgress& state,
+    ScanReadReport& read_report,
     const ScanProgressCallback& callback,
     std::stop_token stop_token,
     bool& truncated) {
@@ -370,6 +502,7 @@ Result<void> MemoryScanner::ScanRegion(
 
     while (cursor < region_end) {
         if (stop_token.stop_requested()) {
+            MarkCancelled(read_report, "MemoryScanner::ScanRegion");
             return Result<void>::Failure(MakeError(
                 ErrorCode::Cancelled,
                 "Memory scan was cancelled",
@@ -382,9 +515,15 @@ Result<void> MemoryScanner::ScanRegion(
                 chunk_size,
                 std::numeric_limits<std::uint32_t>::max()));
         const auto request = static_cast<std::uint32_t>(request64);
+        ++read_report.items_attempted;
+        AddReportBytes(read_report.requested_bytes, request64);
         const auto read_result = memory_.Read(cursor, request);
 
         if (!read_result) {
+            ++read_report.items_skipped;
+            ++read_report.failed_reads;
+            read_report.partial = true;
+            PreserveFirstError(read_report, read_result.GetError());
             carry.clear();
             cursor += request;
             if (state.bytes_scanned >= next_report) {
@@ -395,15 +534,24 @@ Result<void> MemoryScanner::ScanRegion(
             continue;
         }
         AddProgressBytes(state.bytes_scanned, read_result.Value().size());
+        AddReportBytes(
+            read_report.completed_bytes,
+            static_cast<std::uint64_t>(read_result.Value().size()));
         if (read_result.Value().size() != request) {
-            return Result<void>::Failure(MakeError(
+            ++read_report.items_skipped;
+            ++read_report.short_reads;
+            read_report.partial = true;
+            const auto short_error = MakeError(
                 ErrorCode::ShortRead,
                 "Memory scan returned a short read",
                 "MemoryScanner::ScanRegion",
                 0,
                 request,
-                read_result.Value().size()));
+                read_result.Value().size());
+            PreserveFirstError(read_report, short_error);
+            return Result<void>::Failure(short_error);
         }
+        ++read_report.items_completed;
 
         std::vector<std::uint8_t> window;
         window.reserve(carry.size() + read_result.Value().size());
@@ -416,14 +564,25 @@ Result<void> MemoryScanner::ScanRegion(
 
         if (window.size() >= query.width) {
             const auto last = window.size() - query.width;
-            for (std::size_t offset = 0; offset <= last; ++offset) {
+            const auto alignment = query.query.alignment;
+            const auto remainder = static_cast<std::size_t>(
+                window_base % alignment);
+            const auto first = remainder == 0 ? 0U : alignment - remainder;
+            std::size_t cancellation_counter = 0;
+            for (std::size_t offset = first;
+                 offset <= last;
+                 offset += alignment) {
+                if ((cancellation_counter++ & 0x3FFU) == 0U &&
+                    stop_token.stop_requested()) {
+                    MarkCancelled(read_report, "MemoryScanner::ScanRegion");
+                    return Result<void>::Failure(MakeError(
+                        ErrorCode::Cancelled,
+                        "Memory scan was cancelled",
+                        "MemoryScanner::ScanRegion"));
+                }
                 const auto address = window_base + offset;
                 if (address < region.base || address >= region_end ||
                     query.width > region_end - address) {
-                    continue;
-                }
-                if (query.query.alignment > 1 &&
-                    (address % query.query.alignment) != 0) {
                     continue;
                 }
                 // Bytes wholly contained in the carry were already considered.

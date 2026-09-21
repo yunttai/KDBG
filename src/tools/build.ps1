@@ -97,18 +97,21 @@ finally {
     Pop-Location
 }
 
-if ($BuildDrivers) {
+if ($BuildDrivers -or $Package) {
     if ($Preset -notin @("windows-debug", "windows-release")) {
         throw "Driver builds require the windows-debug or windows-release preset."
     }
     $Configuration = if ($Preset -eq "windows-release") { "Release" } else { "Debug" }
-    & (Join-Path $PSScriptRoot "build_drivers.ps1") -Configuration $Configuration
+    $DriverArguments = @{ Configuration = $Configuration }
+    if ($Fresh) { $DriverArguments.Clean = $true }
+    & (Join-Path $PSScriptRoot "build_drivers.ps1") @DriverArguments
+    if ($LASTEXITCODE -ne 0) { throw "Driver build failed." }
 }
 
 if ($Package) {
     if ($Preset -ne "windows-release") {
         throw "Release packaging requires the windows-release preset."
     }
-    $Configuration = if ($Preset -eq "windows-release") { "Release" } else { "Debug" }
-    & (Join-Path $PSScriptRoot "package_windows.ps1") -Configuration $Configuration
+    & (Join-Path $PSScriptRoot "package_windows.ps1") -Configuration Release -Zip
+    if ($LASTEXITCODE -ne 0) { throw "Windows packaging failed." }
 }

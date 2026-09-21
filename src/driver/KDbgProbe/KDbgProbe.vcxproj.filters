@@ -2,5 +2,6 @@
 <Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup><Filter Include="Source Files"><UniqueIdentifier>{40216C6A-2A98-4C58-A5D8-8AD267F65E75}</UniqueIdentifier></Filter><Filter Include="Driver Files"><UniqueIdentifier>{C6390E4A-B862-47F9-AEC4-C5E585849268}</UniqueIdentifier></Filter></ItemGroup>
   <ItemGroup><ClCompile Include="Driver.cpp"><Filter>Source Files</Filter></ClCompile></ItemGroup>
+  <ItemGroup><ResourceCompile Include="KDbgProbe.rc"><Filter>Source Files</Filter></ResourceCompile></ItemGroup>
   <ItemGroup><Inf Include="KDbgProbe.inf"><Filter>Driver Files</Filter></Inf></ItemGroup>
 </Project>

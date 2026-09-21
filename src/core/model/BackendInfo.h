@@ -14,6 +14,7 @@ struct BackendInfo {
     bool supports_process_context{false};
     bool supports_fixture{false};
     bool supports_la57{false};
+    bool supports_physical_page_compare_write{false};
 };
 
 }  // namespace kdbg

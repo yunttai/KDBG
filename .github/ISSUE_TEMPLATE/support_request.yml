@@ -1,0 +1,72 @@
+name: KDBG support request
+description: Request help with a non-security KDBG package or controlled-VM workflow
+title: "[SUPPORT] "
+labels:
+  - support
+body:
+  - type: markdown
+    attributes:
+      value: >-
+        Do not submit security defects, credentials, exploit details, or raw
+        unrelated memory here. Use the private Security Advisory route instead.
+  - type: input
+    id: version
+    attributes:
+      label: KDBG version
+    validations:
+      required: true
+  - type: input
+    id: main_sha256
+    attributes:
+      label: Main ZIP SHA-256
+      description: Enter the complete 64-character SHA-256 value.
+    validations:
+      required: true
+  - type: input
+    id: symbols_sha256
+    attributes:
+      label: Symbols ZIP SHA-256
+      description: Enter the complete 64-character SHA-256 value.
+    validations:
+      required: true
+  - type: input
+    id: windows_build
+    attributes:
+      label: Windows build
+    validations:
+      required: true
+  - type: input
+    id: vm_snapshot
+    attributes:
+      label: VM, hypervisor, and snapshot identifier
+    validations:
+      required: true
+  - type: input
+    id: failing_command
+    attributes:
+      label: Exact failing command
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction steps
+      description: Include expected and observed behavior.
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Redacted diagnostics
+      description: Attach redacted output from tools/diagnose.ps1 -VerifyPackage.
+    validations:
+      required: true
+  - type: checkboxes
+    id: redaction
+    attributes:
+      label: Redaction and report scope
+      options:
+        - label: I removed credentials, private paths, unrelated process memory, and unnecessary raw memory pages.
+          required: true
+        - label: This report contains no exploit details or other security-sensitive material.
+          required: true

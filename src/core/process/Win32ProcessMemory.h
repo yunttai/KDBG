@@ -36,7 +36,7 @@ public:
 private:
     Win32ProcessMemory();
     Result<void> Open(std::uint32_t pid, KDbgBackend* backend);
-    Result<void> ReopenForWrite();
+    Result<void> ReopenForWriteLocked();
 
     struct Impl;
     std::unique_ptr<Impl> impl_;

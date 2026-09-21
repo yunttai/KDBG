@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <fstream>
 #include <iomanip>
 #include <limits>
@@ -10,8 +11,117 @@
 #include <stdexcept>
 #include <unordered_set>
 
+#if defined(_WIN32)
+#include <process.h>
+#include <windows.h>
+#else
+#include <fcntl.h>
+#include <unistd.h>
+#endif
+
 namespace kdbg {
 namespace {
+
+constexpr int kLegacyAddressListVersion = 1;
+constexpr int kAddressListVersion = 2;
+
+std::filesystem::path TemporarySibling(
+    const std::filesystem::path& destination) {
+    static std::atomic<std::uint64_t> sequence{0};
+#if defined(_WIN32)
+    const auto pid = static_cast<std::uint64_t>(_getpid());
+#else
+    const auto pid = static_cast<std::uint64_t>(getpid());
+#endif
+    auto parent = destination.parent_path();
+    if (parent.empty()) parent = std::filesystem::path{"."};
+    for (;;) {
+        const auto ordinal = sequence.fetch_add(1, std::memory_order_relaxed);
+        const auto candidate = parent /
+            (destination.filename().string() + ".kdbg-tmp-" +
+             std::to_string(pid) + '-' + std::to_string(ordinal));
+        std::error_code error;
+        if (!std::filesystem::exists(candidate, error)) return candidate;
+    }
+}
+
+Result<void> FlushFileToDisk(
+    const std::filesystem::path& path,
+    std::string_view operation) {
+#if defined(_WIN32)
+    const auto handle = ::CreateFileW(
+        path.c_str(),
+        GENERIC_WRITE,
+        FILE_SHARE_READ,
+        nullptr,
+        OPEN_EXISTING,
+        FILE_ATTRIBUTE_NORMAL,
+        nullptr);
+    if (handle == INVALID_HANDLE_VALUE) {
+        return Result<void>::Failure(MakeError(
+            ErrorCode::IoFailure,
+            "Unable to reopen the temporary address-list file for flush",
+            std::string(operation),
+            ::GetLastError()));
+    }
+    const bool flushed = ::FlushFileBuffers(handle) != FALSE;
+    const auto error = flushed ? ERROR_SUCCESS : ::GetLastError();
+    ::CloseHandle(handle);
+    if (!flushed) {
+        return Result<void>::Failure(MakeError(
+            ErrorCode::IoFailure,
+            "Unable to flush the temporary address-list file to disk",
+            std::string(operation),
+            error));
+    }
+#else
+    const int descriptor = ::open(path.c_str(), O_RDONLY);
+    if (descriptor < 0) {
+        return Result<void>::Failure(MakeError(
+            ErrorCode::IoFailure,
+            "Unable to reopen the temporary address-list file for flush",
+            std::string(operation)));
+    }
+    const bool flushed = ::fsync(descriptor) == 0;
+    ::close(descriptor);
+    if (!flushed) {
+        return Result<void>::Failure(MakeError(
+            ErrorCode::IoFailure,
+            "Unable to flush the temporary address-list file to disk",
+            std::string(operation)));
+    }
+#endif
+    return Result<void>::Success();
+}
+
+Result<void> ReplaceAtomically(
+    const std::filesystem::path& temporary,
+    const std::filesystem::path& destination,
+    std::string_view operation) {
+#if defined(_WIN32)
+    if (::MoveFileExW(
+            temporary.c_str(),
+            destination.c_str(),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) == FALSE) {
+        return Result<void>::Failure(MakeError(
+            ErrorCode::IoFailure,
+            "Unable to atomically replace the address-list file",
+            std::string(operation),
+            ::GetLastError()));
+    }
+#else
+    std::error_code error;
+    std::filesystem::rename(temporary, destination, error);
+    if (error) {
+        return Result<void>::Failure(MakeError(
+            ErrorCode::IoFailure,
+            "Unable to atomically replace the address-list file",
+            std::string(operation),
+            static_cast<std::uint64_t>(error.value())));
+    }
+#endif
+    return Result<void>::Success();
+}
 
 std::string Hex(std::span<const std::uint8_t> bytes) {
     std::ostringstream output;
@@ -286,7 +396,13 @@ Result<AddressRefreshSummary> AddressList::Refresh() {
     return Result<AddressRefreshSummary>::Success(summary);
 }
 
+Result<VerifiedWriteArmToken> AddressList::ArmProcessWrites(
+    std::uint32_t confirmed_pid) const {
+    return writer_.ArmProcessWrite(confirmed_pid);
+}
+
 Result<VerifiedWriteResult> AddressList::Write(
+    VerifiedWriteArmToken arm_token,
     std::uint64_t id,
     std::span<const std::uint8_t> value) {
     auto* entry = Find(id);
@@ -312,7 +428,19 @@ Result<VerifiedWriteResult> AddressList::Write(
     }
     auto address = ResolveAddress(*entry);
     if (!address) return Result<VerifiedWriteResult>::Failure(address.GetError());
-    auto result = writer_.Write(entry->space, address.Value(), value);
+    if (entry->current_value.size() != entry->width) {
+        entry->last_error = MakeError(
+            ErrorCode::InvalidArgument,
+            "Refresh the address-list entry before writing so an expected-before value is available",
+            "AddressList::Write");
+        return Result<VerifiedWriteResult>::Failure(*entry->last_error);
+    }
+    auto result = writer_.Write(
+        std::move(arm_token),
+        entry->space,
+        address.Value(),
+        value,
+        std::span<const std::uint8_t>(entry->current_value));
     if (result) {
         entry->current_value = result.Value().readback;
         entry->last_error.reset();
@@ -373,8 +501,34 @@ Result<void> AddressList::SetFrozen(
     return Result<void>::Success();
 }
 
-Result<FreezeSummary> AddressList::TickFreeze() {
+Result<FreezeSummary> AddressList::TickFreeze(
+    VerifiedWriteArmToken arm_token) {
     FreezeSummary summary{};
+    std::optional<std::uint32_t> confirmed_pid;
+    for (const auto& entry : entries_) {
+        if (entry.frozen &&
+            entry.space.kind == MemorySpaceKind::ProcessVirtual) {
+            confirmed_pid = entry.space.pid;
+            break;
+        }
+    }
+    if (!confirmed_pid.has_value()) {
+        for (auto& entry : entries_) {
+            if (!entry.frozen) continue;
+            entry.last_error = MakeError(
+                ErrorCode::Unsupported,
+                "Freeze writes are process-virtual only",
+                "AddressList::TickFreeze");
+            ++summary.failed;
+        }
+        return Result<FreezeSummary>::Success(summary);
+    }
+    if (!arm_token.Consume(*confirmed_pid)) {
+        return Result<FreezeSummary>::Failure(MakeError(
+            ErrorCode::WriteLocked,
+            "Freeze tick requires a fresh matching PID arm token",
+            "AddressList::TickFreeze"));
+    }
     for (auto& entry : entries_) {
         if (!entry.frozen) continue;
         const auto allowed = RequireProcessWrite(
@@ -391,10 +545,47 @@ Result<FreezeSummary> AddressList::TickFreeze() {
             ++summary.failed;
             continue;
         }
-        auto result = writer_.Write(
+        if (entry.space.pid != *confirmed_pid) {
+            entry.last_error = MakeError(
+                ErrorCode::WriteLocked,
+                "One freeze transaction cannot cross confirmed PIDs",
+                "AddressList::TickFreeze",
+                0,
+                *confirmed_pid,
+                entry.space.pid);
+            ++summary.failed;
+            continue;
+        }
+        auto before = ReadMemory(
+            backend_,
             entry.space,
             address.Value(),
-            entry.freeze_value);
+            static_cast<std::uint32_t>(entry.width));
+        if (!before || before.Value().size() != entry.width) {
+            entry.last_error = before
+                ? MakeError(
+                    ErrorCode::ShortRead,
+                    "Freeze preflight returned a short read",
+                    "AddressList::TickFreeze",
+                    0,
+                    entry.width,
+                    before.Value().size())
+                : before.GetError();
+            ++summary.failed;
+            continue;
+        }
+        auto write_arm = writer_.ArmProcessWrite(*confirmed_pid);
+        if (!write_arm) {
+            entry.last_error = write_arm.GetError();
+            ++summary.failed;
+            continue;
+        }
+        auto result = writer_.Write(
+            write_arm.TakeValue(),
+            entry.space,
+            address.Value(),
+            entry.freeze_value,
+            std::span<const std::uint8_t>(before.Value()));
         if (!result) {
             entry.last_error = result.GetError();
             ++summary.failed;
@@ -407,7 +598,9 @@ Result<FreezeSummary> AddressList::TickFreeze() {
     return Result<FreezeSummary>::Success(summary);
 }
 
-Result<void> AddressList::Save(const std::filesystem::path& path) const {
+Result<void> AddressList::Save(
+    const std::filesystem::path& path,
+    AddressListSaveFault fault) const {
     if (entries_.size() > kMaxEntries) {
         return Result<void>::Failure(MakeError(
             ErrorCode::LimitReached,
@@ -435,14 +628,34 @@ Result<void> AddressList::Save(const std::filesystem::path& path) const {
             }
         }
 
-        std::ofstream output(path, std::ios::binary | std::ios::trunc);
+        if (path.empty() || path.filename().empty()) {
+            return Result<void>::Failure(MakeError(
+                ErrorCode::InvalidArgument,
+                "Address-list destination path is invalid",
+                "AddressList::Save"));
+        }
+        const auto temporary = TemporarySibling(path);
+        struct TemporaryCleanup {
+            std::filesystem::path path;
+            bool committed{false};
+            ~TemporaryCleanup() {
+                if (!committed) {
+                    std::error_code ignored_error;
+                    std::filesystem::remove(path, ignored_error);
+                }
+            }
+        } cleanup{temporary};
+
+        std::ofstream output(
+            temporary,
+            std::ios::binary | std::ios::trunc);
         if (!output) {
             return Result<void>::Failure(MakeError(
                 ErrorCode::IoFailure,
                 "Unable to create address-list file",
                 "AddressList::Save"));
         }
-        output << "KDBG_ADDRESS_LIST\t1\n";
+        output << "KDBG_ADDRESS_LIST\t" << kAddressListVersion << '\n';
         for (const auto& entry : entries_) {
             output << entry.id << '\t'
                    << static_cast<int>(entry.space.kind) << '\t'
@@ -455,7 +668,19 @@ Result<void> AddressList::Save(const std::filesystem::path& path) const {
                    << (entry.freeze_value.empty()
                            ? std::string{"-"}
                            : Hex(entry.freeze_value))
-                   << '\n';
+                   << '\t' << (entry.pointer_path.has_value() ? 1 : 0);
+            if (entry.pointer_path.has_value()) {
+                const auto& pointer = *entry.pointer_path;
+                output << '\t' << static_cast<int>(pointer.space.kind)
+                       << '\t' << pointer.space.pid
+                       << '\t' << pointer.base_address
+                       << '\t' << pointer.pointer_size
+                       << '\t' << pointer.offsets.size();
+                for (const auto offset : pointer.offsets) {
+                    output << '\t' << offset;
+                }
+            }
+            output << '\n';
         }
         if (!output) {
             return Result<void>::Failure(MakeError(
@@ -463,6 +688,34 @@ Result<void> AddressList::Save(const std::filesystem::path& path) const {
                 "Failed while writing address-list file",
                 "AddressList::Save"));
         }
+        output.flush();
+        if (!output) {
+            return Result<void>::Failure(MakeError(
+                ErrorCode::IoFailure,
+                "Failed while flushing the temporary address-list file",
+                "AddressList::Save"));
+        }
+        output.close();
+        if (!output) {
+            return Result<void>::Failure(MakeError(
+                ErrorCode::IoFailure,
+                "Failed while closing the temporary address-list file",
+                "AddressList::Save"));
+        }
+        const auto durable = FlushFileToDisk(temporary, "AddressList::Save");
+        if (!durable) return durable;
+        if (fault == AddressListSaveFault::AfterFlushBeforeReplace) {
+            return Result<void>::Failure(MakeError(
+                ErrorCode::IoFailure,
+                "Injected address-list failure before atomic replacement",
+                "AddressList::Save"));
+        }
+        const auto replaced = ReplaceAtomically(
+            temporary,
+            path,
+            "AddressList::Save");
+        if (!replaced) return replaced;
+        cleanup.committed = true;
         return Result<void>::Success();
     } catch (const std::bad_alloc&) {
         return Result<void>::Failure(MakeError(
@@ -493,7 +746,9 @@ Result<void> AddressList::Load(const std::filesystem::path& path) {
     std::string magic;
     int version = 0;
     if (!input || !(header >> magic >> version) ||
-        magic != "KDBG_ADDRESS_LIST" || version != 1) {
+        magic != "KDBG_ADDRESS_LIST" ||
+        (version != kLegacyAddressListVersion &&
+         version != kAddressListVersion)) {
         return Result<void>::Failure(MakeError(
             ErrorCode::ParseError,
             "Address-list file has an unsupported header",
@@ -555,13 +810,57 @@ Result<void> AddressList::Load(const std::filesystem::path& path) {
                 "AddressList::Load"));
         }
         row >> std::ws;
-        if (!row.eof()) {
-            if (!(row >> freeze_hex)) {
+        if (version == kLegacyAddressListVersion) {
+            if (!row.eof() && !(row >> freeze_hex)) {
                 return Result<void>::Failure(MakeError(
                     ErrorCode::ParseError,
                     "Address-list freeze payload is malformed",
                     "AddressList::Load"));
             }
+        } else {
+            int has_pointer = 0;
+            if (!(row >> freeze_hex >> has_pointer) ||
+                (has_pointer != 0 && has_pointer != 1)) {
+                return Result<void>::Failure(MakeError(
+                    ErrorCode::ParseError,
+                    "Address-list v2 persistence fields are malformed",
+                    "AddressList::Load"));
+            }
+            if (has_pointer != 0) {
+                AddressPointerPath pointer{};
+                int pointer_kind = 0;
+                std::size_t offset_count = 0;
+                if (!(row >> pointer_kind >> pointer.space.pid >>
+                      pointer.base_address >> pointer.pointer_size >>
+                      offset_count) ||
+                    pointer_kind < static_cast<int>(MemorySpaceKind::Physical) ||
+                    pointer_kind >
+                        static_cast<int>(MemorySpaceKind::KernelVirtual) ||
+                    offset_count > PointerResolver::kMaxDepth) {
+                    return Result<void>::Failure(MakeError(
+                        ErrorCode::ParseError,
+                        "Address-list pointer path is malformed",
+                        "AddressList::Load"));
+                }
+                pointer.space.kind =
+                    static_cast<MemorySpaceKind>(pointer_kind);
+                pointer.offsets.reserve(offset_count);
+                for (std::size_t offset_index = 0;
+                     offset_index < offset_count;
+                     ++offset_index) {
+                    std::int64_t offset = 0;
+                    if (!(row >> offset)) {
+                        return Result<void>::Failure(MakeError(
+                            ErrorCode::ParseError,
+                            "Address-list pointer offsets are truncated",
+                            "AddressList::Load"));
+                    }
+                    pointer.offsets.push_back(offset);
+                }
+                entry.pointer_path = std::move(pointer);
+            }
+        }
+        if (!row.eof()) {
             row >> std::ws;
             if (!row.eof()) {
                 return Result<void>::Failure(MakeError(

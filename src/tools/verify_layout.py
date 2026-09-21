@@ -51,11 +51,18 @@ REQUIRED = (
     "src/core/snapshot/MemorySnapshot.cpp",
     "src/core/pfn/PageTableReverseMapper.cpp",
     "src/plugins/memprocfs_bridge/main.cpp",
+    "src/fixtures/process_fixture/main.cpp",
+    "src/fixtures/process_fixture/README.md",
+    "src/fixtures/process_fixture/resources/kdbg_process_fixture.rc",
     "src/app/ui/SnapshotPanel.cpp",
     "src/app/ui/MemoryMapPanel.cpp",
     "src/app/ui/ProcessMemoryPanel.cpp",
     "src/tests/test_advanced.cpp",
+    "src/tests/process_fixture_tests.ps1",
     "src/tools/build_drivers.ps1",
+    "src/tools/build_drivers_nuget.ps1",
+    "src/driver/WdkBootstrap/KDBG.WdkBootstrap.csproj",
+    "src/driver/WdkBootstrap/packages.lock.json",
     "src/tools/package_windows.ps1",
     "src/tools/manage_drivers.ps1",
     "src/tools/live-evidence.example.json",
@@ -113,7 +120,7 @@ def check_skill_frontmatter(path: Path) -> list[str]:
 def validate_cmake_sources(root: Path, errors: list[str]) -> None:
     cmake_files = [root / "src/CMakeLists.txt", root / "src/tests/CMakeLists.txt"]
     pattern = re.compile(
-        r"(?<![A-Za-z0-9_])((?:app|core|plugins|tests)/[A-Za-z0-9_./+-]+\.(?:cxx|cpp|cc|c|rc))(?![A-Za-z0-9_])"
+        r"(?<![A-Za-z0-9_])((?:app|core|fixtures|plugins|tests)/[A-Za-z0-9_./+-]+\.(?:cxx|cpp|cc|c|rc))(?![A-Za-z0-9_])"
     )
     for cmake_path in cmake_files:
         text = cmake_path.read_text(encoding="utf-8")

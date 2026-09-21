@@ -1,5 +1,7 @@
 #include "app/ui/PageTablePanel.h"
 
+#include "app/ui/Localization.h"
+
 #include <imgui.h>
 
 #include <charconv>
@@ -8,6 +10,10 @@
 #include <string_view>
 
 namespace kdbg {
+
+using ui::UiLabel;
+using ui::UiText;
+
 namespace {
 
 bool ParseUnsigned(const char* input, std::uint64_t& value) {
@@ -47,8 +53,15 @@ bool IsWritableUser4KiBWalk(const TranslationWalk& walk) noexcept {
 
 }  // namespace
 
+void PageTablePanel::InvalidateTranslation() noexcept {
+    context_.reset();
+    walk_.reset();
+    physical_navigation_.reset();
+}
+
 void PageTablePanel::SetPid(std::uint32_t pid) noexcept {
     std::snprintf(pid_.data(), pid_.size(), "%u", pid);
+    InvalidateTranslation();
 }
 
 void PageTablePanel::SetVirtualAddress(std::uint64_t address) noexcept {
@@ -57,29 +70,37 @@ void PageTablePanel::SetVirtualAddress(std::uint64_t address) noexcept {
         virtual_address_.size(),
         "0x%llX",
         static_cast<unsigned long long>(address));
+    InvalidateTranslation();
 }
 
 void PageTablePanel::Draw(
     IMemoryBackend& backend,
     std::uint32_t attached_pid) {
     if (attached_pid != 0 && pid_[0] == '\0') SetPid(attached_pid);
-    ImGui::TextUnformatted("Live VA -> PA Translation");
+    ImGui::TextUnformatted(UiText("Live VA -> PA Translation"));
     ImGui::SetNextItemWidth(120.0F);
-    ImGui::InputText("PID", pid_.data(), pid_.size());
+    const bool pid_changed = ImGui::InputText(
+        "PID", pid_.data(), pid_.size());
     ImGui::SetNextItemWidth(260.0F);
-    ImGui::InputText(
-        "Virtual Address",
+    const bool address_changed = ImGui::InputText(
+        UiLabel("Virtual Address", "PageTables.VirtualAddress").c_str(),
         virtual_address_.data(),
         virtual_address_.size());
+    if (pid_changed || address_changed) {
+        InvalidateTranslation();
+        status_ = UiText(
+            "Translation input changed; translate again before opening a physical page.");
+    }
 
     if (!backend.Info().connected) ImGui::BeginDisabled();
-    if (ImGui::Button("Translate with KDBG")) {
+    if (ImGui::Button(
+            UiLabel("Translate with KDBG", "PageTables.Translate").c_str())) {
         std::uint64_t pid_value = 0;
         std::uint64_t va = 0;
         if (!ParseUnsigned(pid_.data(), pid_value) ||
             pid_value == 0 || pid_value > UINT32_MAX ||
             !ParseUnsigned(virtual_address_.data(), va)) {
-            status_ = "PID or virtual address is invalid.";
+            status_ = UiText("PID or virtual address is invalid.");
             context_.reset();
             walk_.reset();
         } else {
@@ -99,16 +120,17 @@ void PageTablePanel::Draw(
                     walk_.reset();
                 } else {
                     walk_ = translated.Value();
-                    status_ = walk_->translated
+                    status_ = UiText(walk_->translated
                         ? "Translation completed."
-                        : "Page walk completed but the VA is not present.";
+                        : "Page walk completed but the VA is not present.");
                 }
             }
         }
     }
     if (!backend.Info().connected) ImGui::EndDisabled();
     if (!backend.Info().connected) {
-        ImGui::TextDisabled("Start and connect the KDBG driver first.");
+        ImGui::TextDisabled(UiText(
+            "Start and connect the KDBG driver first."));
     }
     if (!status_.empty()) ImGui::TextWrapped("%s", status_.c_str());
 
@@ -119,8 +141,11 @@ void PageTablePanel::Draw(
             walk_.has_value() && walk_->la57);
         if (indices) {
             ImGui::Separator();
-            if (indices.Value().la57) ImGui::Text("PML5 index: %u", indices.Value().pml5);
-            ImGui::Text("PML4: %u | PDPT: %u | PD: %u | PT: %u | Offset: 0x%03X",
+            if (indices.Value().la57) {
+                ImGui::Text(UiText("PML5 index: %u"), indices.Value().pml5);
+            }
+            ImGui::Text(UiText(
+                "PML4: %u | PDPT: %u | PD: %u | PT: %u | Offset: 0x%03X"),
                 indices.Value().pml4,
                 indices.Value().pdpt,
                 indices.Value().pd,
@@ -131,23 +156,28 @@ void PageTablePanel::Draw(
 
     if (!context_.has_value() || !walk_.has_value()) return;
     ImGui::Separator();
-    ImGui::Text("EPROCESS: 0x%016llX | CR3/DTB: 0x%016llX | %s",
+    ImGui::Text(UiText(
+        "EPROCESS: 0x%016llX | CR3/DTB: 0x%016llX | %s"),
         static_cast<unsigned long long>(context_->eprocess),
         static_cast<unsigned long long>(context_->directory_table_base),
         walk_->la57 ? "LA57" : "4-level");
-    ImGui::Text("PA: 0x%016llX | Page size: 0x%llX | Page offset: 0x%llX",
+    ImGui::Text(UiText(
+        "PA: 0x%016llX | Page size: 0x%llX | Page offset: 0x%llX"),
         static_cast<unsigned long long>(walk_->physical_address),
         static_cast<unsigned long long>(walk_->page_size),
         static_cast<unsigned long long>(walk_->page_offset));
     if (walk_->translated) {
-        if (ImGui::Button("Open final PA in Physical Memory")) {
+        if (ImGui::Button(UiLabel(
+                "Open final PA in Physical Memory",
+                "PageTables.OpenFinalPa").c_str())) {
             const auto page = PfnAddress::FromPfn(
                 walk_->physical_address >> 12U);
             if (page) physical_navigation_ = page.Value();
             else status_ = page.GetError().message;
         }
         ImGui::SameLine();
-        if (ImGui::Button("Copy final PA")) {
+        if (ImGui::Button(UiLabel(
+                "Copy final PA", "PageTables.CopyFinalPa").c_str())) {
             char value[32]{};
             std::snprintf(value, sizeof(value), "0x%016llX",
                 static_cast<unsigned long long>(walk_->physical_address));
@@ -160,10 +190,11 @@ void PageTablePanel::Draw(
             ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
                 ImGuiTableFlags_Resizable | ImGuiTableFlags_ScrollX,
             ImVec2(0.0F, 270.0F))) {
-        ImGui::TableSetupColumn("Level");
-        ImGui::TableSetupColumn("Index");
-        ImGui::TableSetupColumn("Entry PA");
-        ImGui::TableSetupColumn("Entry Value");
+        ImGui::TableSetupColumn(UiLabel("Level", "Level").c_str());
+        ImGui::TableSetupColumn(UiLabel("Index", "Index").c_str());
+        ImGui::TableSetupColumn(UiLabel("Entry PA", "Entry PA").c_str());
+        ImGui::TableSetupColumn(
+            UiLabel("Entry Value", "Entry Value").c_str());
         ImGui::TableSetupColumn("PFN");
         ImGui::TableSetupColumn("P");
         ImGui::TableSetupColumn("RW");
@@ -262,6 +293,19 @@ Result<VerifiedProcessPhysicalTarget> PageTablePanel::RevalidateProcessTarget(
             context.Value().directory_table_base,
             translated.Value().physical_address,
             page.pfn});
+}
+
+std::optional<PageTableEvidenceSnapshot> PageTablePanel::CurrentEvidence(
+    std::uint32_t pid,
+    std::uint64_t virtual_address,
+    std::uint64_t pfn) const {
+    if (!context_.has_value() || !walk_.has_value() ||
+        context_->pid != pid || walk_->virtual_address != virtual_address ||
+        !IsWritableUser4KiBWalk(*walk_) ||
+        (walk_->physical_address >> 12U) != pfn) {
+        return std::nullopt;
+    }
+    return PageTableEvidenceSnapshot{*context_, *walk_};
 }
 
 }  // namespace kdbg

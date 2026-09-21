@@ -20,6 +20,10 @@ struct MockFaults {
     std::uint32_t fail_write_enable_count{0};
     std::uint32_t fail_write_disable_count{0};
     bool mutate_after_next_write{false};
+    bool fail_compare_write_transport{false};
+    bool fail_compare_write_transport_after_write{false};
+    bool compare_write_failure{false};
+    std::uint32_t compare_write_native_status{0xC0000001U};
 };
 
 class MockMemoryBackend final : public IMemoryBackend {
@@ -47,6 +51,10 @@ public:
     Result<std::uint32_t> WritePhysical(
         std::uint64_t physical_address,
         std::span<const std::uint8_t> data) override;
+    Result<PhysicalPageCompareWriteResult> CompareWritePhysicalPage(
+        std::uint64_t physical_address,
+        std::span<const std::uint8_t> expected_before,
+        std::span<const std::uint8_t> desired) override;
 
     Result<ProcessContext> GetProcessContext(std::uint32_t pid) override;
     Result<std::vector<std::uint8_t>> ReadProcessVirtual(
@@ -69,8 +77,10 @@ public:
     void ClearFaults();
     void Mutate(std::uint64_t physical_address, std::uint8_t value);
     [[nodiscard]] std::uint64_t WriteCallCount() const noexcept;
+    [[nodiscard]] std::uint64_t ReadCallCount() const noexcept;
     [[nodiscard]] std::uint64_t WriteEnableCallCount() const noexcept;
     [[nodiscard]] std::uint64_t WriteDisableCallCount() const noexcept;
+    [[nodiscard]] std::uint64_t CompareWriteCallCount() const noexcept;
 
 private:
     [[nodiscard]] bool Contains(
@@ -83,8 +93,10 @@ private:
     bool open_{false};
     bool write_enabled_{false};
     std::uint64_t write_call_count_{0};
+    std::uint64_t read_call_count_{0};
     std::uint64_t write_enable_call_count_{0};
     std::uint64_t write_disable_call_count_{0};
+    std::uint64_t compare_write_call_count_{0};
 };
 
 }  // namespace kdbg

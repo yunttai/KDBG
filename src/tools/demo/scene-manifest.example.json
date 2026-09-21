@@ -1,0 +1,72 @@
+{
+  "schema_version": 2,
+  "title": "KDBG controlled-VM evidence",
+  "fps": 10,
+  "scenes": [
+    {
+      "id": "pfn-discovery",
+      "label": "Probe PFN discovery",
+      "cue": "Known probe allocation and PFN are visible",
+      "frames": [
+        {
+          "image": "01-pfn-discovery.png",
+          "duration_seconds": 2.0
+        }
+      ]
+    },
+    {
+      "id": "physical-read",
+      "label": "Exact 4 KiB physical read",
+      "cue": "Baseline page and byte count are visible",
+      "image": "02-physical-read.png",
+      "duration_seconds": 2.0
+    },
+    {
+      "id": "hex-diff",
+      "label": "Local hex edit and diff review",
+      "cue": "Dirty bytes remain local before apply",
+      "frames": [
+        {
+          "image": "03-hex-diff-staged.png",
+          "duration_seconds": 1.0,
+          "crop": { "x": 40, "y": 150, "width": 944, "height": 350 }
+        },
+        {
+          "image": "04-hex-diff-restored.png",
+          "duration_seconds": 1.0,
+          "crop": { "x": 40, "y": 150, "width": 944, "height": 350 }
+        }
+      ]
+    },
+    {
+      "id": "write-unlock",
+      "label": "Typed one-shot write unlock",
+      "cue": "Confirmation and single-use write gate are visible",
+      "image": "04-write-unlock.png",
+      "duration_seconds": 2.0
+    },
+    {
+      "id": "readback",
+      "label": "Apply and full read-back match",
+      "cue": "4096/4096 verification PASS is visible",
+      "image": "05-readback.png",
+      "duration_seconds": 2.0
+    },
+    {
+      "id": "ownership",
+      "label": "Process and VA ownership evidence",
+      "cue": "Selected PFN ownership evidence is visible",
+      "image": "06-ownership.png",
+      "crop": { "x": 500, "y": 60, "width": 524, "height": 650 },
+      "duration_seconds": 2.0
+    },
+    {
+      "id": "page-tables",
+      "label": "Page-table visualization",
+      "cue": "Translation levels and entry flags are visible",
+      "image": "07-page-tables.png",
+      "crop": { "x": 735, "y": 70, "width": 289, "height": 640 },
+      "duration_seconds": 2.0
+    }
+  ]
+}

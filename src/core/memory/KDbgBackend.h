@@ -28,6 +28,10 @@ public:
     Result<std::uint32_t> WritePhysical(
         std::uint64_t physical_address,
         std::span<const std::uint8_t> data) override;
+    Result<PhysicalPageCompareWriteResult> CompareWritePhysicalPage(
+        std::uint64_t physical_address,
+        std::span<const std::uint8_t> expected_before,
+        std::span<const std::uint8_t> desired) override;
 
     Result<ProcessContext> GetProcessContext(std::uint32_t pid) override;
     Result<std::vector<std::uint8_t>> ReadProcessVirtual(
@@ -47,6 +51,8 @@ public:
         std::uint64_t virtual_address) override;
 
 private:
+    Result<void> ForceWriteGateClosed(const char* operation);
+
     struct Impl;
     std::unique_ptr<Impl> impl_;
 };

@@ -55,7 +55,7 @@ PageEntryFlags DecodePageEntry(std::uint64_t entry) noexcept {
     flags.protection_key =
         static_cast<std::uint8_t>((entry >> 59U) & 0xFU);
     flags.no_execute = (entry & (1ULL << 63U)) != 0;
-    flags.pfn = (entry >> 12U) & 0xFFFFFFFFFFULL;
+    flags.pfn = (entry & kX64PageEntryAddressMask) >> 12U;
     return flags;
 }
 
@@ -93,15 +93,23 @@ Result<std::uint64_t> LeafPhysicalAddress(
 
     switch (level) {
     case PagingLevel::Pt: {
-        constexpr std::uint64_t kAddressMask = 0x000FFFFFFFFFF000ULL;
         return Result<std::uint64_t>::Success(
-            (entry & kAddressMask) | (virtual_address & 0xFFFULL));
+            (entry & kX64PageEntryAddressMask) |
+            (virtual_address & 0xFFFULL));
     }
     case PagingLevel::Pd: {
         if (!flags.page_size) {
             return Result<std::uint64_t>::Failure(MakeError(
                 ErrorCode::InvalidArgument,
                 "PD entry is not a 2 MiB leaf",
+                "LeafPhysicalAddress"));
+        }
+        // Bit 12 is PAT for a 2 MiB leaf; address bits 20:13 are reserved.
+        constexpr std::uint64_t kReservedAddressBits = 0x00000000001FE000ULL;
+        if ((entry & kReservedAddressBits) != 0) {
+            return Result<std::uint64_t>::Failure(MakeError(
+                ErrorCode::InvalidArgument,
+                "2 MiB leaf has reserved address bits set",
                 "LeafPhysicalAddress"));
         }
         constexpr std::uint64_t kAddressMask = 0x000FFFFFFFE00000ULL;
@@ -113,6 +121,14 @@ Result<std::uint64_t> LeafPhysicalAddress(
             return Result<std::uint64_t>::Failure(MakeError(
                 ErrorCode::InvalidArgument,
                 "PDPT entry is not a 1 GiB leaf",
+                "LeafPhysicalAddress"));
+        }
+        // Bit 12 is PAT for a 1 GiB leaf; address bits 29:13 are reserved.
+        constexpr std::uint64_t kReservedAddressBits = 0x000000003FFFE000ULL;
+        if ((entry & kReservedAddressBits) != 0) {
+            return Result<std::uint64_t>::Failure(MakeError(
+                ErrorCode::InvalidArgument,
+                "1 GiB leaf has reserved address bits set",
                 "LeafPhysicalAddress"));
         }
         constexpr std::uint64_t kAddressMask = 0x000FFFFFC0000000ULL;

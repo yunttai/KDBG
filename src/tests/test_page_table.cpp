@@ -25,6 +25,8 @@ bool WriteBytes(
     kdbg::IMemoryBackend& backend,
     std::uint64_t address,
     std::span<const std::uint8_t> bytes) {
+    const auto armed = backend.SetWriteEnabled(true);
+    if (!armed) return false;
     const auto result = backend.WritePhysical(address, bytes);
     return result && result.Value() == bytes.size();
 }
@@ -311,11 +313,23 @@ void RunReverseMapTests(kdbg::test::TestRunner& runner) {
             MockMemoryBackend::kMockPid, "large2m.exe", root << 12U, false}});
         const auto result = mapper.Query(target, {});
         KDBG_CHECK(runner, result.Ok());
-        if (result && !result.Value().mappings.empty()) {
+        if (result) {
+            KDBG_CHECK(runner, result.Value().mappings.size() == 1U);
+        }
+        if (result && result.Value().mappings.size() == 1U) {
             const auto& usage = result.Value().mappings.front();
             KDBG_CHECK(runner, usage.page_size == 0x200000U);
             KDBG_CHECK(runner, usage.virtual_address ==
                 (7ULL << 21U) + ((target - base) << 12U));
+        }
+        KDBG_CHECK(runner, WriteEntry(
+            backend, pd, 7,
+            (base << 12U) | (1ULL << 13U) |
+                kPresent | kPageSize));
+        const auto reserved = mapper.Query(target, {});
+        KDBG_CHECK(runner, reserved.Ok());
+        if (reserved) {
+            KDBG_CHECK(runner, reserved.Value().mappings.empty());
         }
     }
 
@@ -341,7 +355,10 @@ void RunReverseMapTests(kdbg::test::TestRunner& runner) {
             MockMemoryBackend::kMockPid, "large1g.exe", root << 12U, false}});
         const auto result = mapper.Query(target, {});
         KDBG_CHECK(runner, result.Ok());
-        if (result && !result.Value().mappings.empty()) {
+        if (result) {
+            KDBG_CHECK(runner, result.Value().mappings.size() == 1U);
+        }
+        if (result && result.Value().mappings.size() == 1U) {
             const auto& usage = result.Value().mappings.front();
             KDBG_CHECK(runner, usage.page_size == 0x40000000U);
             const std::uint64_t raw =
@@ -349,6 +366,15 @@ void RunReverseMapTests(kdbg::test::TestRunner& runner) {
                 ((target - base) << 12U);
             KDBG_CHECK(runner, usage.virtual_address ==
                 CanonicalizeVirtualAddress(raw, false));
+        }
+        KDBG_CHECK(runner, WriteEntry(
+            backend, pdpt, 6,
+            (base << 12U) | (1ULL << 29U) |
+                kPresent | kPageSize));
+        const auto reserved = mapper.Query(target, {});
+        KDBG_CHECK(runner, reserved.Ok());
+        if (reserved) {
+            KDBG_CHECK(runner, reserved.Value().mappings.empty());
         }
     }
 
@@ -435,6 +461,50 @@ void RunReverseMapTests(kdbg::test::TestRunner& runner) {
         KDBG_CHECK(runner, root_result.Ok());
         if (root_result) {
             KDBG_CHECK(runner, root_result.Value().mappings.size() == 2U);
+        }
+    }
+
+    {
+        MockMemoryBackend backend;
+        KDBG_CHECK(runner, OpenWritable(backend));
+        constexpr std::uint64_t root = 0x155U;
+        constexpr std::uint64_t pdpt = 0x156U;
+        constexpr std::uint64_t pd = 0x157U;
+        constexpr std::uint64_t pt = 0x158U;
+        constexpr std::uint64_t target = 0x159U;
+        KDBG_CHECK(runner, ClearTable(backend, root));
+        KDBG_CHECK(runner, ClearTable(backend, pdpt));
+        KDBG_CHECK(runner, ClearTable(backend, pd));
+        KDBG_CHECK(runner, ClearTable(backend, pt));
+        KDBG_CHECK(runner, WriteEntry(
+            backend, root, 0,
+            (pdpt << 12U) | kPresent | kPageSize));
+        KDBG_CHECK(runner, WriteEntry(
+            backend, pdpt, 0, (pd << 12U) | kPresent));
+        KDBG_CHECK(runner, WriteEntry(
+            backend, pd, 0, (pt << 12U) | kPresent));
+        KDBG_CHECK(runner, WriteEntry(
+            backend, pt, 0, (target << 12U) | kPresent));
+
+        PageTableReverseMapper mapper(backend);
+        mapper.SetLimits(ReverseMapLimits{8, 2, false, false});
+        mapper.SetTargets({ProcessScanTarget{
+            MockMemoryBackend::kMockPid,
+            "reserved-pml4.exe",
+            root << 12U,
+            false}});
+        const auto result = mapper.Query(target, {});
+        KDBG_CHECK(runner, result.Ok());
+        if (result) {
+            KDBG_CHECK(runner, result.Value().mappings.empty());
+        }
+
+        const auto oversized = mapper.Query(
+            kdbg::kX64MaxPageFrameNumber + 1U, {});
+        KDBG_CHECK(runner, !oversized.Ok());
+        if (!oversized) {
+            KDBG_CHECK(runner,
+                oversized.GetError().code == ErrorCode::InvalidPfn);
         }
     }
 
@@ -554,6 +624,16 @@ void RunPageTableTests(kdbg::test::TestRunner& runner) {
         PagingLevel::Pd, 0x0000000123400000ULL | kPresent, 0).Ok());
     KDBG_CHECK(runner, !LeafPhysicalAddress(
         PagingLevel::Pdpt, 0x0000000180000000ULL | kPageSize, 0).Ok());
+    KDBG_CHECK(runner, !LeafPhysicalAddress(
+        PagingLevel::Pd,
+        0x0000000123400000ULL | (1ULL << 13U) |
+            kPageSize | kPresent,
+        0).Ok());
+    KDBG_CHECK(runner, !LeafPhysicalAddress(
+        PagingLevel::Pdpt,
+        0x0000000180000000ULL | (1ULL << 29U) |
+            kPageSize | kPresent,
+        0).Ok());
     KDBG_CHECK(runner,
         !LeafPhysicalAddress(PagingLevel::Pml4, kPresent, 0).Ok());
 

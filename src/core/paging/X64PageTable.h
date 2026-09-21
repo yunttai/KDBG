@@ -7,6 +7,11 @@
 
 namespace kdbg {
 
+inline constexpr std::uint64_t kX64PageEntryAddressMask =
+    0x000FFFFFFFFFF000ULL;
+inline constexpr std::uint64_t kX64MaxPageFrameNumber =
+    kX64PageEntryAddressMask >> 12U;
+
 enum class PagingLevel {
     Pml5,
     Pml4,

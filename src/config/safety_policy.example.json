@@ -1,8 +1,8 @@
 {
   "schema": "kdbg.safety.v1",
   "environment": {
-    "dedicated_vm_required": true,
-    "restorable_snapshot_required": true,
+    "dedicated_vm_required": false,
+    "restorable_snapshot_required": false,
     "administrator_required": true
   },
   "writes": {

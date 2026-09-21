@@ -3,11 +3,22 @@
 #include <algorithm>
 #include <cstring>
 #include <limits>
-#include <set>
 #include <utility>
 
 namespace kdbg {
 namespace {
+
+void PreserveFirstError(PointerScanReport& report, const Error& error) {
+    if (report.first_error.code == ErrorCode::None) {
+        report.first_error = error;
+    }
+}
+
+void AddSaturating(std::uint64_t& value, std::uint64_t amount) noexcept {
+    value = amount > std::numeric_limits<std::uint64_t>::max() - value
+        ? std::numeric_limits<std::uint64_t>::max()
+        : value + amount;
+}
 
 std::uint64_t ReadPointer(
     std::span<const std::uint8_t> bytes,
@@ -39,6 +50,7 @@ Result<std::vector<PointerPath>> PointerScanner::Scan(
     const PointerScanOptions& options,
     ScanProgressCallback progress,
     std::stop_token stop_token) {
+    last_report_ = {};
     if (!memory_.IsOpen()) {
         return Result<std::vector<PointerPath>>::Failure(MakeError(
             ErrorCode::BackendDisconnected,
@@ -73,6 +85,12 @@ Result<std::vector<PointerPath>> PointerScanner::Scan(
 
     for (std::uint32_t depth = 1; depth <= options.max_depth; ++depth) {
         if (stop_token.stop_requested()) {
+            last_report_.cancelled = true;
+            last_report_.partial = true;
+            PreserveFirstError(last_report_, MakeError(
+                ErrorCode::Cancelled,
+                "Pointer scan was cancelled",
+                "PointerScanner::Scan"));
             return Result<std::vector<PointerPath>>::Failure(MakeError(
                 ErrorCode::Cancelled,
                 "Pointer scan was cancelled",
@@ -93,6 +111,7 @@ Result<std::vector<PointerPath>> PointerScanner::Scan(
         }
         frontier = parents_result.Value();
         globally_truncated = globally_truncated || level_truncated;
+        last_report_.truncated = globally_truncated;
         if (frontier.empty()) {
             break;
         }
@@ -116,10 +135,11 @@ Result<std::vector<PointerPath>> PointerScanner::Scan(
             results.push_back(std::move(path));
             if (results.size() >= options.max_results) {
                 globally_truncated = true;
+                last_report_.partial = true;
                 break;
             }
         }
-        if (results.size() >= options.max_results || globally_truncated) {
+        if (results.size() >= options.max_results) {
             break;
         }
     }
@@ -148,6 +168,8 @@ Result<std::vector<PointerPath>> PointerScanner::Scan(
     if (results.size() > options.max_results) {
         results.resize(options.max_results);
     }
+    last_report_.truncated = globally_truncated;
+    last_report_.partial = last_report_.partial || globally_truncated;
     return Result<std::vector<PointerPath>>::Success(std::move(results));
 }
 
@@ -204,9 +226,6 @@ Result<std::vector<PointerScanner::FrontierNode>> PointerScanner::FindParents(
     const auto chunk_size = std::max<std::size_t>(options.chunk_size, pointer_size);
     std::vector<FrontierNode> parents;
     parents.reserve(std::min<std::size_t>(options.max_results, 32768));
-    using ParentKey = std::pair<std::uint64_t, std::vector<std::uint64_t>>;
-    std::set<ParentKey> seen;
-
     for (const auto& region : regions) {
         std::uint64_t cursor = region.base;
         std::vector<std::uint8_t> carry;
@@ -216,6 +235,12 @@ Result<std::vector<PointerScanner::FrontierNode>> PointerScanner::FindParents(
             : region.base + region.size;
         while (cursor < end) {
             if (stop_token.stop_requested()) {
+                last_report_.cancelled = true;
+                last_report_.partial = true;
+                PreserveFirstError(last_report_, MakeError(
+                    ErrorCode::Cancelled,
+                    "Pointer scan was cancelled",
+                    "PointerScanner::FindParents"));
                 return Result<std::vector<FrontierNode>>::Failure(MakeError(
                     ErrorCode::Cancelled,
                     "Pointer scan was cancelled",
@@ -224,6 +249,8 @@ Result<std::vector<PointerScanner::FrontierNode>> PointerScanner::FindParents(
             const auto request = static_cast<std::uint32_t>(std::min<std::uint64_t>(
                 end - cursor,
                 std::min<std::uint64_t>(chunk_size, std::numeric_limits<std::uint32_t>::max())));
+            ++last_report_.reads_attempted;
+            AddSaturating(last_report_.requested_bytes, request);
             const auto data_result = memory_.Read(cursor, request);
             if (data_result) {
                 const auto& bytes = data_result.Value();
@@ -236,6 +263,24 @@ Result<std::vector<PointerScanner::FrontierNode>> PointerScanner::FindParents(
                         request,
                         bytes.size()));
                 }
+                if (bytes.size() != request) {
+                    const auto short_error = MakeError(
+                        ErrorCode::ShortRead,
+                        "Pointer scan returned fewer bytes than requested",
+                        "PointerScanner::FindParents",
+                        0,
+                        request,
+                        bytes.size());
+                    ++last_report_.reads_skipped;
+                    ++last_report_.short_reads;
+                    last_report_.partial = true;
+                    PreserveFirstError(last_report_, short_error);
+                } else {
+                    ++last_report_.reads_completed;
+                }
+                AddSaturating(
+                    last_report_.completed_bytes,
+                    static_cast<std::uint64_t>(bytes.size()));
                 if (state.bytes_scanned <=
                     std::numeric_limits<std::uint64_t>::max() - bytes.size()) {
                     state.bytes_scanned += bytes.size();
@@ -253,7 +298,19 @@ Result<std::vector<PointerScanner::FrontierNode>> PointerScanner::FindParents(
                     const auto remainder = static_cast<std::size_t>(
                         window_base % alignment);
                     const auto first = remainder == 0 ? 0U : alignment - remainder;
+                    std::size_t cancellation_counter = 0;
                     for (std::size_t offset = first; offset <= last; offset += alignment) {
+                        if ((cancellation_counter++ & 0x3FFU) == 0U &&
+                            stop_token.stop_requested()) {
+                            last_report_.cancelled = true;
+                            last_report_.partial = true;
+                            PreserveFirstError(last_report_, MakeError(
+                                ErrorCode::Cancelled,
+                                "Pointer scan was cancelled",
+                                "PointerScanner::FindParents"));
+                            return Result<std::vector<FrontierNode>>::Failure(
+                                last_report_.first_error);
+                        }
                         const auto storage = window_base + offset;
                         const std::span<const std::uint8_t> view(
                             window.data() + offset,
@@ -282,12 +339,11 @@ Result<std::vector<PointerScanner::FrontierNode>> PointerScanner::FindParents(
                                 parent.offsets.end(),
                                 it->offsets.begin(),
                                 it->offsets.end());
-                            if (!seen.emplace(storage, parent.offsets).second) {
-                                continue;
-                            }
                             parents.push_back(std::move(parent));
-                            if (parents.size() >= options.max_results) {
+                            if (parents.size() >= kMaxFrontierNodes) {
                                 truncated = true;
+                                last_report_.truncated = true;
+                                last_report_.partial = true;
                                 state.candidates = parents.size();
                                 if (progress) progress(state);
                                 return Result<std::vector<FrontierNode>>::Success(std::move(parents));
@@ -310,6 +366,10 @@ Result<std::vector<PointerScanner::FrontierNode>> PointerScanner::FindParents(
                 // A failed or inaccessible chunk creates a real address gap.  Never
                 // combine its neighboring bytes into a synthetic pointer value.
                 carry.clear();
+                ++last_report_.reads_skipped;
+                ++last_report_.failed_reads;
+                last_report_.partial = true;
+                PreserveFirstError(last_report_, data_result.GetError());
             }
             cursor += request;
             state.candidates = parents.size();

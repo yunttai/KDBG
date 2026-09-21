@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstring>
 #include <limits>
+#include <mutex>
 #include <utility>
 
 #ifdef _WIN32
@@ -43,6 +44,32 @@ namespace {
     return address != 0 && IsNonOverflowingRange(address, length);
 }
 
+[[nodiscard]] bool IsCanonicalAddress(
+    std::uint64_t address,
+    bool la57) noexcept {
+    const auto sign_bit = la57 ? 56U : 47U;
+    const auto upper_shift = sign_bit + 1U;
+    const auto sign = (address >> sign_bit) & 1U;
+    const auto upper = address >> upper_shift;
+    const auto expected_upper = sign == 0
+        ? 0U
+        : (std::numeric_limits<std::uint64_t>::max() >> upper_shift);
+    return upper == expected_upper;
+}
+
+[[nodiscard]] bool IsKernelVirtualRange(
+    std::uint64_t address,
+    std::size_t length,
+    bool la57) noexcept {
+    if (!IsValidAddressRange(address, length)) return false;
+    const auto last = address + static_cast<std::uint64_t>(length) - 1U;
+    const auto sign_bit = la57 ? 56U : 47U;
+    return IsCanonicalAddress(address, la57) &&
+        IsCanonicalAddress(last, la57) &&
+        ((address >> sign_bit) & 1U) != 0 &&
+        ((last >> sign_bit) & 1U) != 0;
+}
+
 [[nodiscard]] bool IsPageBounded(
     std::uint64_t address,
     std::size_t length) noexcept {
@@ -50,11 +77,26 @@ namespace {
     const auto last = address + static_cast<std::uint64_t>(length) - 1U;
     return (address & ~0xFFFULL) == (last & ~0xFFFULL);
 }
+
+[[nodiscard]] std::uint32_t FirstPageMismatch(
+    std::span<const std::uint8_t> left,
+    std::span<const std::uint8_t> right) noexcept {
+    if (left.size() != right.size()) {
+        return static_cast<std::uint32_t>(kPhysicalPageSize);
+    }
+    for (std::size_t offset = 0; offset < left.size(); ++offset) {
+        if (left[offset] != right[offset]) {
+            return static_cast<std::uint32_t>(offset);
+        }
+    }
+    return KDBG_PHYSICAL_PAGE_NO_MISMATCH;
+}
 #endif
 
 }  // namespace
 
 struct KDbgBackend::Impl {
+    mutable std::recursive_mutex mutex;
 #ifdef _WIN32
     HANDLE device{INVALID_HANDLE_VALUE};
 #endif
@@ -64,6 +106,7 @@ struct KDbgBackend::Impl {
     bool la57{false};
     std::uint32_t abi_version{0};
     std::uint32_t max_transfer{KDBG_MAX_TRANSFER_SIZE};
+    std::uint64_t next_transaction_id{1};
 
 #ifdef _WIN32
     Result<std::uint32_t> Ioctl(
@@ -112,6 +155,7 @@ KDbgBackend::~KDbgBackend() {
 }
 
 Result<void> KDbgBackend::Open() {
+    const std::scoped_lock lock(impl_->mutex);
 #ifdef _WIN32
     if (impl_->connected) {
         return Result<void>::Failure(MakeError(
@@ -177,8 +221,10 @@ Result<void> KDbgBackend::Open() {
         KDBG_VERSION_FLAG_PROCESS_MEMORY |
         KDBG_VERSION_FLAG_VTOP |
         KDBG_VERSION_FLAG_SECURE_OPEN |
-        KDBG_VERSION_FLAG_SINGLE_OWNER;
-    if (response.MaxTransferSize == 0 ||
+        KDBG_VERSION_FLAG_SINGLE_OWNER |
+        KDBG_VERSION_FLAG_WRITE_GATE_ONE_SHOT |
+        KDBG_VERSION_FLAG_PHYSICAL_PAGE_COMPARE_WRITE;
+    if (response.MaxTransferSize < KDBG_PAGE_SIZE ||
         response.MaxTransferSize > KDBG_MAX_TRANSFER_SIZE ||
         (response.Flags & required_flags) != required_flags) {
         Close();
@@ -193,6 +239,29 @@ Result<void> KDbgBackend::Open() {
     impl_->la57 = (response.Flags & KDBG_VERSION_FLAG_LA57_ACTIVE) != 0;
     impl_->connected = true;
     impl_->write_enabled = false;
+
+    auto session = QuerySessionStatus();
+    if (!session) {
+        const Error error = session.GetError();
+        Close();
+        return Result<void>::Failure(error);
+    }
+    if (session.Value().write_enabled) {
+        const auto relocked = SetWriteEnabled(false);
+        if (!relocked) {
+            Error error = relocked.GetError();
+            error.message =
+                "KDBG opened with its write gate enabled and relocking failed: " +
+                error.message;
+            Close();
+            return Result<void>::Failure(std::move(error));
+        }
+        Close();
+        return Result<void>::Failure(MakeError(
+            ErrorCode::AbiMismatch,
+            "KDBG opened with a non-default write-enabled session",
+            "KDbgBackend::Open/GET_SESSION_STATUS"));
+    }
     return Result<void>::Success();
 #else
     return Result<void>::Failure(MakeError(
@@ -203,9 +272,10 @@ Result<void> KDbgBackend::Open() {
 }
 
 void KDbgBackend::Close() noexcept {
+    const std::scoped_lock lock(impl_->mutex);
 #ifdef _WIN32
     if (impl_->device != INVALID_HANDLE_VALUE) {
-        if (impl_->connected && impl_->write_enabled) {
+        if (impl_->connected) {
             KDBG_WRITE_MODE_REQUEST request{};
             request.Size = sizeof(request);
             request.EnableWrite = 0;
@@ -229,9 +299,12 @@ void KDbgBackend::Close() noexcept {
     impl_->connected = false;
     impl_->la57 = false;
     impl_->abi_version = 0;
+    impl_->max_transfer = KDBG_MAX_TRANSFER_SIZE;
+    impl_->next_transaction_id = 1;
 }
 
 BackendInfo KDbgBackend::Info() const {
+    const std::scoped_lock lock(impl_->mutex);
     BackendInfo info{};
     info.name = "kdbg-live";
     info.abi_version = impl_->abi_version;
@@ -241,10 +314,12 @@ BackendInfo KDbgBackend::Info() const {
     info.supports_process_context = true;
     info.supports_fixture = false;
     info.supports_la57 = impl_->la57;
+    info.supports_physical_page_compare_write = impl_->connected;
     return info;
 }
 
 Result<BackendSessionStatus> KDbgBackend::QuerySessionStatus() {
+    const std::scoped_lock lock(impl_->mutex);
 #ifdef _WIN32
     KDBG_SESSION_STATUS_RESPONSE response{};
     auto result = impl_->Ioctl(
@@ -263,7 +338,7 @@ Result<BackendSessionStatus> KDbgBackend::QuerySessionStatus() {
         response.Size != sizeof(response) || response.Reserved != 0 ||
         response.Reserved2 != 0 ||
         response.LastPhysicalWriteStage >
-            KDBG_PHYSICAL_WRITE_STAGE_COMPLETE ||
+            KDBG_PHYSICAL_WRITE_STAGE_MAX ||
         (response.Flags & ~valid_flags) != 0 ||
         response.CurrentPid != GetCurrentProcessId() ||
         response.OpenHandleCount == 0 ||
@@ -306,6 +381,7 @@ Result<BackendSessionStatus> KDbgBackend::QuerySessionStatus() {
 }
 
 Result<std::vector<PhysicalRange>> KDbgBackend::GetPhysicalRanges() {
+    const std::scoped_lock lock(impl_->mutex);
 #ifdef _WIN32
     std::vector<std::uint8_t> response_storage(
         sizeof(KDBG_PHYSICAL_RANGES_RESPONSE));
@@ -370,6 +446,7 @@ Result<std::vector<PhysicalRange>> KDbgBackend::GetPhysicalRanges() {
 Result<std::vector<std::uint8_t>> KDbgBackend::ReadPhysical(
     std::uint64_t physical_address,
     std::uint32_t length) {
+    const std::scoped_lock lock(impl_->mutex);
 #ifdef _WIN32
     if (length == 0 || length > impl_->max_transfer ||
         !IsNonOverflowingRange(physical_address, length)) {
@@ -418,9 +495,12 @@ Result<std::vector<std::uint8_t>> KDbgBackend::ReadPhysical(
             length,
             copied));
     }
-    std::vector<std::uint8_t> bytes(length);
-    std::memcpy(bytes.data(), request->Data, length);
-    return Result<std::vector<std::uint8_t>>::Success(std::move(bytes));
+    // Reuse the IOCTL storage for the returned payload.  Keeping the payload
+    // in the same allocation avoids a second heap allocation on every live
+    // read while preserving the METHOD_BUFFERED wire layout during the call.
+    std::memmove(buffer.data(), request->Data, length);
+    buffer.resize(length);
+    return Result<std::vector<std::uint8_t>>::Success(std::move(buffer));
 #else
     (void)physical_address;
     (void)length;
@@ -432,10 +512,14 @@ Result<std::vector<std::uint8_t>> KDbgBackend::ReadPhysical(
 }
 
 Result<void> KDbgBackend::SetWriteEnabled(bool enabled) {
+    const std::scoped_lock lock(impl_->mutex);
 #ifdef _WIN32
+    if (!enabled) {
+        return ForceWriteGateClosed("KDbgBackend::SetWriteEnabled");
+    }
     KDBG_WRITE_MODE_REQUEST request{};
     request.Size = sizeof(request);
-    request.EnableWrite = enabled ? 1u : 0u;
+    request.EnableWrite = 1u;
     request.Acknowledge = KDBG_WRITE_ACK_MAGIC;
     auto result = impl_->Ioctl(
         IOCTL_KDBG_SET_WRITE_MODE,
@@ -443,19 +527,23 @@ Result<void> KDbgBackend::SetWriteEnabled(bool enabled) {
         sizeof(request),
         0,
         "KDbgBackend::SetWriteEnabled");
-    if (!result) {
-        return Result<void>::Failure(result.GetError());
-    }
-    if (result.Value() != 0) {
-        return Result<void>::Failure(MakeError(
+    if (!result || result.Value() != 0) {
+        Error error = result ? MakeError(
             ErrorCode::AbiMismatch,
             "KDBG write-mode response length is invalid",
             "KDbgBackend::SetWriteEnabled",
             0,
             0,
-            result.Value()));
+            result.Value()) : result.GetError();
+        const auto closed = ForceWriteGateClosed(
+            "KDbgBackend::SetWriteEnabled/fail_closed");
+        if (!closed) {
+            error.message += "; fail-closed cleanup could not prove that the "
+                "driver gate is locked: " + closed.GetError().message;
+        }
+        return Result<void>::Failure(std::move(error));
     }
-    impl_->write_enabled = enabled;
+    impl_->write_enabled = true;
     return Result<void>::Success();
 #else
     (void)enabled;
@@ -466,9 +554,71 @@ Result<void> KDbgBackend::SetWriteEnabled(bool enabled) {
 #endif
 }
 
+Result<void> KDbgBackend::ForceWriteGateClosed(const char* operation) {
+    const std::scoped_lock lock(impl_->mutex);
+#ifdef _WIN32
+    impl_->write_enabled = false;
+    KDBG_WRITE_MODE_REQUEST request{};
+    request.Size = sizeof(request);
+    request.EnableWrite = 0;
+    request.Acknowledge = KDBG_WRITE_ACK_MAGIC;
+    const auto disabled = impl_->Ioctl(
+        IOCTL_KDBG_SET_WRITE_MODE,
+        &request,
+        sizeof(request),
+        0,
+        operation);
+    const auto status = QuerySessionStatus();
+    if (status && !status.Value().write_enabled) {
+        impl_->write_enabled = false;
+        return Result<void>::Success();
+    }
+
+    // Never let an uncertain kernel state authorize another write through
+    // this backend instance. Close() also sends an unconditional disable and
+    // the driver's IRP_MJ_CLEANUP clears the per-handle token.
+    impl_->write_enabled = false;
+    if (!disabled) {
+        Error error = disabled.GetError();
+        error.operation = operation;
+        error.message = "Write-gate disable failed and the locked state could "
+            "not be proven: " + error.message;
+        return Result<void>::Failure(std::move(error));
+    }
+    if (disabled.Value() != 0) {
+        return Result<void>::Failure(MakeError(
+            ErrorCode::AbiMismatch,
+            "Write-gate disable returned an invalid length and the locked "
+            "state could not be proven",
+            operation,
+            0,
+            0,
+            disabled.Value()));
+    }
+    if (!status) {
+        Error error = status.GetError();
+        error.operation = operation;
+        error.message = "Write-gate disable completed but session status "
+            "could not prove that the gate is locked: " + error.message;
+        return Result<void>::Failure(std::move(error));
+    }
+    return Result<void>::Failure(MakeError(
+        ErrorCode::WriteLocked,
+        "Driver session still reports an open write gate after disable",
+        operation));
+#else
+    (void)operation;
+    return Result<void>::Failure(MakeError(
+        ErrorCode::Unsupported,
+        "Windows only",
+        "KDbgBackend::ForceWriteGateClosed"));
+#endif
+}
+
 Result<std::uint32_t> KDbgBackend::WritePhysical(
     std::uint64_t physical_address,
     std::span<const std::uint8_t> data) {
+    const std::scoped_lock lock(impl_->mutex);
 #ifdef _WIN32
     if (!impl_->write_enabled) {
         return Result<std::uint32_t>::Failure(MakeError(
@@ -508,9 +658,19 @@ Result<std::uint32_t> KDbgBackend::WritePhysical(
         static_cast<DWORD>(total),
         static_cast<DWORD>(header),
         "KDbgBackend::WritePhysical");
+    // WRITE_GATE_ONE_SHOT guarantees that dispatching a valid
+    // write consumes the kernel token. Mirror that state before inspecting
+    // the response so no failure path can authorize a second write locally.
+    impl_->write_enabled = false;
     if (!result) {
-        static_cast<void>(SetWriteEnabled(false));
-        return Result<std::uint32_t>::Failure(result.GetError());
+        Error error = result.GetError();
+        const auto closed = ForceWriteGateClosed(
+            "KDbgBackend::WritePhysical/fail_closed");
+        if (!closed) {
+            error.message += "; fail-closed cleanup could not prove that the "
+                "driver gate is locked: " + closed.GetError().message;
+        }
+        return Result<std::uint32_t>::Failure(std::move(error));
     }
     if (result.Value() != header || request->Size != total ||
         request->Flags != 0 ||
@@ -518,7 +678,8 @@ Result<std::uint32_t> KDbgBackend::WritePhysical(
         request->Length != data.size() ||
         request->Acknowledge != KDBG_WRITE_ACK_MAGIC ||
         request->Transferred != data.size()) {
-        static_cast<void>(SetWriteEnabled(false));
+        static_cast<void>(ForceWriteGateClosed(
+            "KDbgBackend::WritePhysical/invalid_response"));
         return Result<std::uint32_t>::Failure(MakeError(
             ErrorCode::ShortWrite,
             "KDBG returned a short physical write",
@@ -532,7 +693,8 @@ Result<std::uint32_t> KDbgBackend::WritePhysical(
         static_cast<std::uint32_t>(data.size()));
     if (!readback || !std::equal(
             data.begin(), data.end(), readback.Value().begin())) {
-        static_cast<void>(SetWriteEnabled(false));
+        static_cast<void>(ForceWriteGateClosed(
+            "KDbgBackend::WritePhysical/readback_failure"));
         return Result<std::uint32_t>::Failure(
             readback
                 ? MakeError(
@@ -555,7 +717,179 @@ Result<std::uint32_t> KDbgBackend::WritePhysical(
 #endif
 }
 
+Result<PhysicalPageCompareWriteResult>
+KDbgBackend::CompareWritePhysicalPage(
+    std::uint64_t physical_address,
+    std::span<const std::uint8_t> expected_before,
+    std::span<const std::uint8_t> desired) {
+    const std::scoped_lock lock(impl_->mutex);
+#ifdef _WIN32
+    constexpr auto operation = "KDbgBackend::CompareWritePhysicalPage";
+    if (!impl_->write_enabled) {
+        return Result<PhysicalPageCompareWriteResult>::Failure(MakeError(
+            ErrorCode::WriteLocked,
+            "KDBG physical page write gate is locked",
+            operation));
+    }
+    if ((physical_address & (KDBG_PAGE_SIZE - 1ULL)) != 0 ||
+        expected_before.size() != kPhysicalPageSize ||
+        desired.size() != kPhysicalPageSize) {
+        static_cast<void>(ForceWriteGateClosed(
+            "KDbgBackend::CompareWritePhysicalPage/invalid_request"));
+        return Result<PhysicalPageCompareWriteResult>::Failure(MakeError(
+            ErrorCode::InvalidArgument,
+            "Physical compare/write requires a page-aligned address and "
+            "two exact 4 KiB pages",
+            operation));
+    }
+
+    std::vector<std::uint8_t> buffer(
+        sizeof(KDBG_PHYSICAL_PAGE_COMPARE_WRITE_REQUEST));
+    auto* request = reinterpret_cast<
+        KDBG_PHYSICAL_PAGE_COMPARE_WRITE_REQUEST*>(buffer.data());
+    request->Size = sizeof(*request);
+    request->PhysicalAddress = physical_address;
+    request->Length = KDBG_PAGE_SIZE;
+    request->Acknowledge = KDBG_WRITE_ACK_MAGIC;
+    request->TransactionId = impl_->next_transaction_id++;
+    if (request->TransactionId == 0) {
+        request->TransactionId = impl_->next_transaction_id++;
+    }
+    const auto transaction_id = request->TransactionId;
+    std::memcpy(
+        request->ExpectedBefore,
+        expected_before.data(),
+        kPhysicalPageSize);
+    std::memcpy(
+        request->Desired,
+        desired.data(),
+        kPhysicalPageSize);
+
+    auto result = impl_->Ioctl(
+        IOCTL_KDBG_COMPARE_WRITE_PHYSICAL_PAGE,
+        buffer.data(),
+        sizeof(KDBG_PHYSICAL_PAGE_COMPARE_WRITE_REQUEST),
+        sizeof(KDBG_PHYSICAL_PAGE_COMPARE_WRITE_RESPONSE),
+        operation);
+    // ABI 7 defines this transaction as one-shot for applied, conflict, and
+    // failed outcomes. Mirror the consumed token before parsing any output.
+    impl_->write_enabled = false;
+    if (!result) {
+        Error error = result.GetError();
+        const auto closed = ForceWriteGateClosed(
+            "KDbgBackend::CompareWritePhysicalPage/fail_closed");
+        if (!closed) {
+            error.message += "; fail-closed cleanup could not prove that the "
+                "driver gate is locked: " + closed.GetError().message;
+        }
+        return Result<PhysicalPageCompareWriteResult>::Failure(
+            std::move(error));
+    }
+
+    const auto* response = reinterpret_cast<const
+        KDBG_PHYSICAL_PAGE_COMPARE_WRITE_RESPONSE*>(buffer.data());
+    const bool common_valid =
+        result.Value() == sizeof(*response) &&
+        response->Size == sizeof(*response) &&
+        response->PhysicalAddress == physical_address &&
+        response->Length == KDBG_PAGE_SIZE &&
+        response->TransactionId == transaction_id &&
+        response->Transferred <= KDBG_PAGE_SIZE;
+    if (!common_valid) {
+        static_cast<void>(ForceWriteGateClosed(
+            "KDbgBackend::CompareWritePhysicalPage/invalid_response"));
+        return Result<PhysicalPageCompareWriteResult>::Failure(MakeError(
+            ErrorCode::AbiMismatch,
+            "KDBG returned an invalid physical page transaction response",
+            operation,
+            0,
+            sizeof(*response),
+            result.Value()));
+    }
+
+    const std::span<const std::uint8_t> readback(
+        response->Readback,
+        kPhysicalPageSize);
+    PhysicalPageCompareWriteResult transaction{};
+    transaction.transferred = response->Transferred;
+    transaction.first_mismatch_offset = response->FirstMismatchOffset;
+    transaction.native_status = response->Status;
+    std::copy(readback.begin(), readback.end(), transaction.readback.begin());
+
+    switch (response->Result) {
+    case KDBG_PHYSICAL_PAGE_RESULT_APPLIED:
+        if (response->Status != KDBG_PHYSICAL_PAGE_STATUS_SUCCESS ||
+            response->Transferred != KDBG_PAGE_SIZE ||
+            response->FirstMismatchOffset !=
+                KDBG_PHYSICAL_PAGE_NO_MISMATCH ||
+            !std::equal(
+                readback.begin(), readback.end(), desired.begin())) {
+            static_cast<void>(ForceWriteGateClosed(
+                "KDbgBackend::CompareWritePhysicalPage/invalid_applied"));
+            return Result<PhysicalPageCompareWriteResult>::Failure(MakeError(
+                ErrorCode::VerificationMismatch,
+                "KDBG reported an inconsistent applied transaction",
+                operation));
+        }
+        transaction.outcome = PhysicalPageCompareWriteOutcome::Applied;
+        break;
+
+    case KDBG_PHYSICAL_PAGE_RESULT_CONFLICT: {
+        const auto mismatch = FirstPageMismatch(readback, expected_before);
+        if (response->Status != KDBG_PHYSICAL_PAGE_STATUS_CONFLICT ||
+            response->Transferred != 0 ||
+            mismatch >= kPhysicalPageSize ||
+            response->FirstMismatchOffset != mismatch) {
+            static_cast<void>(ForceWriteGateClosed(
+                "KDbgBackend::CompareWritePhysicalPage/invalid_conflict"));
+            return Result<PhysicalPageCompareWriteResult>::Failure(MakeError(
+                ErrorCode::AbiMismatch,
+                "KDBG returned inconsistent baseline-conflict metadata",
+                operation));
+        }
+        transaction.outcome = PhysicalPageCompareWriteOutcome::Conflict;
+        break;
+    }
+
+    case KDBG_PHYSICAL_PAGE_RESULT_FAILED: {
+        const auto mismatch = FirstPageMismatch(readback, desired);
+        if (response->Status == 0 ||
+            response->FirstMismatchOffset != mismatch) {
+            static_cast<void>(ForceWriteGateClosed(
+                "KDbgBackend::CompareWritePhysicalPage/invalid_failure"));
+            return Result<PhysicalPageCompareWriteResult>::Failure(MakeError(
+                ErrorCode::AbiMismatch,
+                "KDBG returned inconsistent failed-transaction metadata",
+                operation));
+        }
+        transaction.outcome = PhysicalPageCompareWriteOutcome::Failure;
+        break;
+    }
+
+    default:
+        static_cast<void>(ForceWriteGateClosed(
+            "KDbgBackend::CompareWritePhysicalPage/unknown_outcome"));
+        return Result<PhysicalPageCompareWriteResult>::Failure(MakeError(
+            ErrorCode::AbiMismatch,
+            "KDBG returned an unknown physical page transaction outcome",
+            operation));
+    }
+
+    return Result<PhysicalPageCompareWriteResult>::Success(
+        std::move(transaction));
+#else
+    (void)physical_address;
+    (void)expected_before;
+    (void)desired;
+    return Result<PhysicalPageCompareWriteResult>::Failure(MakeError(
+        ErrorCode::Unsupported,
+        "Windows only",
+        "KDbgBackend::CompareWritePhysicalPage"));
+#endif
+}
+
 Result<ProcessContext> KDbgBackend::GetProcessContext(std::uint32_t pid) {
+    const std::scoped_lock lock(impl_->mutex);
 #ifdef _WIN32
     if (pid == 0) {
         return Result<ProcessContext>::Failure(MakeError(
@@ -613,6 +947,7 @@ Result<std::vector<std::uint8_t>> KDbgBackend::ReadProcessVirtual(
     std::uint32_t pid,
     std::uint64_t virtual_address,
     std::uint32_t length) {
+    const std::scoped_lock lock(impl_->mutex);
 #ifdef _WIN32
     if (pid == 0 || length == 0 || length > impl_->max_transfer ||
         !IsValidAddressRange(virtual_address, length)) {
@@ -659,9 +994,9 @@ Result<std::vector<std::uint8_t>> KDbgBackend::ReadProcessVirtual(
             length,
             request->Transferred));
     }
-    std::vector<std::uint8_t> output(length);
-    std::memcpy(output.data(), request->Data, length);
-    return Result<std::vector<std::uint8_t>>::Success(std::move(output));
+    std::memmove(buffer.data(), request->Data, length);
+    buffer.resize(length);
+    return Result<std::vector<std::uint8_t>>::Success(std::move(buffer));
 #else
     (void)pid;
     (void)virtual_address;
@@ -677,6 +1012,7 @@ Result<std::uint32_t> KDbgBackend::WriteProcessVirtual(
     std::uint32_t pid,
     std::uint64_t virtual_address,
     std::span<const std::uint8_t> data) {
+    const std::scoped_lock lock(impl_->mutex);
 #ifdef _WIN32
     if (!impl_->write_enabled) {
         return Result<std::uint32_t>::Failure(MakeError(
@@ -716,9 +1052,16 @@ Result<std::uint32_t> KDbgBackend::WriteProcessVirtual(
         static_cast<DWORD>(total),
         static_cast<DWORD>(header),
         "KDbgBackend::WriteProcessVirtual");
+    impl_->write_enabled = false;
     if (!result) {
-        static_cast<void>(SetWriteEnabled(false));
-        return Result<std::uint32_t>::Failure(result.GetError());
+        Error error = result.GetError();
+        const auto closed = ForceWriteGateClosed(
+            "KDbgBackend::WriteProcessVirtual/fail_closed");
+        if (!closed) {
+            error.message += "; fail-closed cleanup could not prove that the "
+                "driver gate is locked: " + closed.GetError().message;
+        }
+        return Result<std::uint32_t>::Failure(std::move(error));
     }
     if (result.Value() != header || request->Size != total ||
         request->Flags != 0 || request->ProcessId != pid ||
@@ -726,7 +1069,8 @@ Result<std::uint32_t> KDbgBackend::WriteProcessVirtual(
         request->VirtualAddress != virtual_address ||
         request->Acknowledge != KDBG_WRITE_ACK_MAGIC ||
         request->Reserved != 0 || request->Transferred != data.size()) {
-        static_cast<void>(SetWriteEnabled(false));
+        static_cast<void>(ForceWriteGateClosed(
+            "KDbgBackend::WriteProcessVirtual/invalid_response"));
         return Result<std::uint32_t>::Failure(MakeError(
             ErrorCode::ShortWrite,
             "KDBG returned a short process virtual write",
@@ -741,7 +1085,8 @@ Result<std::uint32_t> KDbgBackend::WriteProcessVirtual(
         static_cast<std::uint32_t>(data.size()));
     if (!readback || !std::equal(
             data.begin(), data.end(), readback.Value().begin())) {
-        static_cast<void>(SetWriteEnabled(false));
+        static_cast<void>(ForceWriteGateClosed(
+            "KDbgBackend::WriteProcessVirtual/readback_failure"));
         return Result<std::uint32_t>::Failure(
             readback
                 ? MakeError(
@@ -768,9 +1113,10 @@ Result<std::uint32_t> KDbgBackend::WriteProcessVirtual(
 Result<std::vector<std::uint8_t>> KDbgBackend::ReadKernelVirtual(
     std::uint64_t virtual_address,
     std::uint32_t length) {
+    const std::scoped_lock lock(impl_->mutex);
 #ifdef _WIN32
     if (length == 0 || length > impl_->max_transfer ||
-        !IsValidAddressRange(virtual_address, length)) {
+        !IsKernelVirtualRange(virtual_address, length, impl_->la57)) {
         return Result<std::vector<std::uint8_t>>::Failure(MakeError(
             ErrorCode::InvalidArgument,
             "Invalid kernel virtual read request",
@@ -813,9 +1159,9 @@ Result<std::vector<std::uint8_t>> KDbgBackend::ReadKernelVirtual(
             length,
             request->Transferred));
     }
-    std::vector<std::uint8_t> output(length);
-    std::memcpy(output.data(), request->Data, length);
-    return Result<std::vector<std::uint8_t>>::Success(std::move(output));
+    std::memmove(buffer.data(), request->Data, length);
+    buffer.resize(length);
+    return Result<std::vector<std::uint8_t>>::Success(std::move(buffer));
 #else
     (void)virtual_address;
     (void)length;
@@ -829,6 +1175,7 @@ Result<std::vector<std::uint8_t>> KDbgBackend::ReadKernelVirtual(
 Result<TranslationWalk> KDbgBackend::TranslateVirtual(
     std::uint64_t directory_table_base,
     std::uint64_t virtual_address) {
+    const std::scoped_lock lock(impl_->mutex);
 #ifdef _WIN32
     union Buffer {
         KDBG_TRANSLATE_REQUEST request;

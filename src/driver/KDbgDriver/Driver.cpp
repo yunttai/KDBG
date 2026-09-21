@@ -17,6 +17,7 @@ DEFINE_GUID(
 namespace {
 
 constexpr ULONG kContextTag = 'CDBK';
+constexpr ULONG kPageTransactionTag = 'TDBK';
 constexpr UINT64 kPageMask = 0x000FFFFFFFFFF000ULL;
 
 struct FileContext {
@@ -30,6 +31,7 @@ struct FileContext {
 struct DriverState {
     PDEVICE_OBJECT DeviceObject;
     FAST_MUTEX OwnerLock;
+    FAST_MUTEX PhysicalTransactionLock;
     PEPROCESS OwnerProcess;
     volatile LONG OwnerPid;
     volatile LONG OpenHandleCount;
@@ -54,6 +56,36 @@ public:
 
 private:
     PFAST_MUTEX mutex_;
+};
+
+class NonPagedTransactionBuffer {
+public:
+    NonPagedTransactionBuffer() noexcept
+        : data_(static_cast<UCHAR*>(ExAllocatePool2(
+              POOL_FLAG_NON_PAGED,
+              3u * KDBG_PAGE_SIZE,
+              kPageTransactionTag))) {}
+
+    ~NonPagedTransactionBuffer() {
+        if (data_ != nullptr) {
+            ExFreePoolWithTag(data_, kPageTransactionTag);
+        }
+    }
+
+    NonPagedTransactionBuffer(const NonPagedTransactionBuffer&) = delete;
+    NonPagedTransactionBuffer& operator=(
+        const NonPagedTransactionBuffer&) = delete;
+
+    [[nodiscard]] UCHAR* Expected() const noexcept { return data_; }
+    [[nodiscard]] UCHAR* Desired() const noexcept {
+        return data_ == nullptr ? nullptr : data_ + KDBG_PAGE_SIZE;
+    }
+    [[nodiscard]] UCHAR* Readback() const noexcept {
+        return data_ == nullptr ? nullptr : data_ + 2u * KDBG_PAGE_SIZE;
+    }
+
+private:
+    UCHAR* data_;
 };
 
 NTSTATUS Complete(PIRP irp, NTSTATUS status, ULONG_PTR information = 0) {
@@ -153,15 +185,34 @@ bool IsUserRange(UINT64 address, SIZE_T length) noexcept {
            (end_exclusive - 1ULL) <= highest_user;
 }
 
-bool IsPhysicalRamRange(UINT64 address, SIZE_T length) {
-    UINT64 end = 0;
-    if (!CheckedEnd(address, length, &end)) {
-        return false;
+class PhysicalRangeSnapshot {
+public:
+    PhysicalRangeSnapshot() noexcept
+        : ranges_(MmGetPhysicalMemoryRangesEx2(nullptr, 0)) {}
+
+    ~PhysicalRangeSnapshot() {
+        if (ranges_ != nullptr) {
+            ExFreePool(ranges_);
+        }
     }
 
-    PPHYSICAL_MEMORY_RANGE ranges =
-        MmGetPhysicalMemoryRangesEx2(nullptr, 0);
-    if (ranges == nullptr) {
+    PhysicalRangeSnapshot(const PhysicalRangeSnapshot&) = delete;
+    PhysicalRangeSnapshot& operator=(const PhysicalRangeSnapshot&) = delete;
+
+    [[nodiscard]] PPHYSICAL_MEMORY_RANGE Get() const noexcept {
+        return ranges_;
+    }
+
+private:
+    PPHYSICAL_MEMORY_RANGE ranges_;
+};
+
+bool IsPhysicalRamRange(
+    PPHYSICAL_MEMORY_RANGE ranges,
+    UINT64 address,
+    SIZE_T length) {
+    UINT64 end = 0;
+    if (ranges == nullptr || !CheckedEnd(address, length, &end)) {
         return false;
     }
 
@@ -183,11 +234,49 @@ bool IsPhysicalRamRange(UINT64 address, SIZE_T length) {
         }
     }
 
-    ExFreePool(ranges);
     return valid;
 }
 
-NTSTATUS ReadPhysical(
+ULONG FirstMismatchOffset(
+    const UCHAR* left,
+    const UCHAR* right,
+    SIZE_T length) noexcept {
+    if (left == nullptr || right == nullptr) {
+        return KDBG_PHYSICAL_PAGE_NO_MISMATCH;
+    }
+    for (SIZE_T offset = 0; offset < length; ++offset) {
+        if (left[offset] != right[offset]) {
+            return static_cast<ULONG>(offset);
+        }
+    }
+    return KDBG_PHYSICAL_PAGE_NO_MISMATCH;
+}
+
+void FillPhysicalPageTransactionResponse(
+    UCHAR* buffer,
+    ULONG result,
+    UINT64 physical_address,
+    ULONG transferred,
+    ULONG first_mismatch_offset,
+    NTSTATUS transaction_status,
+    UINT64 transaction_id,
+    const UCHAR* readback) noexcept {
+    auto* response = reinterpret_cast<
+        KDBG_PHYSICAL_PAGE_COMPARE_WRITE_RESPONSE*>(buffer);
+    RtlZeroMemory(response, sizeof(*response));
+    response->Size = sizeof(*response);
+    response->Result = result;
+    response->PhysicalAddress = physical_address;
+    response->Length = KDBG_PAGE_SIZE;
+    response->Transferred = transferred;
+    response->FirstMismatchOffset = first_mismatch_offset;
+    response->Status = static_cast<KDBG_U32>(transaction_status);
+    response->TransactionId = transaction_id;
+    RtlCopyMemory(response->Readback, readback, KDBG_PAGE_SIZE);
+}
+
+NTSTATUS ReadPhysicalWithSnapshot(
+    PPHYSICAL_MEMORY_RANGE ranges,
     UINT64 physical_address,
     PVOID destination,
     SIZE_T length,
@@ -197,7 +286,7 @@ NTSTATUS ReadPhysical(
         return STATUS_INVALID_PARAMETER;
     }
     *transferred = 0;
-    if (!IsPhysicalRamRange(physical_address, length)) {
+    if (!IsPhysicalRamRange(ranges, physical_address, length)) {
         return STATUS_CONFLICTING_ADDRESSES;
     }
 
@@ -212,20 +301,44 @@ NTSTATUS ReadPhysical(
         transferred);
 }
 
-NTSTATUS ReadPhysicalU64(UINT64 physical_address, UINT64* value) {
+NTSTATUS ReadPhysical(
+    UINT64 physical_address,
+    PVOID destination,
+    SIZE_T length,
+    PSIZE_T transferred) {
+    PhysicalRangeSnapshot ranges;
+    if (ranges.Get() == nullptr) {
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+    return ReadPhysicalWithSnapshot(
+        ranges.Get(),
+        physical_address,
+        destination,
+        length,
+        transferred);
+}
+
+NTSTATUS ReadPhysicalU64(
+    PPHYSICAL_MEMORY_RANGE ranges,
+    UINT64 physical_address,
+    UINT64* value) {
     if (value == nullptr) {
         return STATUS_INVALID_PARAMETER;
     }
     SIZE_T copied = 0;
-    const NTSTATUS status =
-        ReadPhysical(physical_address, value, sizeof(*value), &copied);
+    const NTSTATUS status = ReadPhysicalWithSnapshot(
+        ranges,
+        physical_address,
+        value,
+        sizeof(*value),
+        &copied);
     if (!NT_SUCCESS(status)) {
         return status;
     }
     return copied == sizeof(*value) ? STATUS_SUCCESS : STATUS_PARTIAL_COPY;
 }
 
-NTSTATUS WritePhysical(
+NTSTATUS WriteValidatedPhysicalRange(
     UINT64 physical_address,
     const UCHAR* source,
     SIZE_T length,
@@ -236,10 +349,6 @@ NTSTATUS WritePhysical(
         return STATUS_INVALID_PARAMETER;
     }
     *transferred = 0;
-    if (!IsPhysicalRamRange(physical_address, length)) {
-        return STATUS_CONFLICTING_ADDRESSES;
-    }
-
     SIZE_T remaining = length;
     UINT64 current = physical_address;
     const UCHAR* input = source;
@@ -432,6 +541,25 @@ bool IsCanonical(UINT64 address, bool la57) noexcept {
     return sign == 0 ? upper == 0 : upper == 0xFFFFULL;
 }
 
+bool IsKernelRange(UINT64 address, SIZE_T length) noexcept {
+    UINT64 end_exclusive = 0;
+    if (!CheckedEnd(address, length, &end_exclusive)) {
+        return false;
+    }
+#if defined(_WIN64)
+    const bool la57 = (__readcr4() & (1ULL << 12)) != 0;
+    const UINT64 last = end_exclusive - 1ULL;
+    const ULONG sign_bit = la57 ? 56U : 47U;
+    return IsCanonical(address, la57) && IsCanonical(last, la57) &&
+        ((address >> sign_bit) & 1ULL) != 0 &&
+        ((last >> sign_bit) & 1ULL) != 0;
+#else
+    UNREFERENCED_PARAMETER(address);
+    UNREFERENCED_PARAMETER(length);
+    return false;
+#endif
+}
+
 NTSTATUS TranslateVirtual(
     const KDBG_TRANSLATE_REQUEST* request,
     KDBG_TRANSLATE_RESPONSE* response) {
@@ -501,12 +629,23 @@ NTSTATUS TranslateVirtual(
     };
     const ULONG start = la57 ? 0u : 1u;
 
+    // One current RAM-range snapshot covers the complete page-table walk.
+    // This preserves validation for every entry read without allocating and
+    // enumerating the same range list once per paging level.
+    PhysicalRangeSnapshot physical_ranges;
+    if (physical_ranges.Get() == nullptr) {
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
     UINT64 table = dtb;
     for (ULONG slot = start; slot < RTL_NUMBER_OF(indices); ++slot) {
         const UINT64 entry_address =
             table + static_cast<UINT64>(indices[slot]) * sizeof(UINT64);
         UINT64 entry = 0;
-        NTSTATUS status = ReadPhysicalU64(entry_address, &entry);
+        NTSTATUS status = ReadPhysicalU64(
+            physical_ranges.Get(),
+            entry_address,
+            &entry);
         if (!NT_SUCCESS(status)) {
             return status;
         }
@@ -527,6 +666,13 @@ NTSTATUS TranslateVirtual(
 
         if (levels[slot] == KDBG_PAGING_LEVEL_PDPT &&
             (entry & (1ULL << 7)) != 0) {
+            // In a 1 GiB leaf, bits 29:13 are reserved.  Do not silently
+            // mask a malformed present entry into a different physical
+            // address: user mode must receive a failed translation.
+            constexpr UINT64 reserved_mask = 0x000000003FFFE000ULL;
+            if ((entry & reserved_mask) != 0) {
+                return STATUS_INVALID_ADDRESS;
+            }
             constexpr UINT64 mask = 0x000FFFFFC0000000ULL;
             response->PageSize = 0x40000000ULL;
             response->PageOffset =
@@ -545,6 +691,11 @@ NTSTATUS TranslateVirtual(
 
         if (levels[slot] == KDBG_PAGING_LEVEL_PD &&
             (entry & (1ULL << 7)) != 0) {
+            // In a 2 MiB leaf, bits 20:13 are reserved (bit 12 is PAT).
+            constexpr UINT64 reserved_mask = 0x00000000001FE000ULL;
+            if ((entry & reserved_mask) != 0) {
+                return STATUS_INVALID_ADDRESS;
+            }
             constexpr UINT64 mask = 0x000FFFFFFFE00000ULL;
             response->PageSize = 0x200000ULL;
             response->PageOffset =
@@ -657,6 +808,7 @@ NTSTATUS DispatchDeviceControl(PDEVICE_OBJECT, PIRP irp) {
         if (context != nullptr &&
             (code == IOCTL_KDBG_SET_WRITE_MODE ||
              code == IOCTL_KDBG_WRITE_PHYSICAL ||
+             code == IOCTL_KDBG_COMPARE_WRITE_PHYSICAL_PAGE ||
              code == IOCTL_KDBG_WRITE_PROCESS_MEMORY)) {
             FastMutexGuard write_guard(&context->WriteLock);
             InterlockedExchange(&context->WriteEnabled, 0);
@@ -687,7 +839,9 @@ NTSTATUS DispatchDeviceControl(PDEVICE_OBJECT, PIRP irp) {
             KDBG_VERSION_FLAG_PROCESS_MEMORY |
             KDBG_VERSION_FLAG_VTOP |
             KDBG_VERSION_FLAG_SECURE_OPEN |
-            KDBG_VERSION_FLAG_SINGLE_OWNER;
+            KDBG_VERSION_FLAG_SINGLE_OWNER |
+            KDBG_VERSION_FLAG_WRITE_GATE_ONE_SHOT |
+            KDBG_VERSION_FLAG_PHYSICAL_PAGE_COMPARE_WRITE;
 #if defined(_WIN64)
         if ((__readcr4() & (1ULL << 12)) != 0) {
             response.Flags |= KDBG_VERSION_FLAG_LA57_ACTIVE;
@@ -744,17 +898,16 @@ NTSTATUS DispatchDeviceControl(PDEVICE_OBJECT, PIRP irp) {
         if (buffer == nullptr ||
             input_length != sizeof(KDBG_WRITE_MODE_REQUEST) ||
             output_length != 0) {
+            InterlockedExchange(&context->WriteEnabled, 0);
+            InterlockedIncrement64(&g_state.RejectedWrites);
             status = STATUS_BUFFER_TOO_SMALL;
             break;
         }
         const auto* request =
             reinterpret_cast<const KDBG_WRITE_MODE_REQUEST*>(buffer);
         if (request->Size != sizeof(*request) || request->EnableWrite > 1 ||
-            request->Acknowledge != KDBG_WRITE_ACK_MAGIC ||
-            context == nullptr) {
-            if (context != nullptr) {
-                InterlockedExchange(&context->WriteEnabled, 0);
-            }
+            request->Acknowledge != KDBG_WRITE_ACK_MAGIC) {
+            InterlockedExchange(&context->WriteEnabled, 0);
             InterlockedIncrement64(&g_state.RejectedWrites);
             status = STATUS_ACCESS_DENIED;
             break;
@@ -773,9 +926,8 @@ NTSTATUS DispatchDeviceControl(PDEVICE_OBJECT, PIRP irp) {
             status = STATUS_BUFFER_TOO_SMALL;
             break;
         }
-        PPHYSICAL_MEMORY_RANGE ranges =
-            MmGetPhysicalMemoryRangesEx2(nullptr, 0);
-        if (ranges == nullptr) {
+        PhysicalRangeSnapshot ranges;
+        if (ranges.Get() == nullptr) {
             status = STATUS_INSUFFICIENT_RESOURCES;
             break;
         }
@@ -787,18 +939,20 @@ NTSTATUS DispatchDeviceControl(PDEVICE_OBJECT, PIRP irp) {
         bool invalid_ranges = false;
         bool truncated = false;
         for (ULONG index = 0;
-             ranges[index].BaseAddress.QuadPart != 0 ||
-             ranges[index].NumberOfBytes.QuadPart != 0;
+             ranges.Get()[index].BaseAddress.QuadPart != 0 ||
+             ranges.Get()[index].NumberOfBytes.QuadPart != 0;
              ++index) {
-            if (ranges[index].BaseAddress.QuadPart < 0 ||
-                ranges[index].NumberOfBytes.QuadPart < 0) {
+            if (ranges.Get()[index].BaseAddress.QuadPart < 0 ||
+                ranges.Get()[index].NumberOfBytes.QuadPart < 0) {
                 invalid_ranges = true;
                 break;
             }
             const UINT64 base =
-                static_cast<UINT64>(ranges[index].BaseAddress.QuadPart);
+                static_cast<UINT64>(
+                    ranges.Get()[index].BaseAddress.QuadPart);
             const UINT64 bytes =
-                static_cast<UINT64>(ranges[index].NumberOfBytes.QuadPart);
+                static_cast<UINT64>(
+                    ranges.Get()[index].NumberOfBytes.QuadPart);
             if (bytes == 0 || base > MAXUINT64 - bytes ||
                 response->TotalBytes > MAXUINT64 - bytes) {
                 invalid_ranges = true;
@@ -827,7 +981,6 @@ NTSTATUS DispatchDeviceControl(PDEVICE_OBJECT, PIRP irp) {
             item.BaseAddress = base;
             item.ByteCount = bytes;
         }
-        ExFreePool(ranges);
         if (invalid_ranges) {
             status = STATUS_INTEGER_OVERFLOW;
             break;
@@ -859,11 +1012,15 @@ NTSTATUS DispatchDeviceControl(PDEVICE_OBJECT, PIRP irp) {
             break;
         }
         SIZE_T copied = 0;
-        status = ReadPhysical(
-            request->PhysicalAddress,
-            request->Data,
-            request->Length,
-            &copied);
+        {
+            FastMutexGuard transaction_guard(
+                &g_state.PhysicalTransactionLock);
+            status = ReadPhysical(
+                request->PhysicalAddress,
+                request->Data,
+                request->Length,
+                &copied);
+        }
         request->Transferred = static_cast<KDBG_U32>(copied);
         information = header + copied;
         if (NT_SUCCESS(status) && copied == request->Length) {
@@ -900,8 +1057,7 @@ NTSTATUS DispatchDeviceControl(PDEVICE_OBJECT, PIRP irp) {
             SetPhysicalWriteResult(status, 0);
             break;
         }
-        if (InterlockedCompareExchange(&context->WriteEnabled, 0, 0) == 0 ||
-            request->Acknowledge != KDBG_WRITE_ACK_MAGIC) {
+        if (request->Acknowledge != KDBG_WRITE_ACK_MAGIC) {
             InterlockedExchange(&context->WriteEnabled, 0);
             InterlockedIncrement64(&g_state.RejectedWrites);
             status = STATUS_ACCESS_DENIED;
@@ -909,11 +1065,43 @@ NTSTATUS DispatchDeviceControl(PDEVICE_OBJECT, PIRP irp) {
             break;
         }
         SIZE_T written = 0;
-        status = WritePhysical(
-            request->PhysicalAddress,
-            request->Data,
-            request->Length,
-            &written);
+        {
+            FastMutexGuard transaction_guard(
+                &g_state.PhysicalTransactionLock);
+            PhysicalRangeSnapshot write_ranges;
+            if (write_ranges.Get() == nullptr) {
+                InterlockedExchange(&context->WriteEnabled, 0);
+                InterlockedIncrement64(&g_state.RejectedWrites);
+                status = STATUS_INSUFFICIENT_RESOURCES;
+                SetPhysicalWriteResult(status, 0);
+                break;
+            }
+            if (!IsPhysicalRamRange(
+                    write_ranges.Get(),
+                    request->PhysicalAddress,
+                    request->Length)) {
+                InterlockedExchange(&context->WriteEnabled, 0);
+                InterlockedIncrement64(&g_state.RejectedWrites);
+                status = STATUS_CONFLICTING_ADDRESSES;
+                SetPhysicalWriteResult(status, 0);
+                break;
+            }
+            // Consume the per-handle token only after the current RAM
+            // snapshot validates the entire page-bounded range and while the
+            // driver's physical operations remain serialized.
+            if (InterlockedCompareExchange(
+                    &context->WriteEnabled, 0, 1) != 1) {
+                InterlockedIncrement64(&g_state.RejectedWrites);
+                status = STATUS_ACCESS_DENIED;
+                SetPhysicalWriteResult(status, 0);
+                break;
+            }
+            status = WriteValidatedPhysicalRange(
+                request->PhysicalAddress,
+                request->Data,
+                request->Length,
+                &written);
+        }
         request->Transferred = static_cast<KDBG_U32>(written);
         information = header;
         if (NT_SUCCESS(status) && written == request->Length) {
@@ -927,6 +1115,202 @@ NTSTATUS DispatchDeviceControl(PDEVICE_OBJECT, PIRP irp) {
             }
         }
         SetPhysicalWriteResult(status, written);
+        break;
+    }
+
+    case IOCTL_KDBG_COMPARE_WRITE_PHYSICAL_PAGE: {
+        FastMutexGuard write_guard(&context->WriteLock);
+        SetPhysicalWriteStage(KDBG_PHYSICAL_WRITE_STAGE_VALIDATION);
+        SetPhysicalWriteResult(STATUS_PENDING, 0);
+        if (buffer == nullptr ||
+            input_length !=
+                sizeof(KDBG_PHYSICAL_PAGE_COMPARE_WRITE_REQUEST) ||
+            output_length !=
+                sizeof(KDBG_PHYSICAL_PAGE_COMPARE_WRITE_RESPONSE)) {
+            InterlockedExchange(&context->WriteEnabled, 0);
+            InterlockedIncrement64(&g_state.RejectedWrites);
+            status = STATUS_BUFFER_TOO_SMALL;
+            SetPhysicalWriteResult(status, 0);
+            break;
+        }
+
+        const auto* request = reinterpret_cast<const
+            KDBG_PHYSICAL_PAGE_COMPARE_WRITE_REQUEST*>(buffer);
+        if (request->Size != sizeof(*request) || request->Flags != 0 ||
+            request->Length != KDBG_PAGE_SIZE || request->Reserved != 0 ||
+            request->TransactionId == 0 ||
+            (request->PhysicalAddress & (KDBG_PAGE_SIZE - 1ULL)) != 0) {
+            InterlockedExchange(&context->WriteEnabled, 0);
+            InterlockedIncrement64(&g_state.RejectedWrites);
+            status = STATUS_INVALID_PARAMETER;
+            SetPhysicalWriteResult(status, 0);
+            break;
+        }
+        if (request->Acknowledge != KDBG_WRITE_ACK_MAGIC) {
+            InterlockedExchange(&context->WriteEnabled, 0);
+            InterlockedIncrement64(&g_state.RejectedWrites);
+            status = STATUS_ACCESS_DENIED;
+            SetPhysicalWriteResult(status, 0);
+            break;
+        }
+
+        NonPagedTransactionBuffer pages;
+        if (pages.Expected() == nullptr) {
+            InterlockedExchange(&context->WriteEnabled, 0);
+            InterlockedIncrement64(&g_state.RejectedWrites);
+            status = STATUS_INSUFFICIENT_RESOURCES;
+            SetPhysicalWriteResult(status, 0);
+            break;
+        }
+
+        // METHOD_BUFFERED aliases input and output through SystemBuffer.
+        // Preserve both caller pages before a response can overwrite it.
+        RtlCopyMemory(
+            pages.Expected(),
+            request->ExpectedBefore,
+            KDBG_PAGE_SIZE);
+        RtlCopyMemory(
+            pages.Desired(),
+            request->Desired,
+            KDBG_PAGE_SIZE);
+
+        const UINT64 physical_address = request->PhysicalAddress;
+        const UINT64 transaction_id = request->TransactionId;
+        SIZE_T copied = 0;
+        SIZE_T written = 0;
+        {
+            FastMutexGuard transaction_guard(
+                &g_state.PhysicalTransactionLock);
+            PhysicalRangeSnapshot write_ranges;
+            if (write_ranges.Get() == nullptr) {
+                InterlockedExchange(&context->WriteEnabled, 0);
+                InterlockedIncrement64(&g_state.RejectedWrites);
+                status = STATUS_INSUFFICIENT_RESOURCES;
+                SetPhysicalWriteResult(status, 0);
+                break;
+            }
+            if (!IsPhysicalRamRange(
+                    write_ranges.Get(),
+                    physical_address,
+                    KDBG_PAGE_SIZE)) {
+                InterlockedExchange(&context->WriteEnabled, 0);
+                InterlockedIncrement64(&g_state.RejectedWrites);
+                status = STATUS_CONFLICTING_ADDRESSES;
+                SetPhysicalWriteResult(status, 0);
+                break;
+            }
+
+            // The gate is consumed under the same driver-global lock that
+            // protects the fresh RAM snapshot, baseline compare, write, and
+            // read-back. A conflict requires a new acknowledgement.
+            if (InterlockedCompareExchange(
+                    &context->WriteEnabled, 0, 1) != 1) {
+                InterlockedIncrement64(&g_state.RejectedWrites);
+                status = STATUS_ACCESS_DENIED;
+                SetPhysicalWriteResult(status, 0);
+                break;
+            }
+
+            SetPhysicalWriteStage(KDBG_PHYSICAL_WRITE_STAGE_COMPARING);
+            status = ReadPhysicalWithSnapshot(
+                write_ranges.Get(),
+                physical_address,
+                pages.Readback(),
+                KDBG_PAGE_SIZE,
+                &copied);
+            if (!NT_SUCCESS(status) || copied != KDBG_PAGE_SIZE) {
+                if (NT_SUCCESS(status)) {
+                    status = STATUS_PARTIAL_COPY;
+                }
+            } else {
+                const ULONG baseline_mismatch = FirstMismatchOffset(
+                    pages.Readback(),
+                    pages.Expected(),
+                    KDBG_PAGE_SIZE);
+                if (baseline_mismatch != KDBG_PHYSICAL_PAGE_NO_MISMATCH) {
+                    FillPhysicalPageTransactionResponse(
+                        buffer,
+                        KDBG_PHYSICAL_PAGE_RESULT_CONFLICT,
+                        physical_address,
+                        0,
+                        baseline_mismatch,
+                        STATUS_REVISION_MISMATCH,
+                        transaction_id,
+                        pages.Readback());
+                    information = sizeof(
+                        KDBG_PHYSICAL_PAGE_COMPARE_WRITE_RESPONSE);
+                    status = STATUS_SUCCESS;
+                    SetPhysicalWriteResult(STATUS_REVISION_MISMATCH, 0);
+                } else {
+                    const NTSTATUS write_status =
+                        WriteValidatedPhysicalRange(
+                            physical_address,
+                            pages.Desired(),
+                            KDBG_PAGE_SIZE,
+                            &written);
+                    SetPhysicalWriteStage(
+                        KDBG_PHYSICAL_WRITE_STAGE_READBACK);
+                    copied = 0;
+                    status = ReadPhysicalWithSnapshot(
+                        write_ranges.Get(),
+                        physical_address,
+                        pages.Readback(),
+                        KDBG_PAGE_SIZE,
+                        &copied);
+                    if (!NT_SUCCESS(status) || copied != KDBG_PAGE_SIZE) {
+                        if (NT_SUCCESS(status)) {
+                            status = STATUS_PARTIAL_COPY;
+                        }
+                    } else {
+                        const ULONG desired_mismatch = FirstMismatchOffset(
+                            pages.Readback(),
+                            pages.Desired(),
+                            KDBG_PAGE_SIZE);
+                        const bool applied = NT_SUCCESS(write_status) &&
+                            written == KDBG_PAGE_SIZE &&
+                            desired_mismatch ==
+                                KDBG_PHYSICAL_PAGE_NO_MISMATCH;
+                        const NTSTATUS outcome_status = applied
+                            ? STATUS_SUCCESS
+                            : (NT_SUCCESS(write_status)
+                                ? STATUS_DATA_ERROR
+                                : write_status);
+                        FillPhysicalPageTransactionResponse(
+                            buffer,
+                            applied
+                                ? KDBG_PHYSICAL_PAGE_RESULT_APPLIED
+                                : KDBG_PHYSICAL_PAGE_RESULT_FAILED,
+                            physical_address,
+                            static_cast<ULONG>(written),
+                            desired_mismatch,
+                            outcome_status,
+                            transaction_id,
+                            pages.Readback());
+                        information = sizeof(
+                            KDBG_PHYSICAL_PAGE_COMPARE_WRITE_RESPONSE);
+                        status = STATUS_SUCCESS;
+                        SetPhysicalWriteResult(outcome_status, written);
+                        if (applied) {
+                            SetPhysicalWriteStage(
+                                KDBG_PHYSICAL_WRITE_STAGE_COMPLETE);
+                            InterlockedIncrement64(
+                                &g_state.SuccessfulWrites);
+                        }
+                    }
+                }
+            }
+        }
+
+        if (information == 0) {
+            InterlockedIncrement64(&g_state.RejectedWrites);
+            SetPhysicalWriteResult(status, written);
+        } else {
+            const auto* response = reinterpret_cast<const
+                KDBG_PHYSICAL_PAGE_COMPARE_WRITE_RESPONSE*>(buffer);
+            if (response->Result != KDBG_PHYSICAL_PAGE_RESULT_APPLIED) {
+                InterlockedIncrement64(&g_state.RejectedWrites);
+            }
+        }
         break;
     }
 
@@ -968,7 +1352,11 @@ NTSTATUS DispatchDeviceControl(PDEVICE_OBJECT, PIRP irp) {
         const auto request =
             *reinterpret_cast<const KDBG_TRANSLATE_REQUEST*>(buffer);
         KDBG_TRANSLATE_RESPONSE response{};
-        status = TranslateVirtual(&request, &response);
+        {
+            FastMutexGuard transaction_guard(
+                &g_state.PhysicalTransactionLock);
+            status = TranslateVirtual(&request, &response);
+        }
         if (NT_SUCCESS(status)) {
             RtlCopyMemory(buffer, &response, sizeof(response));
             information = sizeof(response);
@@ -1047,8 +1435,7 @@ NTSTATUS DispatchDeviceControl(PDEVICE_OBJECT, PIRP irp) {
             status = STATUS_INVALID_PARAMETER;
             break;
         }
-        if (InterlockedCompareExchange(&context->WriteEnabled, 0, 0) == 0 ||
-            request->Acknowledge != KDBG_WRITE_ACK_MAGIC) {
+        if (request->Acknowledge != KDBG_WRITE_ACK_MAGIC) {
             InterlockedExchange(&context->WriteEnabled, 0);
             InterlockedIncrement64(&g_state.RejectedWrites);
             status = STATUS_ACCESS_DENIED;
@@ -1061,6 +1448,15 @@ NTSTATUS DispatchDeviceControl(PDEVICE_OBJECT, PIRP irp) {
         if (!NT_SUCCESS(status)) {
             InterlockedExchange(&context->WriteEnabled, 0);
             InterlockedIncrement64(&g_state.RejectedWrites);
+            break;
+        }
+        // Consume the per-handle token only after the target process has been
+        // referenced and immediately before the operation can touch memory.
+        if (InterlockedCompareExchange(
+                &context->WriteEnabled, 0, 1) != 1) {
+            ObDereferenceObject(process);
+            InterlockedIncrement64(&g_state.RejectedWrites);
+            status = STATUS_ACCESS_DENIED;
             break;
         }
         SIZE_T copied = 0;
@@ -1077,6 +1473,7 @@ NTSTATUS DispatchDeviceControl(PDEVICE_OBJECT, PIRP irp) {
             InterlockedIncrement64(&g_state.SuccessfulWrites);
         } else {
             InterlockedExchange(&context->WriteEnabled, 0);
+            InterlockedIncrement64(&g_state.RejectedWrites);
             if (NT_SUCCESS(status)) {
                 status = STATUS_PARTIAL_COPY;
             }
@@ -1093,15 +1490,10 @@ NTSTATUS DispatchDeviceControl(PDEVICE_OBJECT, PIRP irp) {
         auto* request =
             reinterpret_cast<KDBG_KERNEL_VIRTUAL_READ_REQUEST*>(buffer);
         ULONG total = 0;
-        UINT64 end_exclusive = 0;
         if (request->Size != header || request->Flags != 0 ||
             request->Transferred != 0 || request->Length == 0 ||
             request->Length > KDBG_MAX_TRANSFER_SIZE ||
-            request->VirtualAddress == 0 ||
-            !CheckedEnd(
-                request->VirtualAddress,
-                request->Length,
-                &end_exclusive) ||
+            !IsKernelRange(request->VirtualAddress, request->Length) ||
             !CheckedAddUlong(header, request->Length, &total) ||
             output_length != total) {
             status = STATUS_INVALID_PARAMETER;
@@ -1170,6 +1562,7 @@ extern "C" NTSTATUS DriverEntry(
     RtlInitUnicodeString(&sddl, L"D:P(A;;GA;;;SY)(A;;GA;;;BA)");
 
     ExInitializeFastMutex(&g_state.OwnerLock);
+    ExInitializeFastMutex(&g_state.PhysicalTransactionLock);
 
     PDEVICE_OBJECT device_object = nullptr;
     NTSTATUS status = IoCreateDeviceSecure(

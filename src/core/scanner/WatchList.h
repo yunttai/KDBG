@@ -23,6 +23,13 @@ struct WatchEntry {
     std::string last_error;
 };
 
+// Deterministic persistence fault injection used by the core regression suite.
+// Production callers should keep the default value.
+enum class WatchListSaveFault {
+    None,
+    AfterFlushBeforeReplace,
+};
+
 class WatchList {
 public:
     explicit WatchList(IProcessMemory& memory);
@@ -44,7 +51,9 @@ public:
     // process-creation token. Frozen state is stored for audit purposes but is
     // always loaded disarmed, so opening a table can never cause an implicit
     // write.
-    Result<void> Save(const std::filesystem::path& path) const;
+    Result<void> Save(
+        const std::filesystem::path& path,
+        WatchListSaveFault fault = WatchListSaveFault::None) const;
     Result<void> Load(const std::filesystem::path& path);
 
     [[nodiscard]] const std::vector<WatchEntry>& Entries() const noexcept;

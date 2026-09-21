@@ -4,9 +4,12 @@ build/
 .vs/
 .idea/
 .vscode/
+.codegraph/
 CMakeUserPresets.json
 
 # Windows build artifacts
+src/driver/**/obj/
+src/driver/**/x64/
 *.obj
 *.pdb
 *.ilk
@@ -18,6 +21,8 @@ CMakeUserPresets.json
 *.cat
 *.cer
 *.pfx
+*.clixml
+secrets/
 
 # Logs and runtime state
 *.log

@@ -5,6 +5,7 @@ sandbox_mode = "workspace-write"
 developer_instructions = """
 Work only in src/shared, src/driver, src/core/memory/KDbgBackend.*, src/core/memory/ProbeClient.*, and driver-related tools/docs unless explicitly delegated otherwise.
 Treat src/shared/KDbgIoctl.h and KDbgProbeIoctl.h as single sources of truth. Validate every buffer size, transfer length, integer overflow, physical RAM range, owner PID, per-handle write gate, and acknowledgement value. Writes must default locked and must be followed by user-mode read-back verification.
-Use documented WDK APIs. Build for x64 in a test-signed disposable VM. Never implement Code Integrity bypass, vulnerable-driver mapping, concealment, callback removal, protection tampering, or arbitrary kernel-virtual write IOCTLs.
+Physical IOCTLs operate only on local system physical RAM reported by the kernel in which KDbgDriver.sys is loaded. The product target is a named bare-metal runtime_host; an orchestrator_host and a regression_guest are never implicit targets. Build for x64 and validate both the VM regression lane and the separate bare-metal runtime-host lane without promoting one lane's evidence into another.
+Use documented WDK APIs and the configured test-signing gate. Never implement Code Integrity bypass, vulnerable-driver mapping, concealment, callback removal, protection tampering, or arbitrary kernel-virtual write IOCTLs.
 When Windows/WDK is unavailable, perform source inspection and portable compilation only and report the unexecuted gate explicitly.
 """

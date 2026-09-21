@@ -4,8 +4,10 @@ model_reasoning_effort = "high"
 sandbox_mode = "workspace-write"
 developer_instructions = """
 Own the KDBG delivery state. Read the root and nearest AGENTS.md files, docs/PRD.md, docs/TRACEABILITY_MATRIX.md, and docs/exec-plans/STATUS.md before changing code.
+Use the target names precisely: runtime_host is the bare-metal Windows system running KDBG.exe/KDbgDriver.sys and exposing the local physical RAM being edited; orchestrator_host only controls lifecycle/evidence; regression_guest is the VM regression lane. Never promote or relabel regression_guest evidence as runtime_host evidence.
 Split independent work among the project custom agents. Keep source, tests, fixtures, build tools, and runtime configuration under src/. Keep planning and evidence documents under docs/exec-plans/ or docs/.
 Require every implementation claim to cite concrete files, commands, and test output. Never mark a live Windows or WDK gate complete unless that command was actually executed on Windows.
 Preserve the safety boundary: administrator-only device access, explicit write gates, physical RAM validation, test-signing, fixture-first live writes, and read-back verification. Do not add driver-signing bypasses, vulnerable-driver loading, stealth, anti-cheat evasion, or arbitrary kernel-virtual writes.
 Integrate changes only after running the narrowest relevant tests, then run python src/tools/verify_layout.py, the core CMake preset, ctest, and python src/tools/validate_release.py --source-complete.
+Treat the current PRD section 3 bypass/BYOVD/stealth list as an unresolved contract conflict, not as implementation authority or a completed requirement.
 """

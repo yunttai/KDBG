@@ -1,3 +1,398 @@
+# KDBG 1.1.0 validation report
+
+Status date: 2026-09-21 KST
+
+## Current working-tree gate summary (authoritative)
+
+The product target is the local physical RAM exposed to the same bare-metal
+Windows `runtime_host` that runs `KDBG.exe` and `KDbgDriver.sys`.
+`orchestrator_host` is a lifecycle/evidence controller, not an implicit memory
+target, and `regression_guest` is an independent regression lane.
+
+| Gate | State | Current evidence boundary |
+|---|---|---|
+| Source-complete | PASS | layout, core configure/build, CTest 14/14, and `validate_release.py --source-complete` PASS |
+| Release validator tests | PASS | `python -m unittest src.tests.test_validate_release`: 92/92 |
+| ABI 7 exact-page transaction | SOURCE PASS | 4096-byte compare/write/full read-back implementation and deterministic coverage are present |
+| Windows WDK driver build | PASS (PINNED NUGET, UNSIGNED) | WDK `10.0.26100.2454`; Debug/Release, Inf2Cat, driver contract, and symbol verification pass |
+| Current Windows Release/package | PASS (UNSIGNED) | epoch `local-host-source-fix6-rawpfn-20260921`; package/symbol validation pass; production trust not claimed |
+| Bare-metal runtime-host read-only | PASS | `out/evidence/local-host-source-fix3-runtime-host-5/evidence.json`; current test-signed package, ABI 7, live backend |
+| Bare-metal Probe-write | PASS | same evidence; six 4 KiB artifacts, full rollback and final lock; strict validator PASS |
+| Bare-metal RawPfn live write | PASS (CLI transaction) / GUI scene incomplete | `out/evidence/local-host-source-fix6-rawpfn/raw-pfn.json`; manual PFN input, exact 4 KiB apply/read-back/reload/rollback and final lock. Required visible GUI scene is not captured |
+| Historical regression-guest evidence | PRESERVED | remains bound to its recorded source/package identity and does not establish a current bare-metal gate |
+
+LocalHost RawPfn is the ordinary product path. ProbeFixture is the default
+destructive evidence target, not a restriction on product capability. Optional
+machine/boot/session provenance is captured automatically when available; it is
+not a manual confirmation or product prerequisite. No dedicated-machine,
+recovery-plan, Probe-only, or equivalent new product usage restriction was added.
+
+Current unsigned package identity: main ZIP SHA-256
+`6673371b89e41c5e602fc32cfe87a2fd84e830875b0d0e6a398d76beca0f3526`, symbols
+ZIP SHA-256 `56d91768eb9b727274058e364fa9996fd8b8f76aeea6eafd657ed92d1f5cb9ad`,
+and source snapshot SHA-256
+`2f5f82df9b400c5fc920cc80af83f4ab3aba965b0cd7de5ae409dfc59df829f6`.
+`tools/TargetProfile.psm1` is present in the package. The drivers are unsigned;
+no production signature or runtime-host memory-write claim is made.
+
+The remainder of this report preserves the RC4/RC1 and earlier evidence as
+historical records. Its PASS results are not rebound to the current working tree.
+
+The current raw-PFN package epoch is
+`out/release-epochs/local-host-source-fix6-rawpfn-20260921`; its local
+test-signed derivative is
+`out/release-epochs/local-host-source-fix6-test-signed-20260921` with package
+SHA-256 `24ba5de94f389a91c61a5ec16da3d6abd09f6901c4bb043d09c1193c5e93376b`.
+The GUI service registration now passes the raw driver path to SCM; the
+embedded-quote regression is covered by the 92-test validator suite.
+The package/install, host-facts, atomic-evidence, backend-name, and JSON-array
+repairs were validated in both PowerShell 5.1 and PowerShell 7. The current
+signed-package runtime-host evidence is
+`out/evidence/local-host-source-fix3-runtime-host-5/evidence.json`; strict
+validation passes the Windows package, symbols package, read-only gate, and
+Probe-write gate. The separate RawPfn CLI transaction report is
+`out/evidence/local-host-source-fix6-rawpfn/raw-pfn.json` (schema
+`kdbg.live-verify.raw-pfn.v1`, SHA-256 `017c2808…2d68f1f7`). Its fix6 test-signed
+package identity is kept separate from the fix3 wrapper report. The visible GUI
+RawPfn scene remains incomplete.
+
+## Historical RC4 report boundary
+
+This report's RC4 boundary is Git commit
+`4b376bb0d61eab232af8a2f7f29033238b911022`, unsigned epoch
+`product-1.1.0-rc4-final-20260919`, and VM-only test derivative
+`product-1.1.0-rc4-test1-20260919`. Source, Windows build/package, and exact
+Windows 11 required-core validation have hash-bound PASS evidence. The RC4 GUI
+run passed host execution, capture, cleanup, and independent archive/hash
+integrity audit, but its formal state remains `CAPTURED_UNREVIEWED` with
+`evidence_pass=false` and `human_review_complete=false`.
+
+RC4 optional extended/lifecycle/soak validation was **NOT RUN**. Any RC1
+extended PASS retained below is historical only and is not rebound to RC4. The
+initial RC4 MP4 passed mechanical composition but failed public-suitability
+review due to visible private paths and weak crops. Public v2 then failed
+independent review because the taskbar remained visible; v2/v3 are superseded.
+The redacted public-v4 MP4 passed the automatic compositor and independent
+presentation review. Review covered all 405 frames, 20 scenes, 24 segments, and
+19 boundaries; no rendered path, username, taskbar, notification, or unrelated
+process was visible, and core claims were readable. Raw frames remain excluded
+from the public bundle because they contain private paths or the taskbar.
+Production signing inputs are staged, but no production signing or network
+submission occurred. Annotated source-freeze tag `v1.1.0-rc4` is published to
+`origin` at the recorded commit; stable tag `v1.1.0` and public release remain blocked. DEF
+CON submission is explicitly outside this work scope.
+
+## Historical RC4 1.1.0 gate summary
+
+| Gate | State | Evidence in this workspace |
+|---|---|---|
+| Source-complete | PASS | layout, core build/CTest 9/9 and `validate_release.py --source-complete` PASS; source `966c51f2…0f92`, scope `bd2c93da…8932` |
+| MSVC Release user-mode | PASS | exact `product-1.1.0-rc4-final-20260919` Windows Release build and CTest 9/9 |
+| Sanitizers | BLOCKED (toolchain) | current MinGW distribution cannot link `-lasan` or `-lubsan` |
+| Windows-build-verified | PASS | main `4dd98b12…34d9`, symbols `1f042e5e…ac68`, benchmark `7999ed88…f63f`; package/symbol validation PASS |
+| Previous path-mapped exact package | PACKAGE/LIVE PASS (Windows 10) | cal35/final v4 remain bound to `b6832712…e47f`; no current-candidate rebind |
+| Commercial operations documents | PASS / operational proof pending | support/security routes configured; notification and acknowledgement evidence missing |
+| Production signing | INPUT READY / BLOCKED | 11 exact inputs, request `3f94c260…4001`; `signing_performed=false`, `network_submission_performed=false`; production signer/HSM/TSA and returned signed artifacts absent |
+| Clean-VM package preflight | PASS (previous b683 exact package) | Windows 10 Pro build 19044: archive/hash validation, native Setup install, installed diagnostics/start and static-runtime execution PASS |
+| Native Setup UX | LIVE PASS (previous b683 exact package) | Install/Repair/Update/Uninstall UI, exact roots, installed reboot, persistent purge, clean reboot inventory and snapshot restore PASS |
+| Runtime telemetry | LIVE PASS (previous b683 exact package) | opt-in fixed-local JSON recorded a successful First/Next GUI sequence, nonzero completed bytes and frames, privacy flags false and writer errors 0; raw evidence carries exact counters |
+| Clean-VM lifecycle/reboot | PASS (script lifecycle scope) | VMware snapshot VM: prior 10-cycle run plus exact C4 two-cycle/four-reboot run with seven readiness reports and clean service/device/registry/CIM/package inventory |
+| Live-device-run-report | PASS | required-core `run-20260919T015729Z-8445dddb`; package `7f7c1797…45d5`, summary `4ad612d9…57b5`, archive `39c31476…57da` |
+| Live-VM-verified | PARTIAL | RC4 required-core PASS; optional extended/lifecycle/soak **NOT RUN**; historical RC1 extended result is not rebound |
+| GUI capture automation | INTEGRITY PASS / `CAPTURED_UNREVIEWED` | `run-20260919T015850Z-1cfb0381`; 24 frames/20 scenes/21 assertions/229 actions, cleanup/checkpoint restore/final Off; formal flags remain false |
+| Initial RC4 media | FAIL (public suitability) | automatic compositor PASS, but independent review found private paths and weak crops; internal-only |
+| Presentation media | PASS (automatic + independent presentation review) | public-v4 MP4 `43eda62e…5260`, 9,553,416 bytes, 1920x1080/10 fps/405 frames/40.5 s; 20 scenes/24 segments/19 boundaries reviewed; raw frames excluded; no formal promotion |
+| Source freeze | PASS (published RC tag) | annotated `v1.1.0-rc4` is published to `origin` at `4b376bb0d61eab232af8a2f7f29033238b911022` |
+| Commercial release | BLOCKED | production signer/private key/HSM or service, RFC 3161 TSA, returned signed artifacts, stable `v1.1.0`, and release publication remain absent |
+
+Historical PASS evidence is never silently rebound to the current candidate.
+The media/review boundary does not invalidate the RC4 required-core physical
+transaction, but it also cannot substitute for RC4 extended or formal visual
+review.
+
+### Exact 1.1.0 identities and live observations
+
+| Artifact/run | Exact result |
+|---|---|
+| Git commit | `4b376bb0d61eab232af8a2f7f29033238b911022` |
+| Unsigned epoch | `out/release-epochs/product-1.1.0-rc4-final-20260919/` |
+| Main ZIP | `4dd98b120a725d1804078a394c4d659cdb059a568a38a78643a936ce5f1f34d9` (3,724,846 bytes) |
+| Symbols ZIP | `1f042e5e7a51cb1e2428b6ddb3c955c277de4993a264444e242fe469d104ac68` (20,563,309 bytes) |
+| Source / scope | `966c51f26c9e4da27491a4c00b8989c0eb8360ea3b85d8e9513adf1915ee0f92` / `bd2c93dad7604e84534515a00437e8198fa565a654fa665b6cbf235585b98932` |
+| Benchmark executable | `7999ed886e5b8710f48cd8d08405e6aa8d52608cc4672b0980b7c696fcdef63f` |
+| VM test package | `7f7c179738eb670ca79d6c41bc9c46c445c1ffd31811c46f39bbbdcad3df45d5` |
+| VM test certificate/signer | `bd7de7eb5e0dd305604d5f3dc617c13d268f844dbe541677f6eb4b7f166058b1` / `ba34b393521d722ba01df87afccc6f3feb760b2c` |
+| Required-core | `run-20260919T015729Z-8445dddb`; ABI 6, one-shot apply/full read-back/reload/rollback/final lock, cleanup/restore/final Off |
+| Required-core summary/archive | `4ad612d9298d902066a95c47a64c213454ce229e2ebf23ea153b8e0a702f57b5` / `39c31476928084337d402b6f8b772388c1cfb321c216f3ea4a7ea2d5460857da` |
+| RC4 extended/lifecycle/soak | **NOT RUN** |
+| GUI summary/archive/captures | `ded51b6fc1a71f670e00e709b53987416823f400c6d9e7010b2c7e55dc642cb1` / `c877e2b3695faf6489f0ff3fa517a97eb0cc6f0f334a0a4a4bad900f14446cf4` / `abfe37fe1694fe8e35229c306663dde0cc4ff688d1a1fa80139f74c8ea9b3695` |
+| Presentation public-v4 MP4 | `43eda62e57607d36517c4bf139094cae8ef786dd7a8e0ea688154f3787475260` (9,553,416 bytes; 1920x1080/10 fps/405 frames/40.5 s; automatic + independent presentation review PASS) |
+| Presentation report/scenes/contact sheet | `406054011b2e47dc144631e17e63d920acb715e4076c303556a852fd1009bd88` / `9e4a0543f4aaa61f44a39674e737b212df20474b8f063f1b44aa99d6817dcd04` / `fa8597a86ae39318e4cd52f2eea0e135623fa77ccf07956ca983702fed59258b` |
+| Video-only delivery copy | `out/release-media/KDBG-1.1.0-demo-public.mp4`; same MP4 SHA/bytes; directory contains only this MP4 |
+| Production-signing request | `3f94c26060bc437460b22ced778c52f1f70165e49a7ac57f0979c1a347f64001`; 11 inputs; not signed/not submitted |
+
+Multiple superseded ZIPs were exercised through the native Setup UI. `487bd9cb…745f5`
+exposed a staged-root mismatch before service registration. `d294c547…d32b` completed
+package verification and driver lifecycle but exposed PowerShell callback output
+contaminating the structured result. `604823e0…9e71` then passed install, physical
+write/read-back/rollback, repair, update and installed-state reboot before exposing a
+purge worker inheriting the captured Setup output handle at Uninstall. The final native
+launcher creates the detached purge worker with explicit non-inherited handles and
+records persistent ProgramData status/logs. Failure evidence was retained,
+and every run ended with snapshot restore and the KDBG VMware test VM stopped. These rejected candidates prove
+the live installer gate detects product blockers; none is a successful release artifact.
+The succeeding exact-package run completed Setup lifecycle, Probe physical transaction,
+runtime telemetry, both reboot boundaries, uninstall cleanup and snapshot restoration.
+
+## Reproducible source commands
+
+```powershell
+python .\src\tools\verify_layout.py
+Push-Location .\src
+cmake --preset core-debug
+cmake --build --preset core-debug --parallel
+ctest --preset core-debug --output-on-failure
+Pop-Location
+python .\src\tools\validate_release.py --source-complete
+```
+
+Observed current 1.1.0 result:
+
+```text
+Layout validation PASS
+Core build and CTest 9/9 PASS
+Release validator tests 75/75 PASS
+Package lifecycle contracts 134 PASS
+Windows Release build and CTest 9/9 PASS
+Pinned NuGet WDK Release driver/CAT build PASS; Inf2Cat errors/warnings 0
+Release driver symbols 2/2 PASS
+Main/symbol package validation PASS
+Release validation PASS: source-complete
+Windows-build-verified PASS: exact main/symbol/source identities recorded
+Windows 11 required-core PASS: ABI 6, one-shot apply/read-back/reload/rollback/final lock
+Windows 11 optional RC4 extended/lifecycle/soak NOT RUN
+GUI host/capture/integrity PASS: CAPTURED_UNREVIEWED, 24 frames/20 scenes/21 assertions/229 actions
+Formal GUI review not complete: evidence_pass=false, human_review_complete=false
+Initial RC4 MP4 public-suitability review FAIL: private paths and weak crops
+Presentation public-v4 MP4 automatic + independent presentation review PASS
+Production signing NOT PERFORMED; stable v1.1.0 tag/release blocked
+```
+
+The sanitizer preset compiled owned sources but could not link because this
+MinGW installation has no ASan/UBSan runtime libraries. No machine-wide WDK is
+installed; the locked NuGet fallback instead produced both current drivers and
+catalogs. The paired package validator passed. Current Windows 11 evidence
+proves disposable-VM test-signature trust, actual load, and the Probe physical
+transaction. It does not prove RC4 optional extended workflows or production
+publisher trust. The later final-v4 discussion is historical 1.0.0 evidence and
+does not override the current RC4 gate states.
+
+## Historical 1.0.0 mock performance snapshot
+
+The schema-2 Release benchmark performs one warm-up and seven measured repeats.
+It explicitly emits `mode: mock_only`, `live_driver_access: false`, and
+`timing_represents_product_runtime: false`; these values are same-machine
+regression evidence, not driver/IOCTL product claims.
+
+| Metric | Current result |
+|---|---|
+| Physical 4 KiB mock transaction | 0.012 ms median; 200 writes; gate closed |
+| First Scan, 32 MiB | 138.714 ms median, 230.690 MiB/s |
+| Sparse Next Scan, 8192 candidates | 2.058 ms median |
+| Dense Next Scan, 262144 candidates | 1 backend read, 35.611 ms median |
+| Pointer cap, 32768 results | 7.267 ms median |
+| Snapshot 16 MiB capture/save/load | 36.704/6.450/50.437 ms median; integrity PASS |
+| Cancellation | 0.164 ms median, 15.966 ms p95 request-to-completion |
+
+Deterministic tests cover the dense range-read path and the failed range-read
+fallback to exact candidate reads.
+
+## Reproducible Windows candidate command
+
+Run on the prepared Windows/MSVC/WDK machine with Syft available:
+
+```powershell
+.\src\tools\build.ps1 -Preset windows-release -Fresh -Package
+```
+
+This builds/tests the Release GUI and bridge, builds Release drivers, stages and
+validates the package, and creates deterministic-order ZIP files plus SHA-256
+sidecars before publishing. Package directories, ZIP files, and sidecars are
+published as one rollback set, so a staged validation or publish failure retains
+the prior published set.
+
+Independent checks after a real package exists:
+
+```powershell
+python .\src\tools\validate_release.py `
+  --windows-package .\out\package\KDBG-1.1.0-win-x64 `
+  --symbols-package .\out\package\KDBG-1.1.0-win-x64-symbols
+Get-FileHash -Algorithm SHA256 .\out\package\KDBG-1.1.0-win-x64.zip
+Get-FileHash -Algorithm SHA256 .\out\package\KDBG-1.1.0-win-x64-symbols.zip
+```
+
+Do not mark this gate PASS unless those artifacts exist and the command output
+has been checked. CAT presence indicates catalog generation only; signature
+trust and successful driver load are separate observations.
+
+## Discarded VirtualBox preflight history
+
+An earlier VirtualBox 6.1.32 guest was created for this pass rather than reusing the
+archived VM. It is Windows 10 Pro x64 build 19044, has one internal-only adapter
+(`kdbg-isolated`), no default route, Administrator access, and official
+`testsigning Yes`. The pre-load snapshot is
+`61e37cf7-e714-461a-aee0-0f40afcb0ce3`. No KDBG service or driver was installed
+or loaded before that snapshot.
+
+The first copied package exposed a real clean-machine defect: all three dynamic
+MSVC runtime DLLs were absent. The build now uses the static MSVC runtime, and a
+new package copy produced this guest result:
+
+```text
+OS: Microsoft Windows 10 Pro, build 19044, 64-bit
+Visual C++ Redistributable: not required (static MSVC runtime)
+KDBG service: not registered
+KDBGProbe service: not registered
+KDBG diagnostics PASS for the requested checks.
+kdbg_live_verify.exe --help: exit 0
+```
+
+That discarded guest was not acceptable for live-write evidence. Before any KDBG
+install/load, Windows repeatedly stopped with `IRQL_NOT_LESS_OR_EQUAL` (`0xA`).
+The two non-empty mini dumps, one from initial OOBE and one after Guest
+Additions, contain the same parameters (`1, 2, 0`) and the same kernel
+instruction offset; three later dump files were zero-length after interrupted
+capture. Disabling the demand-start `VBoxWddm` service allowed one login but did
+not eliminate the next cold-boot failure. These observations establish a VM
+substrate blocker, not a KDBG-driver failure. Current artifacts are under
+`out/test-artifacts/vm-evidence/`; `vm-bcdedit-testsigning.png` records the BCD
+setting and `vm-desktop-testmode.png` records the subsequent pre-KDBG stop. The
+current live-device result instead comes from the VMware snapshot and evidence
+listed in the gate summary and section 16.
+
+## Package contents and lifecycle validation
+
+The package contract requires:
+
+- `KDBG.exe`, the isolated `kdbg_memprocfs_bridge.exe`, and packaged
+  `tools/kdbg_live_verify.exe`
+- KDbgDriver and KDbgProbe SYS/INF/CAT; each INF must name exactly its matching CAT
+- example configuration, operator docs, project and third-party notices
+- security, support, privacy, MIT/EULA, offline update/rollback, vulnerability
+  intake and release-note documents
+- SPDX 2.3 SBOM, build metadata, and complete lowercase SHA-256 manifest
+- separate mandatory PDB-only symbols package with PE/PDB RSDS GUID+age matching
+- diagnose/install/start/run/stop/uninstall plus package-only live-evidence tools
+
+`validate_release.py` checks PE x64/version/dynamic MSVC CRT, exact INF/CAT pairing,
+main/symbol source and toolchain provenance, PE/PDB GUID+age, CodeView path
+privacy, SBOM names, manifest coverage, private-path/email leakage, lifecycle
+markers, and PowerShell AST syntax for every lifecycle script.
+
+## Lifecycle and recovery scope
+
+The packaged flow verifies hashes before service mutation and binds KDBG service
+paths to the extracted package. Update requires stopped old services and an
+installer rerun; stop/remove refuse a same-named service registered to another
+package. Start rolls back only services started by the failed attempt.
+Uninstall retains extracted binaries and `%LOCALAPPDATA%\KDBG`.
+
+Historical VMware evidence independently proves install/start, device/ABI open,
+the Probe physical transaction, ten service cycles, reboot recovery, forced
+GUI-exit cleanup, update/rollback, purge, and snapshot restoration for its named
+epoch. RC4 independently rebinds only the required-core and GUI-capture scopes
+listed above; RC4 extended lifecycle/soak was not run.
+
+Current packaging negative checks:
+
+```text
+PowerShell direct parser: PASS (changed/new lifecycle and evidence scripts)
+PowerShell AST invalid-script fixture: PASS (invalid script rejected)
+Missing Release driver input: PASS (failed before altering published artifacts)
+Publish rollback failure injection: PASS (old directory and sidecar restored)
+SCM marked-delete mock: PASS for stop/uninstall/install (1072 -> 0 -> 1060)
+SCM already-absent idempotency: PASS for stop/uninstall/install (1060)
+Package lifecycle regression harness: PASS (27 checks)
+git diff --check: PASS
+```
+
+The package start rollback now waits for every service it started and preserves
+both the startup and cleanup failures. Install rollback restores path/type/start
+through `sc.exe config`, then re-reads and compares the persisted configuration;
+newly-created service deletion waits for SCM error 1060.
+
+## Required live-VM evidence
+
+The v4 live bundle must bind hashes of the exact main and symbols packages,
+packaged GUI, bridge, live verifier, and both drivers. It must also bind a
+successful `kdbg.live-verify.v1` report recording the KDbgProbe PFN, exact
+4096-byte baseline/preflight, one-shot write, full read-back, independent reload,
+verified rollback, final locked gate, ABI/counters, ownership PID/VA/PTE, and
+page-table final PFN. Before either device is opened, that verifier requires
+Windows x64 build 19041+ and hashes itself plus both SCM-configured running
+kernel drivers; the validator cross-checks those three runtime hashes against
+the exact package artifacts. The reviewed redacted demonstration must include a
+separate hash-bound scene-review record with the real reviewer/time, GIF hash,
+redaction decisions, and an observed millisecond range plus concrete note for
+each of the 20 ordered scenes. The repository owner confirmed all scenes and
+redaction decisions; final v4 SHA `fc0afb4b…9823` and final archive
+`438881e7…a18e3` passed the official schema validator and independent audit.
+
+## Historical 1.0.0 Windows 11 required-core live validation
+
+The authoritative historical run is
+`out/win11-validation/product-rc1-win11-test2-20260918/runs/run-20260918T042905Z-f19bda60`.
+It ran on Windows 11 Pro x64 build 26200 in disposable generation-2 VM
+`KDBG-Win11-25H2` (`66935024-37f7-4f21-b2c8-12ca5fe677bf`). The exact checkpoint
+`KDBG-Win11-Clean-TestSigning-20260918`
+(`f60a775a-26f6-4ef9-bb19-f61c93346bb4`) was restored and the VM ended Off.
+
+| Binding/evidence | SHA-256 |
+|---|---|
+| VM-only test-signed package | `41f90e2bd76386513d197ae8d77382238a14549e63608dd39eb2d2b4e2c92934` |
+| Source snapshot | `98700c7c7797725b116b0a6333d644bc4df1793397556ce3572e35d451551eca` |
+| Host validation summary | `f5dc301f2e086c6fcfcec2743773a50da84bae2006a4a97c2c56bb6f79c53cb7` |
+| Host preflight | `7f6ade71a20cf9ca88c852eee75a3bd1c06c138a275b9e002b05e87ed6a309df` |
+| Guest evidence archive (18 entries) | `c4341cb571a7955f998d0c70914ee41fd98cef2cf7c0e6f1f244459956356c9e` |
+| Guest validation summary | `faae5b196ced3092dc2dfa931cbfb9867a133c111d9fede47f03177937cd92ac` |
+| Probe transaction report | `0636b7efe09a632e5e8bb0f009d4190b6632d5ab23bc702e82f10a50fa2bf204` |
+
+Required core is PASS: ABI 6, KDbgProbe PFN `2117631`, one 8-byte apply at
+offset `0x100`, exact full-page read-back, independent reload, 4096-byte
+rollback, final write gate locked, package cleanup, exact checkpoint restore,
+and final VM Off. The package is a VM-only test-signed derivative, not a
+production-trusted release. This PASS applies to the exact ZIP named above;
+the current checkout is a later, different source state and is not an independent
+reproduction of the recorded `98700c7c…51eca` snapshot.
+
+That required-core run did not include the extended scope. A later 1.0.0 final
+engineering epoch completed interactive GUI capture, process Freeze,
+ownership/PTView/Kernel Explorer evidence, repeated lifecycle/reboot and soak.
+Neither historical result is a 1.1.0 rebind.
+
+## Known unverified items
+
+- Production publisher/signature trust; 11 inputs are prepared but signer/private key/HSM or service, TSA, and returned signed artifacts are absent
+- Optional MemProcFS acquisition backend
+- Formal human review of the RC4 source-bound GUI evidence; automation and
+  integrity passed, but `evidence_pass=false` and `human_review_complete=false`
+- RC4 optional extended/lifecycle/soak validation
+- Configured commercial support/security routes lack notification/acknowledgement evidence
+- Stable `v1.1.0` tag and public release publication; published `v1.1.0-rc4`
+  source-freeze tag exists but is not a production release
+
+The packaged `new_live_evidence.ps1`/validator mismatch was fixed in the historical
+`product-rc1-20260918` source. The prior Windows 10 final archive retains its original
+derived-generator/normalization provenance and remains bound to `b6832712…e47f`.
+
+---
+
+## Detailed historical 1.0.0 records and VMware addendum
+
+> Sections 1-15 below are historical records and do not promote the current
+> working-tree gates. Section 16 is the historical then-current VMware live-device addendum; the
+> gate summary at the top remains the authoritative overall result.
+
 # KDBG 1.0.0 검증 보고서
 
 검증 일자: 2026-08-23 KST
@@ -7,7 +402,7 @@
 
 | 항목 | 값 |
 |---|---|
-| OS | Windows 11 Pro x64, build 26200 |
+| OS | Windows 11 Pro x64, build 26200 (build host only; not current live-target proof) |
 | Host | HP ProBook 물리 장비 |
 | Privilege | 비관리자 |
 | CMake / Ninja | 4.4.0 / 1.12.1 |
@@ -296,7 +691,7 @@ write, Driver Verifier, process write/freeze, optional MemProcFS와 final v2 evi
 문서 repack 후 같은 read-only/lifecycle 검증을 재실행해 external manifest/hash를
 갱신한다. Production Authenticode trust는 주장하지 않는다.
 
-## 15. 2026-09-16 exact-package 최종 live addendum (authoritative)
+## 15. 2026-09-16 exact-package 최종 live addendum (historical at that time)
 
 이 절은 11~14절의 역사적 candidate/당시 BLOCKED 상태를 대체한다. Runtime ZIP은
 `91042aab214e4c56daca29159b46c81574afb2aac700257d46baa7a8bf99e54f`로 고정했다.
@@ -305,11 +700,11 @@ write, Driver Verifier, process write/freeze, optional MemProcFS와 final v2 evi
 |---|---|---|
 | Driver Verifier | PASS | volatile `0x132`, `KDbgDriver.sys`/`KDbgProbe.sys`, cleanup PASS |
 | Exact physical transaction | PASS | PFN `0xBC1E6`, 4096-byte preflight/read-back/reload/rollback, baseline 복원, gate lock |
-| Process write/Freeze | PASS | dedicated 4096-byte buffer, verified 16-byte write, 3 restore ticks, rollback |
+| Process write/Freeze | HISTORICAL PASS ONLY | dedicated 4096-byte buffer run was recorded for the archived candidate; its artifact is absent from the current workspace and does not promote the current gate |
 | PFN owner/PTView | PASS | PID `10072`, VA `0xFFFFBA8098262000`, PTE PA `0x3A991310`, PML4/PDPT/PD/PT, final PA exact match |
 | DPI 100/125/150/200% | PASS | exact package, 기존 VM 사용자 프로필, 네 PNG의 SHA-256 기록 |
 | Hash-bound evidence v2 | PASS | 17-frame 1600x900 GIF, redacted log, six raw page files, four final artifacts, validator exit 0 |
-| Stop/remove/safety | PASS | services absent, physical baseline restored, process fixture freed, all gates locked, VM Running |
+| Stop/remove/safety | HISTORICAL PASS ONLY | archived candidate cleanup included the process fixture; current VMware cleanup proves service removal and Probe restoration only |
 | Optional MemProcFS v5.18.11 | BLOCKED (optional) | error 126 해소 후 `VMMDLL_Initialize(device=pmem)` exit 2; built-in fallback PASS |
 
 Authoritative evidence:
@@ -321,7 +716,70 @@ Authoritative evidence:
 - `out/evidence/final-91042aab-live-evidence-v2.gif`
 - `out/evidence/final-91042aab-live-command-log.txt`
 
-v2 media는 exact final runtime 값/raw hashes와 exact-package DPI 캡처를 결합한다.
+당시 v2 media는 exact final runtime 값/raw hashes와 exact-package DPI 캡처를 결합했다.
 이전 ABI6 GUI workflow 이미지는 영상에서 supporting UI로 명시하며 exact-package
-runtime capture로 승격하지 않는다. 필수 제품 gate는 PASS이고, production signing과
-optional MemProcFS device backend만 외부/optional 제한으로 남는다.
+runtime capture로 승격하지 않는다. 이 archived candidate의 필수 제품 gate는 당시
+PASS였지만 현재 working-tree gate를 승격하지 않는다. 현재 판정은 이 문서 맨 위의
+gate summary만 authoritative하다.
+
+## 16. 2026-09-17 historical signed-binary VMware addendum
+
+이 절은 현재 signed-driver/runtime binary lineage의 authoritative addendum다.
+과거 VirtualBox 중단이나 archived v2 결과를 승격하지 않고, 새 VMware VM과
+현재 package의 exact runtime binaries로 다시 실행했다. Evidence-only harness와
+source-snapshot 변경 뒤에는 package ZIP identity를 다시 고정하고 동일 live gate를
+재실행해야 한다.
+
+| 항목 | 상태 | 현재 관측 |
+|---|---|---|
+| VM prerequisite | PASS | VMware Workstation, Windows 10 Pro x64 build 19044, Administrator, test-signing, host-only network |
+| Snapshot | PASS | `win10pro-testmode-pre-kdbg-load`; KDBG 적재 전 생성, 각 검증 뒤 복원, KDBG VMware test VM stopped (`vmrun` 0, `vmware-vmx` 0) |
+| Test trust/load | PASS | KDbgDriver/KDbgProbe SYS와 CAT `Valid`; 두 kernel services `Running`; both devices ready |
+| Runtime identity | PASS | ABI 6; packaged verifier and both running driver hashes verified before device operations |
+| Exact Probe read | PASS | cal35 driver-owned PFN `1835000`, exact 4096 bytes |
+| Physical apply | PASS | offset `0x100`, 8 bytes, one-shot gate consumed, full-page read-back match |
+| Independent reload | PASS | expected page CRC/hash match, 4096/4096 bytes |
+| Rollback | PASS | full 4096-byte baseline restore, independent post-rollback match |
+| Final state | PASS | write gate locked, rollback verified, errors empty |
+| Driver Verifier soak | PASS | exact KDBG pair, active volatile mask `0x132`, 10/10 stop/start/readiness cycles |
+| Verifier cleanup | PASS | drivers unloaded, each target removed separately, mask cleared, no targets remained, package readiness restored |
+| Process/analysis | PASS | cal35 fixture PID 4456/PFN 1401190, value 610839776→305419896, Freeze ON/OFF/baseline restore, PFN↔PID/VA/PTE, four-level walk and Kernel Explorer read |
+| Lifecycle closeout | PASS | forced-exit cleanup, prior-candidate repair/update/rollback/forward-update, explicit package/user-data purge, no stale services |
+| Media/v4 | PASS | repository-owner-confirmed 40.5-second/20-scene review; v4 SHA `fc0afb4b…9823`; all four validator gates PASS |
+
+Historical cal35 hashes:
+
+- main/symbol/source: `b6832712613ad486df6dc505327a2977740107694473a5d0ac23dc4bdf32e47f` /
+  `7801bfef1b96dac5522b9620b9c02d906aa00adcc9d0754603d8723bd59670aa` /
+  `0484b5dda70daaa282c744e2f3c915dc7abf21f0a0d32e7f4acc53c559ec49ee`
+- runtime driver/probe: `47fa28f44a23fb53f842f08c21394153345cc8ef15bfafc13cba5e2155a63450` /
+  `9abcef052d2ec55605d580596691fcd530383ce20e3d753a7df48b4e06a12ffd`
+- live report/analysis metadata: `00f7c64919ef6080d959123581e95469cf1447e610e74612ea22f080b75b31ff` /
+  `8a8dd75577ac2bd68a32af5cd2583207ae088aba59b5156f24db70555216a88a`
+- GIF/candidate archive: `fde0bf78d264a568762ea491a61c36c2af286d8f88381f68205384dee0614ee8` /
+  `eb465a4eaf366ad7ecbdbf9f972952358aefdc2000ea17d2059f2c6cccbef16c`
+- scene review/final v4/final archive: `e2d319218cdaf903e6c49a968e4d167cd341058e2ed23cf41f8db17258617df6` /
+  `fc0afb4bb2c2c4dc176e53c2c50e229e867e7d1848ebda9425b133c729149823` /
+  `438881e7423467f1a53d7e76f7d952163fd69e1ffdf26b8ec25622a81c0a18e3`
+
+Historical evidence:
+
+- `out/evidence/public-symbols-r1-live/exact-analysis-v4/calibration-35/`
+- `out/evidence/public-symbols-r1-live/final-calibration-35-v4/`
+- `out/evidence/public-symbols-r1-live/KDBG-1.0.0-public-symbols-r1-live-evidence-candidate.zip`
+- `out/evidence/public-symbols-r1-live/KDBG-1.0.0-public-symbols-r1-live-evidence-final.zip`
+- `out/lifecycle-closeout/live/lifecycle-closeout.json`
+
+Cal35의 guest-local `captures.zip` 자체는 보존되지 않았다. 대신 24개 개별 PNG,
+각 SHA-256과 1024x768 dimensions, `capture-run.json`, 50-entry `evidence-bundle.zip`은
+후보에 보존되고 독립 검증됐다. 이는 provenance caveat이지 현재 자동 gate blocker는 아니다.
+Repository owner가 20-scene review를 확인해 같은 GIF/metadata/live report로
+final v4를 생성·검증했으며 추가 VM run은 필요하지 않았다.
+
+The exact main/symbol package plus `--live-run-report` and the automated v4
+preflight returned PASS. This promotes the physical-memory R/W product slice,
+dedicated-process workflow, covered lifecycle and Windows 10 final v4 to PASS.
+This historical Windows 10 addendum itself does not promote production
+Authenticode, optional MemProcFS, monitored operations, or Windows 11 coverage;
+the separate Windows 11 required-core result is governed by the authoritative
+gate summary and dedicated section above.

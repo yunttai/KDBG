@@ -6,6 +6,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <optional>
 #include <vector>
 
@@ -23,6 +24,7 @@ enum class ProcessMemorySessionState {
 class ProcessMemorySession {
 public:
     static constexpr std::uint32_t kMaximumViewSize = 1024U * 1024U;
+    static constexpr std::size_t kMaxEditHistory = 4096U;
 
     Result<void> Load(
         IProcessMemory& memory,
@@ -45,6 +47,8 @@ public:
     [[nodiscard]] bool CanRollback() const noexcept;
     [[nodiscard]] bool CanUndo() const noexcept;
     [[nodiscard]] bool CanRedo() const noexcept;
+    [[nodiscard]] std::size_t UndoDepth() const noexcept;
+    [[nodiscard]] std::size_t RedoDepth() const noexcept;
     [[nodiscard]] std::uint64_t Address() const noexcept;
     [[nodiscard]] ProcessMemorySessionState State() const noexcept;
     [[nodiscard]] const std::vector<std::uint8_t>& Baseline() const noexcept;
@@ -52,7 +56,8 @@ public:
     [[nodiscard]] const std::vector<bool>& DirtyBitmap() const noexcept;
     [[nodiscard]] const std::vector<std::size_t>& ConflictOffsets() const noexcept;
     [[nodiscard]] const std::vector<std::size_t>& MismatchOffsets() const noexcept;
-    [[nodiscard]] std::vector<ByteDiff> ByteDiffs() const;
+    [[nodiscard]] std::vector<ByteDiff> ByteDiffs(
+        std::size_t max_count = static_cast<std::size_t>(-1)) const;
     [[nodiscard]] std::vector<DiffRun> DiffRuns() const;
 
 private:
@@ -77,13 +82,14 @@ private:
     std::vector<std::uint8_t> baseline_;
     std::vector<std::uint8_t> working_;
     std::vector<bool> dirty_;
+    std::size_t dirty_count_{0};
     std::optional<std::vector<std::uint8_t>> rollback_;
     std::optional<std::vector<std::uint8_t>> rollback_expected_;
     bool rollback_allows_partial_{false};
     std::vector<std::size_t> conflicts_;
     std::vector<std::size_t> mismatches_;
-    std::vector<ByteEdit> undo_stack_;
-    std::vector<ByteEdit> redo_stack_;
+    std::deque<ByteEdit> undo_stack_;
+    std::deque<ByteEdit> redo_stack_;
     ProcessMemorySessionState state_{ProcessMemorySessionState::Empty};
 };
 

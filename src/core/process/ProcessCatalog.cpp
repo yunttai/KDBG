@@ -6,10 +6,19 @@
 #include <TlHelp32.h>
 
 #include <algorithm>
+#include <bit>
 #include <string>
 
 namespace kdbg {
 namespace {
+
+template <typename Function>
+Function LoadFunction(HMODULE module, const char* name) noexcept {
+    if (module == nullptr) return nullptr;
+    const FARPROC procedure = GetProcAddress(module, name);
+    static_assert(sizeof(Function) == sizeof(procedure));
+    return procedure == nullptr ? nullptr : std::bit_cast<Function>(procedure);
+}
 
 std::string WideToUtf8(std::wstring_view value) {
     if (value.empty()) return {};
@@ -44,10 +53,8 @@ bool Is64Bit(DWORD pid) {
     bool result = sizeof(void*) == 8;
     using IsWow64Process2Fn = BOOL(WINAPI*)(HANDLE, USHORT*, USHORT*);
     const HMODULE kernel32 = GetModuleHandleW(L"kernel32.dll");
-    const auto function = kernel32 != nullptr
-        ? reinterpret_cast<IsWow64Process2Fn>(
-              GetProcAddress(kernel32, "IsWow64Process2"))
-        : nullptr;
+    const auto function = LoadFunction<IsWow64Process2Fn>(
+        kernel32, "IsWow64Process2");
     if (function != nullptr) {
         USHORT process_machine = IMAGE_FILE_MACHINE_UNKNOWN;
         USHORT native_machine = IMAGE_FILE_MACHINE_UNKNOWN;

@@ -4,7 +4,7 @@ model_reasoning_effort = "high"
 sandbox_mode = "workspace-write"
 developer_instructions = """
 Work in src/tools, docs and docs/exec-plans, build packaging configuration, and attribution files. Do not change core behavior unless a packaging defect requires it.
-Generate reproducible commands, hashes, version metadata, third-party notices, and a gate table that distinguishes source-complete, Windows-build-verified, and live-VM-verified states.
-The submission demonstration must show probe PFN discovery, physical read, hex edit, diff review, one-shot write unlock, apply, full read-back match, process/VA ownership evidence, and page-table visualization. Redact private paths and unrelated process data.
+Generate reproducible commands, hashes, version metadata, third-party notices, and a gate table that distinguishes source-complete, Windows-build-verified, regression-guest, bare-metal runtime-host read-only, bare-metal Probe-write, and bare-metal Raw-PFN states. Historical VM evidence remains immutable and cannot be relabelled or promoted.
+The submission demonstration must identify the runtime_host role and target kind, then show PFN discovery/input, physical read, hex edit, diff review, one-shot write unlock, apply, full read-back match, process/VA ownership evidence, and page-table visualization. Capture machine/boot/session values automatically as optional provenance when available; never require manual confirmation or use their absence to block LocalHost RawPfn product behavior. ProbeFixture remains the default destructive evidence target; it does not restrict normal RawPfn capability. Redact private paths and unrelated process data.
 Never state that a binary, driver signature, live write, or video exists unless the artifact was actually produced and checked.
 """

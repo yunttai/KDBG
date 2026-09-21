@@ -1,143 +1,175 @@
-# Active plan — disposable-VM live Probe validation
+# Active plan — disposable-VM live validation
 
-## 2026-09-16 completion update (authoritative)
+> **Historical / superseded:** 아래 계획은 RC1 시점 기록이다. 현재 Windows 11
+> RC4 판정과 evidence boundary는 `docs/exec-plans/STATUS.md`를 따른다.
+> RC4 public v4 영상은 presentation review PASS이고 `origin`에 게시된
+> `v1.1.0-rc4`는 source-freeze tag다. Formal GUI evidence는 `CAPTURED_UNREVIEWED`,
+> `evidence_pass=false`, `human_review_complete=false`이며 stable release는 차단됐다.
 
-Exact Release ZIP `91042aab214e4c56daca29159b46c81574afb2aac700257d46baa7a8bf99e54f`
-기준으로 physical write/read-back/reload/rollback, process write/3회 Freeze restoration,
-volatile targeted Driver Verifier, same-PFN ownership/PTView, DPI 100/125/150/200%와
-hash-bound 17-scene `kdbg.live-evidence.v2`가 모두 PASS했다. Latest result는
-`out/evidence/final-91042aab-unblock-result.json`, v2는
-`out/evidence/final-91042aab-live-evidence-v2.json`이다. Optional MemProcFS v5.18.11은
-error 126을 해소했지만 `VMMDLL_Initialize(device=pmem)` exit 2라 backend만 BLOCKED이고
-필수 built-in fallback은 PASS다. 아래 candidate/NOT_RUN 설명은 실행 당시의 역사적
-경계이며 현재 final gate 판정을 대체하지 않는다.
+Current target: KDBG 1.1.0 on `feature/kdbg-1.1.0`. Exact 1.1.0 build,
+required-core and extended lifecycle/soak gates are complete under disposable-
+VM test trust. The formal source-bound GUI capture remains human-review FAIL
+with `evidence_pass=false`. A separate presentation-only overlay and final MP4
+passed automatic and independent human presentation review. Everything below
+that names `product-rc1/test2`,
+`b683…`, or a 1.0.0 package is historical evidence only.
 
-Host-side Windows/MSVC/WDK builds are PASS as recorded in
-`docs/VALIDATION_REPORT.md`. The `kdbg.source-snapshot.v1` main/symbol candidate
-also passed strict validators, same-input ZIP reproducibility, and 5/5 negative
-fixtures. A document-only final repack will refresh published hashes. This plan
-covers the remaining live gates. One DADF ABI6 physical transaction, one D339
-advanced read-only workflow, and the exact Release read-only/lifecycle gate
-completed in the same continuously running VM. Write-sensitive gates stay separate.
+Frozen 1.0.0 exact-final (`7f6b0fd9…b265a`/`d8715bf7…c96f`)과 previous
+path-mapped-symbol epoch의 Windows 10 physical/process/analysis/lifecycle evidence는
+각 exact identity에만 결속한다. Historical package의 Windows 11 required-core live는
+별도의 hash-bound run으로 PASS했다. Windows 11 interactive GUI/media, repeated
+reboot/lifecycle, full process Freeze/ownership/PTView/Kernel Explorer matrix와
+later 1.0.0 final engineering evidence completed the extended lifecycle/soak and
+full-feature capture, but neither result is 1.1.0 evidence.
 
 ## 전제
 
-- existing `Windows-VM` (confirmed)
-- 복원 가능한 checkpoint (confirmed)
-- Administrator PowerShell (confirmed)
-- final validated `KDBG-1.0.0-win-x64` package copied into the VM
-- test-signing (confirmed) 또는 적절한 정식 driver certificate
+- disposable Windows x64 VM and recoverable snapshot
+- Administrator and test-signing
+- current MSVC/WDK Release artifacts
+- validator를 통과할 exact `KDBG-1.1.0-win-x64` package and recorded SHA-256
 
-Interim package(`DADF43AA...`)의 install/device/ABI6와 Probe transaction은 같은
-VM에서 PASS했다. 이 package는 final로 간주하지 않으며 final package의
-device/ABI/live transaction 증거로 재사용하지 않는다.
+## Current 1.1.0 Windows 11 results
 
-D3390AD4 candidate는 fresh Probe query와 advanced read-only evidence를 PASS했지만
-physical write는 `NOT_RUN`이다. 두 candidate 모두 final package binding이 아니다.
+Exact identities:
 
-Exact Release package는 deploy/hash binding/device/main ABI6/fresh Probe query/exact
-4 KiB read-only/invalid IOCTL rejection/stop-remove를 physical writes 0으로 PASS했다.
-Identity는 `out/evidence/final-live-manifest.json`과
-`out/evidence/RELEASE-HASHES.txt`가 authoritative다.
+- unsigned main/symbol/source/scope SHA-256:
+  `3698e5333957bec112bb39c372ae933a623af86bbc12e310c2f1bddc7bdce36f` /
+  `0b6dadf7e4d1f8cfe7a77200cb6c76e01b01ec1a270ed3c4f5ae25c6ffe8f849` /
+  `8f9a04740cc576e97a56776b017da7fc0c8d344289677b9be8d579f9d4edc184` /
+  `bd2c93dad7604e84534515a00437e8198fa565a654fa665b6cbf235585b98932`.
+- test-signed package/certificate/signer:
+  `596ccdf0a65818591e87b28737115da3066328ede42583ef95bc83d8f3d74413` /
+  `bd7de7eb5e0dd305604d5f3dc617c13d268f844dbe541677f6eb4b7f166058b1` /
+  `ba34b393521d722ba01df87afccc6f3feb760b2c`.
 
-## 1. Verify or rebuild the package
+Required-core run `run-20260918T091747Z-21a27820` is **PASS**:
 
-```powershell
-.\src\tools\build.ps1 -Preset windows-release -Fresh
-.\src\tools\build_drivers.ps1 -Configuration Release -Clean
-.\src\tools\package_windows.ps1 -Configuration Release -Zip
-```
+- Windows 11 build 26200 and ABI 6.
+- Probe PFN, exact 4096-byte read, eight-byte one-shot apply, full-page
+  read-back match, 4096-byte rollback and final write gate LOCKED.
+- guest cleanup, exact checkpoint restore and final VM Off.
+- summary/archive SHA-256:
+  `c6bb846f56db8679758dab486195916e952298ae0a0416929372da44d716e50b` /
+  `0457ba5352e5b9005bbada1b366684b8d120f662b83c26a24758ad95aab8f6a9`.
 
-PASS 조건은 충족됐다: metadata의 `source_snapshot_scope`는
-`kdbg.source-snapshot.v1`이고, package-local verify와 main/symbol strict validators,
-same-input ZIP 재현성, 5/5 package negative fixtures가 모두 PASS다. 문서 반영
-repack에서는 새 SHA를 기록한다. Package PASS alone은 write-sensitive live PASS를 뜻하지 않는다.
+Extended run `extended-20260918T092819Z-66c07a32` is **PASS**:
 
-## 2. Load
+- two lifecycle cycles, ten stop/start transitions and four reboot boundaries.
+- 1800-second soak with 61x8=488 reads, midpoint transaction and seven
+  benchmark runs.
+- cleanup, checkpoint restore and final VM Off.
+- summary/archive SHA-256:
+  `12570c4cdf41536d9a3be97461a0e58c043c5ba470baee948a14e8f1909c56ee` /
+  `f4c80a7c375a426bdd853e24118b623152cfbd556e56c146d20e3ded2896bc9c`.
 
-Interim `DADF43AA...` package에서 KDBG PID 1140과 ABI 6 device open은 PASS했다.
-Exact Release에서도 deploy/hash binding, device/main ABI 6, invalid IOCTL rejection과
-stop/remove가 PASS했다. 문서 repack 후 아래 명령으로 같은 gate를 재실행하고 external
-manifest/hash set을 갱신한다.
+GUI run `run-20260918T092129Z-f14f5f7a` completed automation with
+`CAPTURED_UNREVIEWED`, 24 captures and 20 scenes; summary/archive/capture hashes
+are `f5fd51ef18c319c37feb5adb997582e56cd2efe9b03a1d6ea3213237f6815d0b` /
+`6104933593259fb074466ba8d21a5fffd7e47803b2bfec71ce206e5c0a4ce252` /
+`bd254d7a98230db0199051085453b09ea33405f3efe57a9ded42b8a3bebb6d42`. Cleanup, restore and
+final Off passed. Human review is **FAIL**: scene 03's grid and scene 20's diff
+row are clipped and columns wrap at the 1024 layout. `evidence_pass=false` and
+the formal flags remain unchanged.
 
-```powershell
-.\src\tools\manage_drivers.ps1 -Action Install -ConfirmDedicatedVm -ConfirmSnapshot
-.\src\tools\manage_drivers.ps1 -Action Start -ConfirmDedicatedVm -ConfirmSnapshot
-```
+Presentation-only overlay run
+`out/polished-1024-minimal/runs/run-20260918T102055Z-6c85cee7` passed automatic
+checks and independent human presentation review. Summary/guest/captures
+SHA-256 are:
 
-PASS 조건: 두 device open, ABI 일치, write gate LOCKED, physical range query 성공.
-ABI mismatch, zero/oversize length, address overflow, out-of-RAM PA, unarmed
-write, bad acknowledgement, second controller, short output, close/reopen gate
-reset과 Probe unload/reload도 이 disposable VM에서 fail-closed인지 기록한다.
+- `e579e3fb5351e7a9f8c6b7652e37859916f2430ad23048cb08e1f95bbc38e104`
+- `32945bd31a181ff05d55e9e0d1db6a7c2800941baaaa4225a38b1631fc0cf6ce`
+- `fffb17d8d0aba0b3ef3179379d97a6be3703d510e75352ae96cba02a264e3038`
 
-## 3. Probe transaction
+It contains 24 captures/20 scenes and completed cleanup, checkpoint restore and
+final VM Off. The scene 20 evidence-bound cue and scene 10/11 crop corrections
+resolve the previous presentation blockers.
 
-Interim package에서 다음 exact transaction은 PASS했다.
+The final video-only artifact is
+`out/demo-product-1-1-0-rc1-test1-polished-20260918/KDBG-demo-final2.mp4`,
+SHA-256 `4cd5a4f71e7baabc758c1097814cca9fc3371f6dc460ef0483faef5b2263d454`,
+9,974,541 bytes, 1920x1080, 10 fps, 40.5 seconds and 405/405 frames. Report
+SHA-256 is
+`e13ddce3aa9cffec601f94f3ee928a5d4ec06e23e96b4757ea4edb3def9a31b7`.
+It passes the presentation-video quality gate only. It does not modify the
+formal GUI evidence flags or prove actual submission. No deck or GIF is a
+current deliverable.
 
-- PFN `0xDA9FE`, PA `0x00000000DA9FE000`, generation 1
-- baseline CRC32 `0x9DA6C668`
-- offset `0x100`: `3D4E5F70` → `4B444247`
-- full-page preflight, read-back, independent reload, rollback 모두 PASS
-- rollback CRC32 `0x9DA6C668` 복원, write gate LOCKED
-- final counters: reads 11, writes 2, rejected 0, stage 4, status 0, transferred 4096
-- evidence ZIP SHA-256: `b8e88cb7cc78ab42f5edf0b4409b99ab4e6e60ab2761ed08f98233ee11bd0769`
+## Historical 1.0.0 Windows 11 required-core gate
 
-Exact Release의 초기 read-only run 뒤 2026-09-16 final run에서 PFN `0xBC1E6`의
-8-byte write, full read-back, independent reload, rollback과 baseline 복원을 PASS했다.
+Run `out/win11-validation/product-rc1-win11-test2-20260918/runs/run-20260918T042905Z-f19bda60`
+is PASS:
 
-아래 절차는 final package hash에 바인딩해 다시 확인할 checklist다.
+- Microsoft Windows 11 Pro x64 build 26200
+- exact package SHA-256
+  `41f90e2bd76386513d197ae8d77382238a14549e63608dd39eb2d2b4e2c92934`
+- exact source snapshot SHA-256
+  `98700c7c7797725b116b0a6333d644bc4df1793397556ce3572e35d451551eca`
+- the source hash identifies the 302-file snapshot embedded in the tested ZIP,
+  not the post-package edited current checkout; its original canonical file
+  manifest was not retained separately
+- test-signed package preflight, install/start, both running driver identities and ABI 6
+- driver-owned Probe PFN, exact 4 KiB baseline, 8-byte one-shot apply, full-page
+  read-back, independent reload, full-page rollback, final write gate LOCKED
+- uninstall cleanup, both services/devices absent
+- exact checkpoint `f60a775a-26f6-4ef9-bb19-f61c93346bb4` restored and final VM Off
 
-1. Probe Query로 VA/PA/PFN/generation/CRC를 기록한다.
-2. GUI Physical Memory 탭에서 PFN을 읽고 4096/4096을 확인한다.
-3. 작은 데이터 구간만 local edit한다.
-4. diff와 preflight 상태를 기록한다.
-5. PFN을 다시 입력해 one-shot unlock한다.
-6. Apply 후 전체 페이지 read-back PASS를 확인한다.
-7. PFN을 다시 load하고 Probe CRC를 재조회한다.
-8. rollback 후 baseline과 다시 일치하는지 확인한다.
-9. driver/session write gate가 LOCKED인지 확인한다.
+This is disposable-VM test-trust evidence. It does not satisfy production
+Authenticode signing, trusted timestamping or returned production-driver trust.
 
-## 4. Advanced UI evidence
+## Windows 10 extended lifecycle gate
 
-D3390AD4 candidate의 read-only 결과:
+완료: 1–7. Forced exit는 run failure와 두 service stop을 확인했고, update는
+서로 다른 signed driver hashes의 prior→current→prior→current 전환과 각 단계
+readiness/final lock을 확인했다. Explicit package/user-data purge와 snapshot
+restore도 PASS다.
 
-- built-in selected-process PFN reverse mapping PASS: 2M table-page cap, mapping 1개
-- Page Tables PASS: selected VA → PA/PFN이 Probe와 exact match
-- memory map/modules PASS
-- First/Next Scan PASS: 26 → 26
-- address-list entry PASS, Freeze OFF
-- pointer scan PASS: 10,385 paths
-- Zydis disassembly PASS: 456 instructions
-- snapshot PASS: 4096 bytes, changed runs 0
-- About/counters/final state PASS: process detached, both gates LOCKED, page CLEAN
-- optional MemProcFS historical attempt: error 126; final attempt은 DLL load 성공 뒤 `pmem` init exit 2
-- process live write/freeze final exact-package fixture PASS
-- D339 physical write BLOCKED (`NOT_RUN`)
+1. clean install and readiness diagnostics
+2. start, device/ABI check and startup gate LOCKED observation
+3. reboot and startup state check
+4. ten start/stop cycles
+5. forced GUI exit and controller/gate recovery
+6. stopped-package update, repair and rollback
+7. stop/remove and no stale registration/device
 
-근거: `out/evidence/candidate-d3390ad4-advanced-live.json`.
+## Windows 10 full Probe/live-analysis gate
 
-## 5. Evidence JSON
+1–6 모두 PASS. Current report는
+`out/evidence/vmware-live-write/live-write-report.json`이며 live-run validator가
+exact packaged verifier와 두 running driver hash를 대조했다.
 
-Physical transaction archive와 extracted directory는 각각
-`out/evidence/live-20260823-110826-359.zip`과
-`out/evidence/live-20260823-110826-359/`에 있다. 이것은 verified physical
-transaction evidence이며 historical scoped bundle이다.
-`out/evidence/KDBG-1.0.0-demonstration.gif`는 declared scope에서 PASS다. frames
-1–5는 DADF interim physical transaction, frames 6–17은 D339 read-only validation이며
-final-package v2는 별도 `final-91042aab-live-evidence-v2.json`으로 생성/검증했다.
-Exact Release read-only/lifecycle binding은
-`out/evidence/final-live-manifest.json`과 `out/evidence/RELEASE-HASHES.txt`에 있다.
-`new_live_evidence.ps1`로 actual command log/video/final package artifact/raw-page
-hash를 결합했고 strict validator가 exit 0으로 PASS했다.
+1. fresh Probe query and exact 4096-byte baseline
+2. packaged live verifier read-only report and typed current PFN confirmation
+3. live verifier write mode: full-page preflight, 8-byte one-shot write and full read-back
+4. independent reload
+5. explicit rollback and full-page baseline restoration
+6. final gate LOCKED observation
+
+첫 write 대상은 current `KDbgProbe`가 반환한 fixture PFN으로 제한한다.
+
+## Evidence boundary
+
+Current 1.1.0 required-core and extended results bind the exact test-signed
+package and source identity above. They prove the controlled Windows 11 VM path,
+not production signing or timestamp trust. The formal GUI run proves automated
+capture and cleanup only and retains its failed human review. The separate
+overlay/final MP4 proves presentation-video quality, not formal source-bound GUI
+evidence or submission.
+
+Previous Windows 10 evidence binds package EXE/bridge/SYS hashes, command log,
+raw page states, lifecycle results, successful `kdbg.live-verify.v1`, process/
+ownership/PTView/Kernel Explorer scenes and reviewed redacted video into
+`kdbg.live-evidence.v4`; that full evidence is PASS for its exact epoch. The
+historical evidence must not be promoted to the current 1.1.0 epoch.
 
 ```powershell
 python .\src\tools\validate_release.py `
-  --windows-package .\out\package\KDBG-1.0.0-win-x64 `
-  --live-evidence <evidence.json>
+  --windows-package .\out\package\KDBG-1.1.0-win-x64 `
+  --symbols-package .\out\package\KDBG-1.1.0-win-x64-symbols `
+  --live-run-report .\out\evidence\<current-live-run.json> `
+  --live-evidence .\out\evidence\<current-live-evidence-v4.json>
 ```
 
-실패, short I/O, mismatch, verifier finding 또는 BSOD가 있으면 PASS로 표시하지
-않고 dump/log를 보존하고 snapshot을 복원한다. Stop/remove는 exact Release에서
-PASS했고 volatile targeted Driver Verifier cleanup도 exact Release에서 PASS했다.
-write gate가 잠긴 상태를 증거에 포함했다. production Authenticode trust는 별도
-인증서 검증 증거가 없으면 PASS로 기록하지 않는다.
+Optional MemProcFS pmem failure는 built-in reverse-mapper의 별도 결과와 구분해
+기록한다. WDK build, VM prerequisite and every live observation remain independent
+gates.

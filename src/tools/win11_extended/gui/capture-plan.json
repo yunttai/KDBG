@@ -1,0 +1,1633 @@
+{
+  "schema": "kdbg.win11-extended-gui-capture-plan.v1",
+  "profile": "windows-11-client-1024x697-capture-1024x768-default-dock-calibration-v2",
+  "execution_timeout_seconds": 3600,
+  "reference_size": {
+    "width": 1024,
+    "height": 697
+  },
+  "expected_capture_size": {
+    "width": 1024,
+    "height": 768
+  },
+  "required_scene_order": [
+    "driver_probe_ready",
+    "probe_pfn_discovery",
+    "physical_read_4096",
+    "hex_edit_and_diff",
+    "undo_redo",
+    "typed_pfn_unlock",
+    "write_and_readback",
+    "independent_reload",
+    "rollback_baseline",
+    "pfn_owner_pid_va_pte",
+    "page_table_walk",
+    "process_first_next_scan",
+    "address_list_verified_freeze",
+    "pointer_scan",
+    "zydis_disassembly",
+    "snapshot_diff",
+    "kernel_module_catalog",
+    "kernel_symbol_resolution",
+    "kernel_read_disassembly",
+    "about_version"
+  ],
+  "steps": [
+    {
+      "id": "01-driver-probe-ready",
+      "scene_id": "driver_probe_ready",
+      "phase": "readiness",
+      "file": "01-driver-probe-ready.png",
+      "duration_ms": 1800,
+      "expect_visual_change": false,
+      "actions": [
+        {
+          "type": "wait_window_responsive",
+          "timeout_ms": 30000
+        },
+        {
+          "type": "send_keys",
+          "value": "^d"
+        },
+        {
+          "type": "wait",
+          "milliseconds": 1800
+        },
+        {
+          "type": "capture"
+        }
+      ],
+      "safe_for_uncalibrated_smoke": true
+    },
+    {
+      "id": "02-probe-pfn-discovery",
+      "scene_id": "probe_pfn_discovery",
+      "phase": "query",
+      "file": "02-probe-pfn-discovery.png",
+      "duration_ms": 1800,
+      "expect_visual_change": true,
+      "actions": [
+        {
+          "type": "scroll",
+          "x": 150,
+          "y": 642.0,
+          "delta": -1200
+        },
+        {
+          "type": "wait",
+          "milliseconds": 500
+        },
+        {
+          "type": "capture"
+        }
+      ]
+    },
+    {
+      "id": "03-physical-read-4096",
+      "scene_id": "physical_read_4096",
+      "phase": "load",
+      "file": "03-physical-read-4096.png",
+      "duration_ms": 1800,
+      "expect_visual_change": true,
+      "actions": [
+        {
+          "type": "send_keys",
+          "value": "^p"
+        },
+        {
+          "type": "wait",
+          "milliseconds": 900
+        },
+        {
+          "type": "replace_text",
+          "x": 350,
+          "y": 95,
+          "value": "${session.probe_pfn_hex}"
+        },
+        {
+          "type": "send_keys",
+          "value": "{ENTER}"
+        },
+        {
+          "type": "wait",
+          "milliseconds": 1200
+        },
+        {
+          "type": "drag",
+          "assertion": "minimal_scene03_left_collapse",
+          "x": 259,
+          "y": 350,
+          "end_x": 72,
+          "end_y": 350
+        },
+        {
+          "type": "drag",
+          "assertion": "minimal_scene03_right_collapse",
+          "x": 777,
+          "y": 350,
+          "end_x": 992,
+          "end_y": 350
+        },
+        {
+          "type": "wait",
+          "assertion": "minimal_scene03_capture_settle",
+          "milliseconds": 500
+        },
+        {
+          "type": "capture"
+        },
+        {
+          "type": "drag",
+          "assertion": "minimal_scene03_left_restore",
+          "x": 72,
+          "y": 350,
+          "end_x": 259,
+          "end_y": 350
+        },
+        {
+          "type": "drag",
+          "assertion": "minimal_scene03_right_restore",
+          "x": 992,
+          "y": 350,
+          "end_x": 777,
+          "end_y": 350
+        },
+        {
+          "type": "wait",
+          "assertion": "minimal_scene03_restore_settle",
+          "milliseconds": 500
+        }
+      ]
+    },
+    {
+      "id": "04-hex-edit-and-diff",
+      "scene_id": "hex_edit_and_diff",
+      "phase": "stage",
+      "file": "04-hex-edit-and-diff.png",
+      "duration_ms": 1800,
+      "expect_visual_change": true,
+      "actions": [
+        {
+          "type": "drag",
+          "x": 259,
+          "y": 350,
+          "end_x": 72,
+          "end_y": 350
+        },
+        {
+          "type": "drag",
+          "x": 777,
+          "y": 350,
+          "end_x": 992,
+          "end_y": 350
+        },
+        {
+          "type": "scroll",
+          "x": 700,
+          "y": 220,
+          "delta": -2000
+        },
+        {
+          "type": "wait",
+          "milliseconds": 300
+        },
+        {
+          "type": "scroll",
+          "x": 700,
+          "y": 220,
+          "delta": -2000
+        },
+        {
+          "type": "wait",
+          "milliseconds": 300
+        },
+        {
+          "type": "click_until_region_stable",
+          "assertion": "stage_dirty_0_to_8",
+          "x": 160,
+          "y": 385,
+          "region": "physical.dirty_table",
+          "pre_scrolls": [
+            {
+              "x": 700,
+              "y": 220,
+              "delta": -2000
+            },
+            {
+              "x": 970,
+              "y": 220,
+              "delta": -2000
+            }
+          ],
+          "expected_changes": 1,
+          "stable_attempts": 2,
+          "max_attempts": 6,
+          "settle_ms": 350
+        },
+        {
+          "type": "wait",
+          "milliseconds": 700
+        },
+        {
+          "type": "capture"
+        }
+      ]
+    },
+    {
+      "id": "05-undo-redo-staged",
+      "scene_id": "undo_redo",
+      "phase": "staged",
+      "file": "05-undo-redo-staged.png",
+      "duration_ms": 1300,
+      "expect_visual_change": false,
+      "actions": [
+        {
+          "type": "wait",
+          "milliseconds": 300
+        },
+        {
+          "type": "capture"
+        }
+      ]
+    },
+    {
+      "id": "06-undo-redo-dirty-zero",
+      "scene_id": "undo_redo",
+      "phase": "undo",
+      "file": "06-undo-redo-dirty-zero.png",
+      "duration_ms": 1300,
+      "expect_visual_change": true,
+      "actions": [
+        {
+          "type": "scroll",
+          "x": 700,
+          "y": 220,
+          "delta": -2000
+        },
+        {
+          "type": "wait",
+          "milliseconds": 300
+        },
+        {
+          "type": "scroll",
+          "x": 700,
+          "y": 220,
+          "delta": -2000
+        },
+        {
+          "type": "wait",
+          "milliseconds": 300
+        },
+        {
+          "type": "click_until_region_stable",
+          "assertion": "undo_dirty_8_to_0",
+          "x": 325,
+          "y": 385,
+          "region": "physical.dirty_table",
+          "pre_scrolls": [
+            {
+              "x": 700,
+              "y": 220,
+              "delta": -2000
+            },
+            {
+              "x": 970,
+              "y": 220,
+              "delta": -2000
+            }
+          ],
+          "expected_changes": 8,
+          "stable_attempts": 2,
+          "max_attempts": 14,
+          "settle_ms": 300
+        },
+        {
+          "type": "wait",
+          "milliseconds": 450
+        },
+        {
+          "type": "capture"
+        }
+      ]
+    },
+    {
+      "id": "07-undo-redo-restored",
+      "scene_id": "undo_redo",
+      "phase": "redo",
+      "file": "07-undo-redo-restored.png",
+      "duration_ms": 1300,
+      "expect_visual_change": true,
+      "actions": [
+        {
+          "type": "scroll",
+          "x": 700,
+          "y": 220,
+          "delta": -2000
+        },
+        {
+          "type": "wait",
+          "milliseconds": 300
+        },
+        {
+          "type": "scroll",
+          "x": 700,
+          "y": 220,
+          "delta": -2000
+        },
+        {
+          "type": "wait",
+          "milliseconds": 300
+        },
+        {
+          "type": "click_until_region_stable",
+          "assertion": "redo_dirty_0_to_8",
+          "x": 440,
+          "y": 385,
+          "region": "physical.dirty_table",
+          "pre_scrolls": [
+            {
+              "x": 700,
+              "y": 220,
+              "delta": -2000
+            },
+            {
+              "x": 970,
+              "y": 220,
+              "delta": -2000
+            }
+          ],
+          "expected_changes": 8,
+          "stable_attempts": 2,
+          "max_attempts": 14,
+          "settle_ms": 300
+        },
+        {
+          "type": "wait",
+          "milliseconds": 450
+        },
+        {
+          "type": "capture"
+        }
+      ]
+    },
+    {
+      "id": "08-typed-pfn-unlock",
+      "scene_id": "typed_pfn_unlock",
+      "phase": "confirmation",
+      "file": "08-typed-pfn-unlock.png",
+      "duration_ms": 1800,
+      "expect_visual_change": true,
+      "actions": [
+        {
+          "type": "click",
+          "x": 735,
+          "y": 385
+        },
+        {
+          "type": "wait",
+          "milliseconds": 450
+        },
+        {
+          "type": "replace_text",
+          "x": 420,
+          "y": 152,
+          "value": "${session.probe_pfn_hex}"
+        },
+        {
+          "type": "wait",
+          "milliseconds": 450
+        },
+        {
+          "type": "capture"
+        }
+      ]
+    },
+    {
+      "id": "09-write-and-readback",
+      "scene_id": "write_and_readback",
+      "phase": "apply",
+      "file": "09-write-and-readback.png",
+      "duration_ms": 1800,
+      "expect_visual_change": true,
+      "actions": [
+        {
+          "type": "send_keys",
+          "value": "{TAB}{ENTER}"
+        },
+        {
+          "type": "wait",
+          "milliseconds": 450
+        },
+        {
+          "type": "click",
+          "x": 900,
+          "y": 385
+        },
+        {
+          "type": "wait",
+          "milliseconds": 1200
+        },
+        {
+          "type": "capture"
+        }
+      ]
+    },
+    {
+      "id": "10-independent-reload",
+      "scene_id": "independent_reload",
+      "phase": "reload",
+      "file": "10-independent-reload.png",
+      "duration_ms": 1800,
+      "expect_visual_change": true,
+      "actions": [
+        {
+          "type": "scroll",
+          "x": 700,
+          "y": 220,
+          "delta": -2000
+        },
+        {
+          "type": "wait",
+          "milliseconds": 300
+        },
+        {
+          "type": "scroll",
+          "x": 970,
+          "y": 220,
+          "delta": -2000
+        },
+        {
+          "type": "wait",
+          "milliseconds": 300
+        },
+        {
+          "type": "click_until_region_change",
+          "assertion": "independent_reload_status",
+          "candidates": [
+            {
+              "x": 180,
+              "y": 368
+            },
+            {
+              "x": 180,
+              "y": 370
+            }
+          ],
+          "region": {
+            "x": 80,
+            "y": 140,
+            "width": 880,
+            "height": 250
+          },
+          "max_attempts": 4,
+          "settle_ms": 450
+        },
+        {
+          "type": "wait",
+          "milliseconds": 1100
+        },
+        {
+          "type": "capture"
+        }
+      ]
+    },
+    {
+      "id": "11-rollback-baseline",
+      "scene_id": "rollback_baseline",
+      "phase": "rollback-and-export",
+      "file": "11-rollback-baseline.png",
+      "duration_ms": 1800,
+      "expect_visual_change": true,
+      "actions": [
+        {
+          "type": "scroll",
+          "x": 700,
+          "y": 220,
+          "delta": -2000
+        },
+        {
+          "type": "wait",
+          "milliseconds": 300
+        },
+        {
+          "type": "scroll",
+          "x": 970,
+          "y": 220,
+          "delta": -2000
+        },
+        {
+          "type": "wait",
+          "milliseconds": 300
+        },
+        {
+          "type": "click_until_region_change",
+          "assertion": "rollback_modal_open",
+          "candidates": [
+            {
+              "x": 370,
+              "y": 368
+            },
+            {
+              "x": 370,
+              "y": 385
+            },
+            {
+              "x": 370,
+              "y": 388
+            },
+            {
+              "x": 370,
+              "y": 405
+            }
+          ],
+          "region": {
+            "x": 310,
+            "y": 5,
+            "width": 390,
+            "height": 220
+          },
+          "max_attempts": 4,
+          "settle_ms": 450
+        },
+        {
+          "type": "wait",
+          "milliseconds": 400
+        },
+        {
+          "type": "replace_text",
+          "x": 420,
+          "y": 152,
+          "value": "${session.probe_pfn_hex}"
+        },
+        {
+          "type": "click",
+          "x": 405,
+          "y": 175
+        },
+        {
+          "type": "wait",
+          "milliseconds": 350
+        },
+        {
+          "type": "click_until_region_change",
+          "assertion": "rollback_status",
+          "candidates": [
+            {
+              "x": 370,
+              "y": 368
+            },
+            {
+              "x": 370,
+              "y": 385
+            },
+            {
+              "x": 370,
+              "y": 388
+            },
+            {
+              "x": 370,
+              "y": 405
+            }
+          ],
+          "region": {
+            "x": 80,
+            "y": 140,
+            "width": 880,
+            "height": 250
+          },
+          "max_attempts": 4,
+          "settle_ms": 450
+        },
+        {
+          "type": "wait",
+          "milliseconds": 1200
+        },
+        {
+          "type": "assert_region_blue_pixels",
+          "assertion": "physical_export_button_visible",
+          "region": {
+            "x": 80,
+            "y": 392,
+            "width": 210,
+            "height": 28
+          },
+          "minimum": 2500
+        },
+        {
+          "type": "click",
+          "x": 160,
+          "y": 408
+        },
+        {
+          "type": "wait",
+          "milliseconds": 1500
+        },
+        {
+          "type": "capture"
+        }
+      ]
+    },
+    {
+      "id": "12-pfn-owner-pid-va-pte",
+      "scene_id": "pfn_owner_pid_va_pte",
+      "phase": "fixture-va-to-pa-to-owner",
+      "file": "12-pfn-owner-pid-va-pte.png",
+      "duration_ms": 1800,
+      "expect_visual_change": true,
+      "actions": [
+        {
+          "type": "drag_until_region_change",
+          "assertion": "left_splitter_expanded",
+          "candidates": [
+            {
+              "x": 77,
+              "y": 350,
+              "end_x": 259,
+              "end_y": 350
+            },
+            {
+              "x": 76,
+              "y": 350,
+              "end_x": 259,
+              "end_y": 350
+            },
+            {
+              "x": 75,
+              "y": 350,
+              "end_x": 259,
+              "end_y": 350
+            }
+          ],
+          "region": {
+            "x": 70,
+            "y": 30,
+            "width": 210,
+            "height": 650
+          },
+          "max_attempts": 3,
+          "settle_ms": 450
+        },
+        {
+          "type": "wait",
+          "milliseconds": 300
+        },
+        {
+          "type": "assert_region_blue_pixels",
+          "assertion": "process_scanner_tab_at_expanded_x260_layout",
+          "region": {
+            "x": 280,
+            "y": 427.0,
+            "width": 110,
+            "height": 24
+          },
+          "minimum": 1000
+        },
+        {
+          "type": "drag",
+          "x": 992,
+          "y": 350,
+          "end_x": 777,
+          "end_y": 350
+        },
+        {
+          "type": "wait",
+          "milliseconds": 500
+        },
+        {
+          "type": "click",
+          "x": 85,
+          "y": 8
+        },
+        {
+          "type": "wait",
+          "milliseconds": 300
+        },
+        {
+          "type": "replace_text",
+          "x": 120,
+          "y": 112,
+          "value": "${session.fixture_pid}"
+        },
+        {
+          "type": "wait",
+          "milliseconds": 300
+        },
+        {
+          "type": "click",
+          "x": 120,
+          "y": 134
+        },
+        {
+          "type": "wait",
+          "milliseconds": 200
+        },
+        {
+          "type": "send_keys",
+          "value": "{DOWN}{ENTER}"
+        },
+        {
+          "type": "wait",
+          "milliseconds": 300
+        },
+        {
+          "type": "click",
+          "x": 32,
+          "y": 165
+        },
+        {
+          "type": "wait",
+          "milliseconds": 1100
+        },
+        {
+          "type": "send_keys",
+          "value": "^t"
+        },
+        {
+          "type": "replace_text",
+          "x": 845,
+          "y": 53,
+          "value": "${session.fixture_pid}"
+        },
+        {
+          "type": "replace_text",
+          "x": 900,
+          "y": 76,
+          "value": "${session.fixture_virtual_address_hex}"
+        },
+        {
+          "type": "click",
+          "x": 850,
+          "y": 101
+        },
+        {
+          "type": "wait",
+          "milliseconds": 1800
+        },
+        {
+          "type": "click",
+          "x": 880,
+          "y": 200
+        },
+        {
+          "type": "wait",
+          "milliseconds": 900
+        },
+        {
+          "type": "send_keys",
+          "value": "^+p"
+        },
+        {
+          "type": "wait",
+          "milliseconds": 500
+        },
+        {
+          "type": "replace_text",
+          "x": 840,
+          "y": 318,
+          "value": "2000000"
+        },
+        {
+          "type": "click",
+          "x": 960,
+          "y": 286
+        },
+        {
+          "type": "wait",
+          "milliseconds": 45000
+        },
+        {
+          "type": "drag",
+          "assertion": "ownership_dock_expand",
+          "x": 777,
+          "y": 350,
+          "end_x": 330,
+          "end_y": 350
+        },
+        {
+          "type": "wait",
+          "milliseconds": 500
+        },
+        {
+          "type": "capture"
+        }
+      ]
+    },
+    {
+      "id": "13-page-table-walk",
+      "scene_id": "page_table_walk",
+      "phase": "fixture-translation",
+      "file": "13-page-table-walk.png",
+      "duration_ms": 1800,
+      "expect_visual_change": true,
+      "actions": [
+        {
+          "type": "send_keys",
+          "value": "^t"
+        },
+        {
+          "type": "wait",
+          "milliseconds": 800
+        },
+        {
+          "type": "capture"
+        }
+      ]
+    },
+    {
+      "id": "14-process-first-scan",
+      "scene_id": "process_first_next_scan",
+      "phase": "first-scan",
+      "file": "14-process-first-scan.png",
+      "duration_ms": 1500,
+      "expect_visual_change": true,
+      "actions": [
+        {
+          "type": "drag",
+          "assertion": "ownership_dock_restore",
+          "x": 330,
+          "y": 350,
+          "end_x": 777,
+          "end_y": 350
+        },
+        {
+          "type": "wait",
+          "milliseconds": 500
+        },
+        {
+          "type": "click",
+          "x": 330,
+          "y": 437.0
+        },
+        {
+          "type": "replace_text",
+          "x": 420,
+          "y": 506.0,
+          "value": "${session.fixture_scan_value}"
+        },
+        {
+          "type": "click",
+          "x": 309,
+          "y": 575.0
+        },
+        {
+          "type": "wait",
+          "milliseconds": 4500
+        },
+        {
+          "type": "capture"
+        }
+      ]
+    },
+    {
+      "id": "15-process-next-scan",
+      "scene_id": "process_first_next_scan",
+      "phase": "next-scan",
+      "file": "15-process-next-scan.png",
+      "duration_ms": 1500,
+      "expect_visual_change": true,
+      "actions": [
+        {
+          "type": "fixture_command",
+          "command": "MUTATE ${session.fixture_scan_offset} 78563412",
+          "save_current_crc_as": "freeze_value_crc32"
+        },
+        {
+          "type": "wait",
+          "milliseconds": 500
+        },
+        {
+          "type": "replace_text",
+          "x": 420,
+          "y": 506.0,
+          "value": "305419896"
+        },
+        {
+          "type": "click",
+          "x": 420,
+          "y": 575.0
+        },
+        {
+          "type": "wait",
+          "milliseconds": 2500
+        },
+        {
+          "type": "capture"
+        }
+      ]
+    },
+    {
+      "id": "16-address-list-freeze",
+      "scene_id": "address_list_verified_freeze",
+      "phase": "freeze",
+      "file": "16-address-list-freeze.png",
+      "duration_ms": 1500,
+      "expect_visual_change": true,
+      "actions": [
+        {
+          "type": "click_until_region_change",
+          "assertion": "scan_result_added_to_address_list",
+          "candidates": [
+            {
+              "x": 677,
+              "y": 635
+            },
+            {
+              "x": 677,
+              "y": 625
+            }
+          ],
+          "region": {
+            "x": 270,
+            "y": 427,
+            "width": 495,
+            "height": 220
+          },
+          "max_attempts": 4,
+          "settle_ms": 450
+        },
+        {
+          "type": "scroll",
+          "x": 767,
+          "y": 642.0,
+          "delta": 2000
+        },
+        {
+          "type": "wait",
+          "milliseconds": 300
+        },
+        {
+          "type": "scroll",
+          "x": 767,
+          "y": 642.0,
+          "delta": 2000
+        },
+        {
+          "type": "wait",
+          "milliseconds": 300
+        },
+        {
+          "type": "scroll",
+          "x": 767,
+          "y": 642.0,
+          "delta": -720
+        },
+        {
+          "type": "wait",
+          "milliseconds": 300
+        },
+        {
+          "type": "click_until_region_change",
+          "assertion": "arm_modal_open",
+          "candidates": [
+            {
+              "x": 335,
+              "y": 522.0
+            },
+            {
+              "x": 335,
+              "y": 532.0
+            },
+            {
+              "x": 335,
+              "y": 542.0
+            }
+          ],
+          "region": {
+            "x": 310,
+            "y": 5,
+            "width": 390,
+            "height": 220
+          },
+          "max_attempts": 6,
+          "settle_ms": 400
+        },
+        {
+          "type": "replace_text",
+          "x": 450,
+          "y": 82,
+          "value": "${session.fixture_pid}"
+        },
+        {
+          "type": "wait",
+          "milliseconds": 250
+        },
+        {
+          "type": "send_keys_until_region_change",
+          "assertion": "arm_modal_closed",
+          "value": "{TAB}{ENTER}",
+          "region": {
+            "x": 310,
+            "y": 5,
+            "width": 390,
+            "height": 220
+          },
+          "max_attempts": 2,
+          "settle_ms": 500
+        },
+        {
+          "type": "scroll",
+          "x": 767,
+          "y": 642.0,
+          "delta": -2000
+        },
+        {
+          "type": "wait",
+          "milliseconds": 300
+        },
+        {
+          "type": "scroll",
+          "x": 767,
+          "y": 642.0,
+          "delta": -2000
+        },
+        {
+          "type": "wait",
+          "milliseconds": 300
+        },
+        {
+          "type": "click_unchecked_checkbox_until_checked",
+          "assertion": "freeze_checked",
+          "scan": {
+            "x": 272,
+            "start_y": 442.0,
+            "end_y": 642.0,
+            "box_size": 22
+          },
+          "unchecked_rgb_signatures": [
+            "23,34,50",
+            "29,47,73"
+          ],
+          "neutral_threshold": 250,
+          "blue_threshold": 200,
+          "max_attempts": 8,
+          "settle_ms": 450,
+          "save_y_as": "freeze_checkbox"
+        },
+        {
+          "type": "fixture_command",
+          "command": "MUTATE ${session.fixture_scan_offset} E0AC6824"
+        },
+        {
+          "type": "wait_fixture_crc",
+          "assertion": "freeze_reasserted_305419896",
+          "expected_crc32": "${session.fixture_freeze_expected_crc32}",
+          "timeout_ms": 4000,
+          "poll_ms": 250
+        },
+        {
+          "type": "save_relative_region_hash",
+          "assertion": "freeze_value_region_saved",
+          "point_key": "freeze_checkbox",
+          "region_key": "freeze_value_305419896",
+          "x": 590,
+          "y_offset": -11,
+          "width": 82,
+          "height": 22
+        },
+        {
+          "type": "capture"
+        }
+      ]
+    },
+    {
+      "id": "17-address-list-restored",
+      "scene_id": "address_list_verified_freeze",
+      "phase": "restored",
+      "file": "17-address-list-restored.png",
+      "duration_ms": 1500,
+      "expect_visual_change": true,
+      "actions": [
+        {
+          "type": "click_saved_checkbox_until_state",
+          "assertion": "freeze_unchecked",
+          "point_key": "freeze_checkbox",
+          "x": 282,
+          "region_x": 272,
+          "region_y_offset": -10,
+          "region_width": 22,
+          "region_height": 22,
+          "expected_checked": false,
+          "blue_threshold": 200,
+          "max_attempts": 4,
+          "settle_ms": 450
+        },
+        {
+          "type": "fixture_command",
+          "command": "MUTATE ${session.fixture_scan_offset} E0AC6824"
+        },
+        {
+          "type": "wait_fixture_crc",
+          "assertion": "freeze_off_baseline_crc",
+          "expected_crc32": "${session.fixture_baseline_crc32}",
+          "timeout_ms": 4000,
+          "poll_ms": 250
+        },
+        {
+          "type": "scroll",
+          "x": 767,
+          "y": 642.0,
+          "delta": 720
+        },
+        {
+          "type": "wait",
+          "milliseconds": 300
+        },
+        {
+          "type": "click",
+          "x": 465,
+          "y": 522.0
+        },
+        {
+          "type": "wait",
+          "milliseconds": 700
+        },
+        {
+          "type": "scroll",
+          "x": 767,
+          "y": 642.0,
+          "delta": -2000
+        },
+        {
+          "type": "wait",
+          "milliseconds": 300
+        },
+        {
+          "type": "scroll",
+          "x": 767,
+          "y": 642.0,
+          "delta": -2000
+        },
+        {
+          "type": "wait",
+          "milliseconds": 300
+        },
+        {
+          "type": "wait_relative_region_change",
+          "assertion": "row_value_rendered_baseline_610839776",
+          "point_key": "freeze_checkbox",
+          "region_key": "freeze_value_305419896",
+          "x": 590,
+          "y_offset": -11,
+          "width": 82,
+          "height": 22,
+          "timeout_ms": 3000,
+          "poll_ms": 250
+        },
+        {
+          "type": "capture"
+        }
+      ]
+    },
+    {
+      "id": "18-pointer-scan",
+      "scene_id": "pointer_scan",
+      "phase": "paths",
+      "file": "18-pointer-scan.png",
+      "duration_ms": 1800,
+      "expect_visual_change": true,
+      "actions": [
+        {
+          "type": "send_keys",
+          "value": "^l"
+        },
+        {
+          "type": "wait",
+          "milliseconds": 500
+        },
+        {
+          "type": "click",
+          "x": 450,
+          "y": 437.0
+        },
+        {
+          "type": "replace_text",
+          "x": 400,
+          "y": 494.0,
+          "value": "${session.fixture_pointer_target_hex}"
+        },
+        {
+          "type": "replace_text",
+          "assertion": "pointer_maximum_offset_zero",
+          "x": 360,
+          "y": 518.0,
+          "value": "0x0"
+        },
+        {
+          "type": "click_until_checkbox_state",
+          "assertion": "pointer_static_roots_unchecked",
+          "candidates": [
+            {
+              "x": 628,
+              "y": 563.0,
+              "region": {
+                "x": 617,
+                "y": 552.0,
+                "width": 22,
+                "height": 22
+              }
+            },
+            {
+              "x": 627,
+              "y": 563.0,
+              "region": {
+                "x": 616,
+                "y": 552.0,
+                "width": 22,
+                "height": 22
+              }
+            }
+          ],
+          "expected_checked": false,
+          "blue_threshold": 200,
+          "max_attempts": 2,
+          "settle_ms": 450
+        },
+        {
+          "type": "click",
+          "assertion": "pointer_scan_start",
+          "x": 335,
+          "y": 587.0
+        },
+        {
+          "type": "wait",
+          "milliseconds": 6500
+        },
+        {
+          "type": "capture"
+        }
+      ]
+    },
+    {
+      "id": "19-zydis-disassembly",
+      "scene_id": "zydis_disassembly",
+      "phase": "decode",
+      "file": "19-zydis-disassembly.png",
+      "duration_ms": 1800,
+      "expect_visual_change": true,
+      "actions": [
+        {
+          "type": "click",
+          "x": 555,
+          "y": 437.0
+        },
+        {
+          "type": "replace_text",
+          "x": 400,
+          "y": 494.0,
+          "value": "${session.fixture_code_address_hex}"
+        },
+        {
+          "type": "click",
+          "x": 500,
+          "y": 518.0
+        },
+        {
+          "type": "wait",
+          "milliseconds": 2200
+        },
+        {
+          "type": "capture"
+        }
+      ]
+    },
+    {
+      "id": "20-snapshot-diff",
+      "scene_id": "snapshot_diff",
+      "phase": "compare",
+      "file": "20-snapshot-diff.png",
+      "duration_ms": 1800,
+      "expect_visual_change": true,
+      "actions": [
+        {
+          "type": "click",
+          "x": 765,
+          "y": 437.0
+        },
+        {
+          "type": "replace_text",
+          "x": 380,
+          "y": 482.0,
+          "value": "${session.fixture_virtual_address_hex}"
+        },
+        {
+          "type": "click",
+          "x": 330,
+          "y": 506.0
+        },
+        {
+          "type": "wait",
+          "milliseconds": 1200
+        },
+        {
+          "type": "fixture_command",
+          "command": "MUTATE ${session.fixture_snapshot_offset} 0011223344556677"
+        },
+        {
+          "type": "click",
+          "x": 450,
+          "y": 506.0
+        },
+        {
+          "type": "wait",
+          "milliseconds": 1200
+        },
+        {
+          "type": "click",
+          "x": 600,
+          "y": 658.0
+        },
+        {
+          "type": "wait",
+          "milliseconds": 1400
+        },
+        {
+          "type": "fixture_command",
+          "command": "MUTATE ${session.fixture_snapshot_offset} DEADBEEF13374299"
+        },
+        {
+          "type": "wait",
+          "milliseconds": 500
+        },
+        {
+          "type": "drag",
+          "assertion": "minimal_scene20_bottom_expand",
+          "x": 600,
+          "y": 427,
+          "end_x": 600,
+          "end_y": 250
+        },
+        {
+          "type": "wait",
+          "assertion": "minimal_scene20_expand_settle",
+          "milliseconds": 400
+        },
+        {
+          "type": "scroll",
+          "assertion": "minimal_scene20_diff_scroll",
+          "x": 600,
+          "y": 610,
+          "delta": -2400
+        },
+        {
+          "type": "wait",
+          "assertion": "minimal_scene20_scroll_settle_1",
+          "milliseconds": 350
+        },
+        {
+          "type": "scroll",
+          "assertion": "minimal_scene20_diff_scroll",
+          "x": 600,
+          "y": 610,
+          "delta": -2400
+        },
+        {
+          "type": "wait",
+          "assertion": "minimal_scene20_scroll_settle_2",
+          "milliseconds": 450
+        },
+        {
+          "type": "capture"
+        },
+        {
+          "type": "drag",
+          "assertion": "minimal_scene20_bottom_restore",
+          "x": 600,
+          "y": 250,
+          "end_x": 600,
+          "end_y": 427
+        },
+        {
+          "type": "wait",
+          "assertion": "minimal_scene20_restore_settle",
+          "milliseconds": 500
+        }
+      ]
+    },
+    {
+      "id": "21-kernel-module-catalog",
+      "scene_id": "kernel_module_catalog",
+      "phase": "catalog",
+      "file": "21-kernel-module-catalog.png",
+      "duration_ms": 1800,
+      "expect_visual_change": true,
+      "actions": [
+        {
+          "type": "click",
+          "x": 650,
+          "y": 437.0
+        },
+        {
+          "type": "click",
+          "x": 315,
+          "y": 539.0
+        },
+        {
+          "type": "wait",
+          "milliseconds": 5000
+        },
+        {
+          "type": "replace_text",
+          "x": 500,
+          "y": 580.0,
+          "value": "KDbgDriver.sys"
+        },
+        {
+          "type": "click",
+          "x": 340,
+          "y": 618.0
+        },
+        {
+          "type": "wait",
+          "milliseconds": 600
+        },
+        {
+          "type": "capture"
+        }
+      ]
+    },
+    {
+      "id": "22-kernel-symbol-resolution",
+      "scene_id": "kernel_symbol_resolution",
+      "phase": "symbol",
+      "file": "22-kernel-symbol-resolution.png",
+      "duration_ms": 1800,
+      "expect_visual_change": true,
+      "actions": [
+        {
+          "type": "scroll",
+          "x": 767,
+          "y": 642.0,
+          "delta": -2000
+        },
+        {
+          "type": "wait",
+          "milliseconds": 500
+        },
+        {
+          "type": "scroll",
+          "x": 767,
+          "y": 642.0,
+          "delta": -2000
+        },
+        {
+          "type": "wait",
+          "milliseconds": 500
+        },
+        {
+          "type": "replace_text",
+          "x": 500,
+          "y": 460.0,
+          "value": "${session.kernel_pdb_path}"
+        },
+        {
+          "type": "send_keys",
+          "value": "{TAB}{ENTER}"
+        },
+        {
+          "type": "wait",
+          "milliseconds": 2500
+        },
+        {
+          "type": "send_keys",
+          "value": "{TAB}"
+        },
+        {
+          "type": "replace_text",
+          "value": "KDbgDriver!DriverEntry"
+        },
+        {
+          "type": "send_keys",
+          "value": "{TAB}{ENTER}"
+        },
+        {
+          "type": "wait",
+          "milliseconds": 2500
+        },
+        {
+          "type": "capture"
+        }
+      ]
+    },
+    {
+      "id": "23-kernel-read-disassembly",
+      "scene_id": "kernel_read_disassembly",
+      "phase": "kernel-decode-and-analysis-export",
+      "file": "23-kernel-read-disassembly.png",
+      "duration_ms": 1800,
+      "expect_visual_change": true,
+      "actions": [
+        {
+          "type": "scroll",
+          "x": 767,
+          "y": 642.0,
+          "delta": -2000
+        },
+        {
+          "type": "wait",
+          "milliseconds": 500
+        },
+        {
+          "type": "click",
+          "x": 335,
+          "y": 664.0
+        },
+        {
+          "type": "wait",
+          "milliseconds": 2200
+        },
+        {
+          "type": "scroll",
+          "x": 767,
+          "y": 642.0,
+          "delta": -2000
+        },
+        {
+          "type": "wait",
+          "milliseconds": 500
+        },
+        {
+          "type": "send_keys",
+          "value": "^+p"
+        },
+        {
+          "type": "wait",
+          "milliseconds": 500
+        },
+        {
+          "type": "replace_text",
+          "assertion": "analysis_fixture_info_path",
+          "x": 885,
+          "y": 146,
+          "value": "${session.fixture_info_path}"
+        },
+        {
+          "type": "click",
+          "assertion": "analysis_evidence_export",
+          "x": 885,
+          "y": 177
+        },
+        {
+          "type": "wait",
+          "milliseconds": 10000
+        },
+        {
+          "type": "click",
+          "x": 650,
+          "y": 437.0
+        },
+        {
+          "type": "wait",
+          "milliseconds": 250
+        },
+        {
+          "type": "scroll",
+          "x": 767,
+          "y": 642.0,
+          "delta": -2000
+        },
+        {
+          "type": "wait",
+          "milliseconds": 500
+        },
+        {
+          "type": "scroll",
+          "x": 767,
+          "y": 642.0,
+          "delta": -2000
+        },
+        {
+          "type": "wait",
+          "milliseconds": 500
+        },
+        {
+          "type": "capture"
+        }
+      ]
+    },
+    {
+      "id": "24-about-version",
+      "scene_id": "about_version",
+      "phase": "about",
+      "file": "24-about-version.png",
+      "duration_ms": 1800,
+      "expect_visual_change": true,
+      "actions": [
+        {
+          "type": "send_keys",
+          "value": "{F1}"
+        },
+        {
+          "type": "wait",
+          "milliseconds": 500
+        },
+        {
+          "type": "capture"
+        }
+      ]
+    }
+  ],
+  "plan_id": "win11-extended-gui-proven-workflow-v2",
+  "minimum_calibration_schema": "kdbg.win11-gui-calibration.v1",
+  "window_title_pattern": "KDBG",
+  "launch_timeout_seconds": 90
+}

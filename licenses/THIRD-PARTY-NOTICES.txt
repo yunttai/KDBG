@@ -1,4 +1,4 @@
-KDBG 1.0.0 third-party notices
+KDBG 1.1.0 third-party notices
 
 Statically included in KDBG.exe:
 - Dear ImGui docking branch, commit fd13a1e8923a0a7077b404fc36fd063b25a0c0b5, MIT.

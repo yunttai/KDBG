@@ -14,7 +14,6 @@ namespace kdbg {
 namespace {
 
 constexpr std::uint64_t kPageSize = 0x1000ULL;
-constexpr std::uint64_t kEntryAddressMask = 0x000FFFFFFFFFF000ULL;
 
 std::uint64_t ShiftForLevel(int level) {
     switch (level) {
@@ -58,10 +57,10 @@ const char* PageTableReverseMapper::Name() const noexcept {
 Result<PfnUsageResult> PageTableReverseMapper::Query(
     std::uint64_t target_pfn,
     std::stop_token stop_token) {
-    if (target_pfn > (std::numeric_limits<std::uint64_t>::max() >> 12U)) {
+    if (target_pfn > kX64MaxPageFrameNumber) {
         return Result<PfnUsageResult>::Failure(MakeError(
             ErrorCode::InvalidPfn,
-            "PFN cannot be converted to a physical address",
+            "PFN exceeds the 40-bit x64 page-table address field",
             "PageTableReverseMapper::Query"));
     }
     if (!backend_.Info().connected) {
@@ -217,6 +216,10 @@ Result<PfnUsageResult> PageTableReverseMapper::Query(
                 const auto flags = DecodePageEntry(entry);
                 if (!flags.present) continue;
 
+                // Bit 7 is reserved in PML5E/PML4E. Treat malformed entries as
+                // non-present instead of following a false table pointer.
+                if ((level == 5 || level == 4) && flags.page_size) continue;
+
                 const std::uint64_t next_prefix =
                     virtual_prefix | (index << ShiftForLevel(level));
                 const bool writable = effective_writable && flags.writable;
@@ -282,7 +285,7 @@ Result<PfnUsageResult> PageTableReverseMapper::Query(
                 }
 
                 const std::uint64_t next_pfn =
-                    (entry & kEntryAddressMask) >> 12U;
+                    (entry & kX64PageEntryAddressMask) >> 12U;
                 if (level == 1) {
                     if (next_pfn == target_pfn) {
                         ProcessUsage usage{};

@@ -1,8 +1,12 @@
 #include "app/ui/HexEditorPanel.h"
 
+#include "app/ui/Localization.h"
+
 #include <algorithm>
 
 namespace kdbg {
+
+using ui::UiText;
 
 HexEditorPanel::HexEditorPanel() {
     editor_.Cols = 16;
@@ -15,9 +19,9 @@ HexEditorPanel::HexEditorPanel() {
 }
 
 void HexEditorPanel::Draw(PhysicalPageSession& session) {
-    ImGui::TextUnformatted("Physical Page");
+    ImGui::TextUnformatted(UiText("Physical Page"));
     if (!session.HasPage()) {
-        ImGui::TextDisabled("Enter a PFN and read a page.");
+        ImGui::TextDisabled(UiText("Enter a PFN and read a page."));
         return;
     }
 

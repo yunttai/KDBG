@@ -32,3 +32,36 @@
 - `PROBE_FIXTURE_DESIGN.md`: fixture contract
 - `LICENSE_NOTICE.md`: attributed upstream MIT notice
 - `docs/exec-plans/active/windows-live-validation.md`: Windows/load/live gate
+
+Package `install.ps1` and `start.ps1` require both driver SYS files and both
+matching catalogs to report a trusted `Valid` Authenticode status on the guest
+before changing or starting either service. This accepts a test certificate only
+when that certificate is explicitly trusted inside the disposable test VM; it is
+not evidence of production publisher trust. Production release readiness still
+requires a non-test publisher chain and timestamp verification on a clean guest.
+The production-candidate diagnostic is explicit and requires the exact publisher
+subject:
+
+```powershell
+.\tools\diagnose.ps1 -VerifyPackage `
+  -RequireTrustedDriverSignatures -RequireProductionDriverSignatures `
+  -ExpectedDriverPublisherSubject "CN=<release publisher>"
+```
+
+Run the exact-target volatile Driver Verifier soak only in a disposable snapshot
+VM after installing and starting the hash-verified package:
+
+```powershell
+.\src\driver\tests\run_driver_verifier.ps1 `
+  -PackageDirectory C:\KDBG\KDBG-1.1.0-win-x64 `
+  -OutputPath C:\KDBG-Evidence\driver-verifier.json `
+  -Cycles 10 -ConfirmDedicatedVm -ConfirmSnapshot
+```
+
+The harness refuses pre-existing verified-driver targets, stops the package,
+atomically configures volatile flags `0x132` and exactly `KDbgDriver.sys` plus
+`KDbgProbe.sys`, and proves the active mask before and after the packaged
+stop/start/read-only readiness cycles. It unloads the package before removing
+each target individually, clears the volatile mask, verifies cleanup, and
+restores package readiness. Its JSON labels self-signed or untimestamped trust as
+`trusted-test-or-private`, never as production signing.
