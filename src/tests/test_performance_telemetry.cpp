@@ -14,6 +14,7 @@
 
 namespace {
 
+#if defined(_WIN32)
 std::string ReadText(const std::filesystem::path& path) {
     std::ifstream input(path, std::ios::in | std::ios::binary);
     return std::string(
@@ -43,6 +44,7 @@ std::size_t CountTemporarySiblings(const std::filesystem::path& output) {
     }
     return count;
 }
+#endif
 
 }  // namespace
 
