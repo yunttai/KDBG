@@ -39,6 +39,15 @@ same transactional package scripts below. Apps & Features and the Start Menu
 point to the installed setup and GUI. The explicit script interface selects the
 target profile directly.
 
+The test-signed derivative has a deliberately separate `KDBGSetup-Test.exe`
+entry point. Its manifest still requires an administrator token, and its
+`tools/test_setup.ps1` wrapper verifies the public-only
+`certificate/KDBG-TestSigning.cer`, installs it into the machine `Root` and
+`TrustedPublisher` stores, enables test-signing, and resumes after a reboot.
+The wrapper records exactly which stores and boot option it changed so test
+uninstall can restore them. It is development-only; the PFX/private key is
+never packaged and the normal Setup never changes Code Integrity policy.
+
 `LocalHost` is the product default. The commands below pass it explicitly so
 the evidence log is unambiguous:
 

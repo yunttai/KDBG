@@ -11,6 +11,16 @@ does not change boot or Code Integrity policy.
 `LocalHost` is the product default; the examples below still specify it
 explicitly so command logs preserve the intended target role.
 
+For a controlled development host that intentionally uses the disposable
+test-signed driver pair, the test-signed derivative also contains
+`KDBGSetup-Test.exe`. It is a separate, administrator-only flow: it verifies
+the public `certificate/KDBG-TestSigning.cer`, installs that certificate in the
+machine `Root` and `TrustedPublisher` stores, enables Windows test-signing,
+and schedules a reboot before resuming the LocalHost install. It never ships
+the PFX/private key, never claims production trust, and must not be used as a
+commercial distribution. The normal `KDBGSetup.exe` does not change boot or
+Code Integrity policy.
+
 1. Verify both main and symbols ZIP SHA-256 sidecars, extract them as sibling
    directories, and keep the names `KDBG-1.1.0-win-x64` and
    `KDBG-1.1.0-win-x64-symbols` unchanged.

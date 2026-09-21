@@ -21,6 +21,7 @@ ProbeFixture는 destructive evidence의 기본 fixture일 뿐 일반 LocalHost R
 | ABI 7 physical transaction source | PASS | exact 4096-byte baseline compare, desired-page write, full read-back result/capability implemented and deterministically tested |
 | Windows Release/package | PASS (UNSIGNED) | MSVC Release GUI/bridge, pinned WDK driver package, validator, and source snapshot pass in epoch `local-host-source-fix6-rawpfn-20260921`; production trust is not claimed |
 | Windows WDK driver build | PASS (PINNED NUGET) | WDK `10.0.26100.2454`; Debug/Release, driver contract, Inf2Cat, and symbol verification pass; drivers are unsigned |
+| Test-signed LocalHost bootstrap | PASS (PACKAGE BUILT; HOST BOOT LANE NOT RUN) | Separate administrator-only `KDBGSetup-Test.exe` derivative verifies and installs the public test certificate, enables test-signing, schedules reboot/resume, and keeps the PFX/private key out of the package; `out/release-epochs/local-host-testsetup2-test-signed-20260921` |
 | Bare-metal runtime-host read-only | PASS | `out/evidence/local-host-source-fix3-runtime-host-5/evidence.json`; ABI 7, live backend, exact 4096-byte reads |
 | Bare-metal Probe transaction | PASS | same evidence; apply/read-back/reload/rollback/final lock all pass |
 | Bare-metal RawPfn live write | PASS (CLI transaction) / GUI scene incomplete | `out/evidence/local-host-source-fix6-rawpfn/raw-pfn.json`; manual `RawPfn` input, exact 4 KiB apply/read-back/reload/rollback, final lock. Required visible GUI scene is not captured. |
@@ -34,6 +35,15 @@ trust). Main/symbol ZIP hashes are
 `24ba5de9…5e93376b`. PowerShell 5.1/7 package and signing contracts, core-debug
 and Windows Release CTest 14/14, package validation, and the local-host
 producer preflight all pass.
+
+The separate controlled-host test-signing setup derivative is
+`out/release-epochs/local-host-testsetup2-test-signed-20260921` (package
+SHA-256 `fd479fc7…62099e14`; source snapshot
+`e35b897e…c9699cb`). It contains the administrator-only `KDBGSetup-Test.exe`,
+the public-only `certificate/KDBG-TestSigning.cer`, and
+`tools/test_setup.ps1`; it changes boot policy only on the explicit test lane,
+requires a reboot/resume, and is not production trust. The host reboot/resume
+path has not been executed in this validation turn.
 
 The GUI driver-service registration quote bug is fixed in
 `src/core/windows/DriverService.cpp`; a validator regression test ensures SCM

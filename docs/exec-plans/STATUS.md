@@ -25,6 +25,7 @@ bare-metal PASS로 재표기하거나 승격하지 않는다.
 | RawPfn core/driver primitive | SOURCE COMPLETE — ABI 7 exact 4096-byte compare/write/read-back implemented |
 | Target-kind UI + optional automatic provenance | SOURCE COMPLETE — LocalHost RawPfn is a normal product path; automatically available provenance is evidence metadata only |
 | Bare-metal lifecycle profile | SOURCE COMPLETE — `TargetProfile LocalHost|DisposableVm`; ordinary install/start/run defaults to `LocalHost` |
+| Test-signed LocalHost bootstrap | PASS (PACKAGE BUILT; HOST BOOT LANE NOT RUN) — test-only `KDBGSetup-Test.exe` path pins a public certificate, enables test-signing, schedules resume after reboot, and never carries the PFX/private key; derivative `out/release-epochs/local-host-testsetup2-test-signed-20260921` |
 | Windows WDK driver build | PASS (PINNED NUGET) — Release/Debug built with pinned NuGet WDK `10.0.26100.2454`; Inf2Cat 0 errors/0 warnings; artifacts remain unsigned |
 | Bare-metal read-only evidence | PASS — current signed-package LocalHost wrapper evidence: `out/evidence/local-host-source-fix3-runtime-host-5/evidence.json` |
 | Bare-metal Probe-write evidence | PASS — same current wrapper evidence, with six 4 KiB artifacts, full read-back, independent reload, rollback, and final lock |
@@ -61,6 +62,12 @@ Latest working-tree integration check for this target-alignment epoch:
   `24ba5de9…5e93376b`; SYS/CAT Authenticode status is Valid. This derivative is
   not production trust. The GUI `DriverService` path-registration quote bug was
   removed and covered by a source regression test in this epoch.
+- current test-signing setup derivative:
+  `out/release-epochs/local-host-testsetup2-test-signed-20260921`; package hash
+  `fd479fc7…62099e14`; source snapshot
+  `e35b897e…c9699cb`. It contains `KDBGSetup-Test.exe`, the public
+  `certificate/KDBG-TestSigning.cer`, and `tools/test_setup.ps1`; no PFX/private
+  key is packaged. The setup reboot/resume path is not executed on this host yet.
 - the earlier admin producer run is preserved in
   `out/evidence/local-host-source-fix-runtime-host-20260921` as historical
   evidence; the current authoritative runtime-host run is

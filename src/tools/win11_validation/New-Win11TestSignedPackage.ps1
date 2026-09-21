@@ -1,12 +1,14 @@
 <#
 .SYNOPSIS
-Builds a hash-bound, disposable-VM-only test-signed KDBG package derivative.
+Builds a hash-bound, controlled-host test-signed KDBG package derivative.
 
 .DESCRIPTION
 Validates an exact unsigned main/symbols ZIP pair and their common source
 snapshot. Build mode signs only KDbgDriver.sys, KDbgProbe.sys, and their newly
 generated catalogs. It does not install or load a driver and does not touch a
-VM. The output is test trust only and is not a production release.
+VM or runtime host. The output is test trust only and is not a production
+release. The derivative carries a separate administrator-only LocalHost test
+setup that can enable test-signing and resume after reboot.
 
 .EXAMPLE
 ./New-Win11TestSignedPackage.ps1 -UnsignedPackagePath ./KDBG-1.1.0-win-x64.zip `
@@ -73,6 +75,12 @@ $RequiredSymbolsPaths = @(
     'SHA256SUMS.txt',
     'drivers/KDbgDriver.pdb',
     'drivers/KDbgProbe.pdb'
+)
+$TestSetupRelativePaths = @(
+    'KDBGSetup-Test.exe',
+    'certificate/KDBG-TestSigning.cer',
+    'certificate/KDBG-TestSigning.json',
+    'tools/test_setup.ps1'
 )
 $Utf8NoBom = [Text.UTF8Encoding]::new($false)
 $Ascii = [Text.Encoding]::ASCII
@@ -517,6 +525,42 @@ try {
             $stageDirectory = Join-Path $stagingRoot 'stage'
             Expand-ValidatedZip $mainZip $stageDirectory
             $packageRoot = Join-Path $stageDirectory $PackageRootName
+
+            # The test-only setup is deliberately added only to the
+            # disposable test-signed derivative.  The normal production
+            # package never ships a boot-policy mutator or a test trust root.
+            $testSetupSource = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\setup\test_setup.ps1'))
+            if (-not (Test-Path -LiteralPath $testSetupSource -PathType Leaf)) {
+                throw "The test setup script is missing: $testSetupSource"
+            }
+            $testCertificateDirectory = Join-Path $packageRoot 'certificate'
+            New-Item -ItemType Directory -Path $testCertificateDirectory -Force | Out-Null
+            Copy-Item -LiteralPath (Join-Path $packageRoot 'KDBGSetup.exe') `
+                -Destination (Join-Path $packageRoot 'KDBGSetup-Test.exe') -Force
+            Copy-Item -LiteralPath $testSetupSource `
+                -Destination (Join-Path $packageRoot 'tools\test_setup.ps1') -Force
+            Copy-Item -LiteralPath $certificateFull `
+                -Destination (Join-Path $packageRoot 'certificate\KDBG-TestSigning.cer') -Force
+            $testCertificateMetadata = [ordered]@{
+                schema = 'kdbg.test-signing-certificate.v1'
+                production_trust = $false
+                sha256 = Get-Sha256 $certificateFull
+                thumbprint = $thumbprint
+                subject = $publicCertificate.Subject
+                issuer = $publicCertificate.Issuer
+                self_signed = $true
+                purpose = 'LocalHost development/test setup only.'
+            }
+            [IO.File]::WriteAllText(
+                (Join-Path $packageRoot 'certificate\KDBG-TestSigning.json'),
+                (($testCertificateMetadata | ConvertTo-Json -Depth 8) + [Environment]::NewLine),
+                $Utf8NoBom)
+            foreach ($relative in $TestSetupRelativePaths) {
+                $testPath = Join-Path $packageRoot ($relative.Replace('/', '\'))
+                if (-not (Test-Path -LiteralPath $testPath -PathType Leaf)) {
+                    throw "Test package input is missing: $relative"
+                }
+            }
             $before = Get-TreeHashMap $packageRoot
             $driversRoot = Join-Path $packageRoot 'drivers'
 
@@ -612,7 +656,7 @@ try {
                 epoch = $EpochName
                 release_package = $false
                 production_trust = $false
-                purpose = 'Disposable Windows 11 VM validation with test-signing enabled.'
+                purpose = 'Controlled Windows 11 development/test host with test-signing enabled.'
                 source_snapshot_sha256 = $expectedSnapshot
                 unsigned_package = [ordered]@{
                     file_name = [IO.Path]::GetFileName($mainZip.Path)
@@ -632,11 +676,19 @@ try {
                 }
                 certificate = [ordered]@{
                     file_name = [IO.Path]::GetFileName($certificateFull)
+                    package_relative_path = 'certificate/KDBG-TestSigning.cer'
                     sha256 = Get-Sha256 $certificateFull
                     subject = $publicCertificate.Subject
                     issuer = $publicCertificate.Issuer
                     thumbprint = $thumbprint
                     self_signed = $true
+                }
+                test_setup = [ordered]@{
+                    executable = 'KDBGSetup-Test.exe'
+                    script = 'tools/test_setup.ps1'
+                    changes_boot_policy = $true
+                    requires_reboot = $true
+                    production_trust = $false
                 }
                 tools = [ordered]@{
                     signtool_file_version = [Diagnostics.FileVersionInfo]::GetVersionInfo($signToolFull).FileVersion
@@ -648,7 +700,7 @@ try {
                 signed_application_binaries = $false
                 unsigned_application_binaries_preserved = $true
                 catalog_order = 'sign SYS, regenerate CAT from signed SYS, sign CAT'
-                claim_boundary = 'VM-only test trust. Not production signed, not redistributable as a trusted commercial release.'
+                    claim_boundary = 'Controlled-host test trust only. Not production signed, not redistributable as a trusted commercial release.'
             }
             $provenancePath = Join-Path $stagingRoot 'test-signing-provenance.json'
             [IO.File]::WriteAllText(

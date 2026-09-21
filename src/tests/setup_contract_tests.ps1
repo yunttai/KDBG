@@ -132,6 +132,26 @@ Assert-True ($SetupUi.Contains('L"DisposableVm"') -and
     $SetupUi.Contains('L"LocalHost"') -and
     $SetupUi.Contains('L" -TargetProfile "')) `
     "Setup UI must forward the explicitly selected target profile"
+Assert-True ($SetupUi.Contains('KDBGSetup-Test') -and
+    $SetupUi.Contains('test_setup.ps1') -and
+    $SetupUi.Contains('test-resume')) `
+    "Setup UI must route the separately named test setup to its test lifecycle"
+$TestSetupScript = Get-Content -LiteralPath (
+    Join-Path $PSScriptRoot "..\tools\setup\test_setup.ps1") -Raw
+$Tokens = $null
+$ParseErrors = $null
+foreach ($Token in @(
+        "KDBG-TestSigning.cer", "TrustedPublisher", "LocalMachine",
+        "testsigning on", "testsigning off", "Confirm-SecureBootUEFI",
+        "KDBGTestSetupResume", "kdbg.test-setup.state.v1",
+        "public .cer", "private-key container")) {
+    Assert-True $TestSetupScript.Contains($Token) `
+        "test setup script lacks marker: $Token"
+}
+$TestSetupAst = [Management.Automation.Language.Parser]::ParseFile(
+    (Join-Path $PSScriptRoot "..\tools\setup\test_setup.ps1"),
+    [ref]$Tokens, [ref]$ParseErrors)
+Assert-Equal 0 $ParseErrors.Count "test setup parser error count mismatch"
 foreach ($State in @('"ready"', '"scheduled"', '"waiting"', '"purging"', '"succeeded"', '"failed"', '"cancelled"')) {
     Assert-True $SetupScript.Contains($State) `
         "persistent purge contract lacks state $State"

@@ -193,6 +193,7 @@ SOURCE_REQUIRED = (
     "src/tools/package/start.ps1", "src/tools/package/run.ps1",
     "src/tools/package/stop.ps1", "src/tools/package/uninstall.ps1",
     "src/tools/setup/main.cpp", "src/tools/setup/setup.ps1",
+    "src/tools/setup/test_setup.ps1",
     "src/tools/setup/setup_contract.psm1",
     "src/tools/setup/resources/KDBGSetup.manifest",
     "src/tools/setup/resources/KDBGSetup.rc",

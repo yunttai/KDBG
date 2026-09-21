@@ -186,6 +186,10 @@ try {
     Assert-True ($source -notmatch "'KDBG\.exe'.*SignTool") 'The application executable must never be a SignTool target.'
     Assert-True ($source -match "sign SYS, regenerate CAT from signed SYS, sign CAT") `
         'Provenance must state the valid catalog generation order.'
+    Assert-True ($source.Contains('KDBGSetup-Test.exe') -and
+        $source.Contains('certificate/KDBG-TestSigning.cer') -and
+        $source.Contains('tools/test_setup.ps1')) `
+        'Test-signed derivatives must carry the explicit development setup payload.'
 
     Write-Host "PASS: New-Win11TestSignedPackage contract ($Assertions assertions)"
 }

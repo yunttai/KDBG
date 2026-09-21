@@ -13,6 +13,7 @@ namespace {
 
 constexpr wchar_t kWindowClass[] = L"KDBGSetupWindow";
 constexpr wchar_t kWindowTitle[] = L"KDBG Setup 1.1.0";
+constexpr wchar_t kTestWindowTitle[] = L"KDBG Test Setup 1.1.0";
 constexpr UINT kAppendOutput = WM_APP + 1U;
 constexpr UINT kOperationFinished = WM_APP + 2U;
 constexpr int kVmProfileId = 1000;
@@ -43,6 +44,31 @@ struct WorkerInput {
     std::wstring action;
     std::wstring targetProfile;
 };
+
+bool IsTestSetupMode() {
+    std::vector<wchar_t> buffer(512U, L'\0');
+    for (;;) {
+        const DWORD length = GetModuleFileNameW(
+            nullptr, buffer.data(), static_cast<DWORD>(buffer.size()));
+        if (length == 0U) {
+            return false;
+        }
+        if (length < buffer.size() - 1U) {
+            const std::filesystem::path module(
+                std::wstring(buffer.data(), length));
+            return module.stem().wstring().find(L"KDBGSetup-Test") !=
+                   std::wstring::npos;
+        }
+        if (buffer.size() >= 32768U) {
+            return false;
+        }
+        buffer.resize(buffer.size() * 2U, L'\0');
+    }
+}
+
+const wchar_t* SetupWindowTitle() {
+    return IsTestSetupMode() ? kTestWindowTitle : kWindowTitle;
+}
 
 std::wstring FormatWin32Error(const DWORD code) {
     wchar_t* buffer = nullptr;
@@ -159,7 +185,8 @@ DWORD WINAPI RunOperation(void* rawInput) {
         PostMessageW(input->window, kOperationFinished, 1U, 0);
         return 1U;
     }
-    const auto script = *packageRoot / L"tools" / L"setup.ps1";
+    const auto script = *packageRoot / L"tools" /
+        (IsTestSetupMode() ? L"test_setup.ps1" : L"setup.ps1");
     if (!std::filesystem::is_regular_file(script)) {
         PostOutput(input->window,
                    L"Required setup script is missing: " + script.wstring() +
@@ -292,12 +319,13 @@ void AppendOutput(const WindowState& state, const std::wstring_view text) {
 }
 
 void SetControlsEnabled(const WindowState& state, const BOOL enabled) {
-    EnableWindow(state.vmProfile, enabled);
+    const BOOL testMode = IsTestSetupMode() ? FALSE : TRUE;
+    EnableWindow(state.vmProfile, enabled && testMode);
     EnableWindow(state.localHostProfile, enabled);
     const bool vmSelected = SendMessageW(
         state.vmProfile, BM_GETCHECK, 0, 0) == BST_CHECKED;
-    EnableWindow(state.confirmVm, enabled && vmSelected);
-    EnableWindow(state.confirmSnapshot, enabled && vmSelected);
+    EnableWindow(state.confirmVm, enabled && testMode && vmSelected);
+    EnableWindow(state.confirmSnapshot, enabled && testMode && vmSelected);
     for (const HWND button : state.actionButtons) {
         EnableWindow(button, enabled);
     }
@@ -314,7 +342,7 @@ void StartOperation(WindowState& state, std::wstring action) {
          SendMessageW(state.confirmSnapshot, BM_GETCHECK, 0, 0) != BST_CHECKED)) {
         MessageBoxW(state.window,
                     L"Confirm both the dedicated disposable VM and its restorable snapshot before continuing.",
-                    kWindowTitle, MB_OK | MB_ICONWARNING);
+                    SetupWindowTitle(), MB_OK | MB_ICONWARNING);
         return;
     }
     state.operationRunning = true;
@@ -359,11 +387,15 @@ LRESULT CALLBACK WindowProcedure(const HWND window, const UINT message,
                           reinterpret_cast<LONG_PTR>(owned.get()));
         const HFONT font = static_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
         const HWND heading = CreateControl(
-            L"STATIC", L"KDBG product setup", SS_LEFT, 18, 16, 700, 24,
-            window, 0);
+            L"STATIC",
+            IsTestSetupMode() ? L"KDBG development/test setup"
+                              : L"KDBG product setup",
+            SS_LEFT, 18, 16, 700, 24, window, 0);
         const HWND scope = CreateControl(
             L"STATIC",
-            L"Installs or services the hash-verified package in Program Files. Driver catalog trust is checked by the packaged transactional lifecycle.",
+            IsTestSetupMode()
+                ? L"Development-only setup. Installs the pinned test certificate, enables Windows test-signing, and services the hash-verified package. A reboot may be required."
+                : L"Installs or services the hash-verified package in Program Files. Driver catalog trust is checked by the packaged transactional lifecycle.",
             SS_LEFT, 18, 44, 730, 38, window, 0);
         owned->vmProfile = CreateControl(
             L"BUTTON", L"Disposable VM",
@@ -394,7 +426,9 @@ LRESULT CALLBACK WindowProcedure(const HWND window, const UINT message,
         }
         owned->output = CreateControl(
             L"EDIT",
-            L"Ready. Package integrity and driver catalog trust are checked before mutation. User-mode publisher signing is a separate release gate.\r\nAll output, rollback details, and errors remain visible here.\r\n",
+            IsTestSetupMode()
+                ? L"TEST MODE ONLY. The test certificate is public-only; its private key is never shipped. Windows boot policy changes and reboot requirements remain visible here.\r\n"
+                : L"Ready. Package integrity and driver catalog trust are checked before mutation. User-mode publisher signing is a separate release gate.\r\nAll output, rollback details, and errors remain visible here.\r\n",
             ES_MULTILINE | ES_AUTOVSCROLL | ES_READONLY | WS_VSCROLL |
                 WS_BORDER,
             18, 198, 730, 302, window, kOutputId);
@@ -420,6 +454,10 @@ LRESULT CALLBACK WindowProcedure(const HWND window, const UINT message,
             AppendOutput(*state,
                 L"Windows Apps & Features requested repair. Confirm the selected target profile, then choose Repair.\r\n");
             SetFocus(state->localHostProfile);
+        }
+        if (IsTestSetupMode() &&
+            commandLine.find(L"/test-resume") != std::wstring::npos) {
+            StartOperation(*state, L"Install");
         }
         return 0;
     }
@@ -471,7 +509,7 @@ LRESULT CALLBACK WindowProcedure(const HWND window, const UINT message,
         if (state != nullptr && state->operationRunning) {
             MessageBoxW(window,
                         L"Setup is still running. Wait for the current transaction and rollback handling to finish.",
-                        kWindowTitle, MB_OK | MB_ICONINFORMATION);
+                        SetupWindowTitle(), MB_OK | MB_ICONINFORMATION);
             return 0;
         }
         DestroyWindow(window);
@@ -506,7 +544,7 @@ int WINAPI wWinMain(
         return static_cast<int>(GetLastError());
     }
     const HWND window = CreateWindowExW(
-        0, kWindowClass, kWindowTitle,
+        0, kWindowClass, SetupWindowTitle(),
         WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX,
         CW_USEDEFAULT, CW_USEDEFAULT, 784, 558, nullptr, nullptr, instance,
         nullptr);
